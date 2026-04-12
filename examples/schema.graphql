@@ -1,0 +1,61 @@
+enum BookStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+interface Entity @node {
+  id: ID! @id
+  name: String!
+}
+
+type Author @node implements Entity {
+  id: ID! @id @unique
+  name: String!
+  bio: String
+  bornYear: Int
+  books: [Book!]! @relationship(type: "WRITTEN_BY", direction: IN, properties: "WrittenBy")
+}
+
+type Book @node
+  @fulltext(indexes: [{ name: "BookSearch", fields: ["title", "description"] }]) {
+  id: ID! @id @unique
+  title: String!
+  isbn: String @unique
+  description: String
+  price: Float
+  published: DateTime
+  status: BookStatus
+  author: Author! @relationship(type: "WRITTEN_BY", direction: OUT, properties: "WrittenBy")
+  categories: [Category!]! @relationship(type: "IN_CATEGORY", direction: OUT, properties: "InCategory")
+  reviews: [Review!]! @relationship(type: "HAS_REVIEW", direction: OUT)
+}
+
+type Category @node {
+  id: ID! @id @unique
+  name: String!
+  books: [Book!]! @relationship(type: "IN_CATEGORY", direction: IN)
+}
+
+type Review @node {
+  id: ID! @id @unique
+  rating: Int!
+  comment: String
+  book: Book! @relationship(type: "HAS_REVIEW", direction: IN)
+}
+
+type Publisher @node implements Entity {
+  id: ID! @id @unique
+  name: String!
+  website: String
+}
+
+type WrittenBy @relationshipProperties {
+  role: String
+  year: Int
+}
+
+type InCategory @relationshipProperties {
+  addedAt: DateTime
+  isPrimary: Boolean
+}

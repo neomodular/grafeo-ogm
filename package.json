@@ -1,0 +1,88 @@
+{
+  "name": "grafeo-ogm",
+  "version": "1.0.0",
+  "description": "Type-safe Object-Graph Mapper for Neo4j with GraphQL SDL schema support",
+  "license": "MIT",
+  "author": "Alejandro Guzman",
+  "keywords": [
+    "neo4j",
+    "ogm",
+    "cypher",
+    "graphql",
+    "graph-database",
+    "typescript",
+    "object-graph-mapper"
+  ],
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./testing": {
+      "import": {
+        "types": "./dist/esm/testing/index.d.ts",
+        "default": "./dist/esm/testing/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/testing/index.d.ts",
+        "default": "./dist/cjs/testing/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm run clean && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"const fs=require('fs');fs.writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}\\n');fs.writeFileSync('dist/esm/package.json','{\\\"type\\\":\\\"module\\\"}\\n');\"",
+    "test": "jest",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "graphql": "^16.0.0",
+    "pluralize": "^8.0.0"
+  },
+  "peerDependencies": {
+    "neo4j-driver": "^5.0.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.3",
+    "@eslint/js": "^9.39.2",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^24.10.13",
+    "@types/pluralize": "^0.0.33",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "globals": "^16.5.0",
+    "jest": "^29.0.0",
+    "prettier": "^3.8.1",
+    "ts-jest": "^29.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aleguzman/grafeo-ogm.git"
+  }
+}

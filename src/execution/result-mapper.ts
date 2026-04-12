@@ -1,0 +1,108 @@
+import neo4j from 'neo4j-driver';
+import { Record as Neo4jRecord } from 'neo4j-driver';
+import { OGMError } from '../errors';
+
+/**
+ * Maps Neo4j query results to plain JavaScript objects,
+ * converting Neo4j-specific types (Integer, DateTime, Node, etc.)
+ * to standard JS values.
+ */
+export class ResultMapper {
+  /**
+   * Convert a Neo4j Record to a plain object, handling Neo4j-specific types.
+   * If returnKey is provided, extracts that key from the record.
+   * Otherwise converts the entire record to an object.
+   */
+  static mapRecord(
+    record: Neo4jRecord,
+    returnKey?: string,
+  ): Record<string, unknown> {
+    if (returnKey) {
+      const value = record.get(returnKey);
+      return ResultMapper.convertNeo4jTypes(value) as Record<string, unknown>;
+    }
+
+    const obj = record.toObject();
+    return ResultMapper.convertNeo4jTypes(obj) as Record<string, unknown>;
+  }
+
+  /**
+   * Map all records from a query result.
+   */
+  static mapRecords(
+    records: Neo4jRecord[],
+    returnKey?: string,
+  ): Record<string, unknown>[] {
+    return records.map((record) => ResultMapper.mapRecord(record, returnKey));
+  }
+
+  /**
+   * Convert Neo4j-specific types to plain JS values recursively.
+   * Handles: Integer, DateTime, Date, Time, Point, Node, Relationship, arrays, objects.
+   * Note: The driver is typically configured with disableLosslessIntegers: true,
+   * so Integer conversion is mainly for safety.
+   */
+  static convertNeo4jTypes(value: unknown, depth: number = 0): unknown {
+    // Guard against pathological nesting causing stack overflow
+    if (depth > 50)
+      throw new OGMError(
+        'convertNeo4jTypes: maximum recursion depth (50) exceeded. Possible circular or deeply nested result.',
+      );
+
+    // Fast path: null/undefined
+    if (value === null || value === undefined) return value;
+
+    // Fast path: primitives (most common in query results)
+    if (typeof value !== 'object') return value;
+
+    // Neo4j Integer → number
+    if (neo4j.isInt(value)) return value.toNumber();
+
+    // Array → map each element (check before other object types)
+    if (Array.isArray(value))
+      return value.map((item) =>
+        ResultMapper.convertNeo4jTypes(item, depth + 1),
+      );
+
+    // Neo4j temporal types → ISO string
+    if (
+      neo4j.isDateTime(value) ||
+      neo4j.isDate(value) ||
+      neo4j.isTime(value) ||
+      neo4j.isLocalDateTime(value) ||
+      neo4j.isLocalTime(value) ||
+      neo4j.isDuration(value)
+    )
+      return value.toString();
+
+    // Neo4j Point → plain object
+    if (neo4j.isPoint(value)) {
+      const point: Record<string, unknown> = {
+        x: value.x,
+        y: value.y,
+        srid: value.srid,
+      };
+      if (value.z !== undefined) point.z = value.z;
+      return point;
+    }
+
+    // Neo4j Node → convert its properties
+    if (value instanceof neo4j.types.Node)
+      return ResultMapper.convertNeo4jTypes(value.properties, depth + 1);
+
+    // Neo4j Relationship → convert its properties
+    if (value instanceof neo4j.types.Relationship)
+      return ResultMapper.convertNeo4jTypes(value.properties, depth + 1);
+
+    // Neo4j Path → not supported
+    if (value instanceof neo4j.types.Path)
+      throw new OGMError('Path type conversion is not supported');
+
+    // Plain object → recurse on values (use Object.create(null) to prevent prototype pollution)
+    const result: Record<string, unknown> = Object.create(null);
+    for (const [key, val] of Object.entries(value as Record<string, unknown>))
+      result[key] = ResultMapper.convertNeo4jTypes(val, depth + 1);
+
+    return result;
+  }
+}
