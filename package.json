@@ -1,6 +1,6 @@
 {
   "name": "grafeo-ogm",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Type-safe Object-Graph Mapper for Neo4j with GraphQL SDL schema support",
   "license": "MIT",
   "author": "Alejandro Guzman",
