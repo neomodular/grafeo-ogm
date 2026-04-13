@@ -120,6 +120,7 @@ function emitWhereType(
   lines.push(`  OR?: InputMaybe<Array<${typeName}Where>>;`);
   lines.push(`  AND?: InputMaybe<Array<${typeName}Where>>;`);
   lines.push(`  NOT?: InputMaybe<${typeName}Where>;`);
+  lines.push(`  mode?: "insensitive" | (string & {});`);
 
   // 3. Relationship operator fields
   for (const [, rel] of relationships)

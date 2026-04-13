@@ -983,6 +983,181 @@ describe('WhereCompiler', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Case-insensitive mode
+  // ---------------------------------------------------------------------------
+  describe('case-insensitive mode', () => {
+    it('should wrap exact match in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name: 'Alice', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('toLower(n.`name`) = toLower($param0)');
+      expect(result.params).toEqual({ param0: 'Alice' });
+    });
+
+    it('should wrap _NOT in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_NOT: 'Alice', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('toLower(n.`name`) <> toLower($param0)');
+      expect(result.params).toEqual({ param0: 'Alice' });
+    });
+
+    it('should wrap _CONTAINS in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_CONTAINS: 'Search', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('toLower(n.`name`) CONTAINS toLower($param0)');
+      expect(result.params).toEqual({ param0: 'Search' });
+    });
+
+    it('should wrap _STARTS_WITH in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_STARTS_WITH: 'A', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'toLower(n.`name`) STARTS WITH toLower($param0)',
+      );
+      expect(result.params).toEqual({ param0: 'A' });
+    });
+
+    it('should wrap _ENDS_WITH in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_ENDS_WITH: 'Z', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'toLower(n.`name`) ENDS WITH toLower($param0)',
+      );
+      expect(result.params).toEqual({ param0: 'Z' });
+    });
+
+    it('should wrap _NOT_CONTAINS in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_NOT_CONTAINS: 'bad', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'NOT toLower(n.`name`) CONTAINS toLower($param0)',
+      );
+      expect(result.params).toEqual({ param0: 'bad' });
+    });
+
+    it('should wrap _NOT_STARTS_WITH in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_NOT_STARTS_WITH: 'X', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'NOT toLower(n.`name`) STARTS WITH toLower($param0)',
+      );
+      expect(result.params).toEqual({ param0: 'X' });
+    });
+
+    it('should wrap _NOT_ENDS_WITH in toLower() when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_NOT_ENDS_WITH: 'Y', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'NOT toLower(n.`name`) ENDS WITH toLower($param0)',
+      );
+      expect(result.params).toEqual({ param0: 'Y' });
+    });
+
+    it('should NOT affect _GT, _GTE, _LT, _LTE when mode is insensitive', () => {
+      const result = compiler.compile(
+        {
+          age_GT: 10,
+          age_GTE: 5,
+          age_LT: 100,
+          age_LTE: 50,
+          mode: 'insensitive',
+        },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'n.`age` > $param0 AND n.`age` >= $param1 AND n.`age` < $param2 AND n.`age` <= $param3',
+      );
+      expect(result.params).toEqual({
+        param0: 10,
+        param1: 5,
+        param2: 100,
+        param3: 50,
+      });
+    });
+
+    it('should NOT affect _IN and _NOT_IN when mode is insensitive', () => {
+      const result = compiler.compile(
+        { id_IN: ['a', 'b'], id_NOT_IN: ['c'], mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('n.`id` IN $param0 AND NOT n.`id` IN $param1');
+      expect(result.params).toEqual({ param0: ['a', 'b'], param1: ['c'] });
+    });
+
+    it('should NOT affect _MATCHES when mode is insensitive', () => {
+      const result = compiler.compile(
+        { name_MATCHES: '.*test.*', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('n.`name` =~ $param0');
+      expect(result.params).toEqual({ param0: '.*test.*' });
+    });
+
+    it('should NOT wrap in toLower() without mode (backward compatible)', () => {
+      const result = compiler.compile(
+        { name_CONTAINS: 'Search' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('n.`name` CONTAINS $param0');
+      expect(result.params).toEqual({ param0: 'Search' });
+    });
+
+    it('should work with nested AND/OR conditions', () => {
+      const result = compiler.compile(
+        {
+          OR: [
+            { name_CONTAINS: 'foo', mode: 'insensitive' },
+            { name_STARTS_WITH: 'bar', mode: 'insensitive' },
+          ],
+        },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        '(toLower(n.`name`) CONTAINS toLower($param0) OR toLower(n.`name`) STARTS WITH toLower($param1))',
+      );
+      expect(result.params).toEqual({ param0: 'foo', param1: 'bar' });
+    });
+
+    it('should not include mode key as a Cypher condition', () => {
+      const result = compiler.compile(
+        { name: 'test', mode: 'insensitive' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).not.toContain('mode');
+      expect(result.cypher).toBe('toLower(n.`name`) = toLower($param0)');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Disabled operators (WhereCompilerOptions)
   // ---------------------------------------------------------------------------
   describe('disabled operators', () => {

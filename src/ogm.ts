@@ -18,6 +18,12 @@ import { SchemaMetadata } from './schema/types';
 import { clearResolveTargetDefCache } from './schema/utils';
 import { OGMError } from './errors';
 import { assertSafeIdentifier, assertSafeLabel } from './utils/validation';
+import { cloneSubgraph, deleteSubgraph } from './subgraph/subgraph-operations';
+import {
+  SubgraphCloneResult,
+  SubgraphConfig,
+  SubgraphDeleteResult,
+} from './subgraph/types';
 
 export interface OGMConfig {
   typeDefs: string;
@@ -365,6 +371,62 @@ export class OGM<
         result = results;
       } else result = await fnOrOps({ transaction: tx });
 
+      await tx.commit();
+      return result;
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --- $cloneSubgraph / $deleteSubgraph -----------------------------------------
+
+  /**
+   * Clone a content subgraph rooted at the given source node.
+   * Opens a session and transaction internally; commits on success, rolls back on error.
+   */
+  async $cloneSubgraph(
+    sourceRootId: string,
+    config: SubgraphConfig,
+  ): Promise<SubgraphCloneResult> {
+    const session = this.config.driver.session();
+    const tx = session.beginTransaction();
+    try {
+      const result = await cloneSubgraph(
+        sourceRootId,
+        config,
+        tx,
+        this.config.logger,
+      );
+      await tx.commit();
+      return result;
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete a content subgraph rooted at the given node.
+   * Opens a session and transaction internally; commits on success, rolls back on error.
+   */
+  async $deleteSubgraph(
+    rootId: string,
+    config: SubgraphConfig,
+  ): Promise<SubgraphDeleteResult> {
+    const session = this.config.driver.session();
+    const tx = session.beginTransaction();
+    try {
+      const result = await deleteSubgraph(
+        rootId,
+        config,
+        tx,
+        this.config.logger,
+      );
       await tx.commit();
       return result;
     } catch (error) {

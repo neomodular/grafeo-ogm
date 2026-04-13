@@ -1,6 +1,12 @@
+import { OGMError } from '../errors';
 import type { SchemaMetadata, NodeDefinition } from '../schema/types';
+import { resolveTargetDef } from '../schema/utils';
 import type { SelectionNode } from './selection.compiler';
-import { assertSafeKey } from '../utils/validation';
+import {
+  assertSafeKey,
+  assertSafeIdentifier,
+  assertSortDirection,
+} from '../utils/validation';
 
 /**
  * Converts a `select` object (used in the programmatic API) into the internal
@@ -87,14 +93,15 @@ export class SelectNormalizer {
   private normalizeRelationship(
     fieldName: string,
     value: unknown,
-    relDef: { target: string },
+    relDef: { target: string; isArray: boolean },
   ): SelectionNode | null {
-    const targetDef = this.schema.nodes.get(relDef.target);
+    // Use resolveTargetDef to handle union/interface targets (not just schema.nodes.get)
+    const targetDef = resolveTargetDef(relDef.target, this.schema);
     if (!targetDef) return null;
 
     // `{ drugs: true }` → select all scalar fields from target
     if (value === true) {
-      const children = this.allScalarFields(targetDef);
+      const children = [...this.allScalarFields(targetDef)];
       return {
         fieldName,
         isScalar: false,
@@ -104,7 +111,7 @@ export class SelectNormalizer {
       };
     }
 
-    // `{ drugs: { where: {...}, select: { id: true, drugName: true } } }` → nested select with optional where
+    // `{ drugs: { where: {...}, select: { id: true, drugName: true }, orderBy: {...} } }`
     if (typeof value === 'object' && value !== null) {
       const obj = value as Record<string, unknown>;
       if (obj.select && typeof obj.select === 'object') {
@@ -135,22 +142,107 @@ export class SelectNormalizer {
         if (obj.where && typeof obj.where === 'object')
           node.relationshipWhere = obj.where as Record<string, unknown>;
 
+        // Extract orderBy for nested sorting
+        if (obj.orderBy !== undefined)
+          node.orderBy = this.normalizeOrderBy(
+            obj.orderBy,
+            targetDef,
+            fieldName,
+            relDef.isArray,
+          );
+
         return node;
       }
 
-      // `{ drugs: { where: {...} } }` → where-only (select all scalars)
-      if (obj.where && typeof obj.where === 'object')
+      // `{ drugs: { where: {...}, orderBy: {...} } }` → where with optional orderBy (select all scalars)
+      if (obj.where && typeof obj.where === 'object') {
+        const children = [...this.allScalarFields(targetDef)];
+        const node: SelectionNode = {
+          fieldName,
+          isScalar: false,
+          isRelationship: true,
+          isConnection: false,
+          children,
+          relationshipWhere: obj.where as Record<string, unknown>,
+        };
+
+        if (obj.orderBy !== undefined)
+          node.orderBy = this.normalizeOrderBy(
+            obj.orderBy,
+            targetDef,
+            fieldName,
+            relDef.isArray,
+          );
+
+        return node;
+      }
+
+      // `{ drugs: { orderBy: {...} } }` → orderBy-only (select all scalars)
+      if (obj.orderBy !== undefined) {
+        const children = [...this.allScalarFields(targetDef)];
         return {
           fieldName,
           isScalar: false,
           isRelationship: true,
           isConnection: false,
-          children: this.allScalarFields(targetDef),
-          relationshipWhere: obj.where as Record<string, unknown>,
+          children,
+          orderBy: this.normalizeOrderBy(
+            obj.orderBy,
+            targetDef,
+            fieldName,
+            relDef.isArray,
+          ),
         };
+      }
     }
 
     return null;
+  }
+
+  /**
+   * Normalize and validate an orderBy input into the internal format.
+   * Accepts a single object `{ field: 'ASC' }` or an array `[{ field: 'ASC' }, ...]`.
+   */
+  private normalizeOrderBy(
+    orderByInput: unknown,
+    targetDef: NodeDefinition,
+    fieldName: string,
+    isArray: boolean,
+  ): Array<{ field: string; direction: 'ASC' | 'DESC' }> {
+    if (!isArray)
+      throw new OGMError(
+        `orderBy is not supported on singular relationship "${fieldName}". ` +
+          `Sorting is only valid for array relationships.`,
+      );
+
+    const items = Array.isArray(orderByInput) ? orderByInput : [orderByInput];
+    const result: Array<{ field: string; direction: 'ASC' | 'DESC' }> = [];
+
+    for (const item of items) {
+      if (typeof item !== 'object' || item === null)
+        throw new OGMError(
+          `Invalid orderBy entry on relationship "${fieldName}". ` +
+            `Each entry must be an object like { field: 'ASC' }.`,
+        );
+      const entries = Object.entries(item as Record<string, unknown>);
+      if (entries.length === 0) continue;
+
+      for (const [sortField, rawDirection] of entries) {
+        assertSafeKey(sortField, 'orderBy field');
+        assertSafeIdentifier(sortField, 'orderBy field');
+
+        if (!targetDef.properties.has(sortField))
+          throw new OGMError(
+            `Invalid orderBy field "${sortField}" on relationship "${fieldName}". ` +
+              `Field must be a scalar property of ${targetDef.typeName}.`,
+          );
+
+        const direction = assertSortDirection(String(rawDirection));
+        result.push({ field: sortField, direction });
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -166,7 +258,8 @@ export class SelectNormalizer {
     const relDef = nodeDef.relationships.get(baseFieldName);
     if (!relDef) return null;
 
-    const targetDef = this.schema.nodes.get(relDef.target);
+    // Use resolveTargetDef to handle union/interface targets
+    const targetDef = resolveTargetDef(relDef.target, this.schema);
     if (!targetDef) return null;
 
     const node: SelectionNode = {

@@ -95,11 +95,14 @@ export class WhereCompiler {
       );
     if (where == null) return { cypher: '', params: {} };
 
+    const caseInsensitive = where.mode === 'insensitive';
+
     const clauses: string[] = [];
     const params: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(where)) {
       if (value === undefined) continue;
+      if (key === 'mode') continue;
       assertSafeKey(key, 'where input');
 
       // Logical operators (check before null handling so NOT with null value is handled correctly)
@@ -191,6 +194,7 @@ export class WhereCompiler {
         value,
         nodeVar,
         counter,
+        caseInsensitive,
       );
       clauses.push(scalarResult.cypher);
       Object.assign(params, scalarResult.params);
@@ -556,6 +560,7 @@ export class WhereCompiler {
     value: unknown,
     nodeVar: string,
     counter: { count: number },
+    caseInsensitive = false,
   ): WhereResult {
     // Detect operator suffix
     let operator: OperatorSuffix | null = null;
@@ -578,88 +583,105 @@ export class WhereCompiler {
     const paramName = `param${counter.count}`;
     counter.count++;
 
-    const fieldRef = `${nodeVar}.${escapeIdentifier(fieldName)}`;
+    const rawFieldRef = `${nodeVar}.${escapeIdentifier(fieldName)}`;
+
+    const ci = caseInsensitive && this.isStringComparable(operator);
+    const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;
+    const paramRef = ci ? `toLower($${paramName})` : `$${paramName}`;
 
     if (operator === null)
       // Exact match
       return {
-        cypher: `${fieldRef} = $${paramName}`,
+        cypher: `${fieldRef} = ${paramRef}`,
         params: { [paramName]: value },
       };
 
     switch (operator) {
       case '_IN':
         return {
-          cypher: `${fieldRef} IN $${paramName}`,
+          cypher: `${rawFieldRef} IN $${paramName}`,
           params: { [paramName]: value },
         };
       case '_NOT':
         return {
-          cypher: `${fieldRef} <> $${paramName}`,
+          cypher: `${fieldRef} <> ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_NOT_IN':
         return {
-          cypher: `NOT ${fieldRef} IN $${paramName}`,
+          cypher: `NOT ${rawFieldRef} IN $${paramName}`,
           params: { [paramName]: value },
         };
       case '_CONTAINS':
         return {
-          cypher: `${fieldRef} CONTAINS $${paramName}`,
+          cypher: `${fieldRef} CONTAINS ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_GTE':
         return {
-          cypher: `${fieldRef} >= $${paramName}`,
+          cypher: `${rawFieldRef} >= $${paramName}`,
           params: { [paramName]: value },
         };
       case '_LTE':
         return {
-          cypher: `${fieldRef} <= $${paramName}`,
+          cypher: `${rawFieldRef} <= $${paramName}`,
           params: { [paramName]: value },
         };
       case '_GT':
         return {
-          cypher: `${fieldRef} > $${paramName}`,
+          cypher: `${rawFieldRef} > $${paramName}`,
           params: { [paramName]: value },
         };
       case '_LT':
         return {
-          cypher: `${fieldRef} < $${paramName}`,
+          cypher: `${rawFieldRef} < $${paramName}`,
           params: { [paramName]: value },
         };
       case '_MATCHES':
         return {
-          cypher: `${fieldRef} =~ $${paramName}`,
+          cypher: `${rawFieldRef} =~ $${paramName}`,
           params: { [paramName]: value },
         };
       case '_STARTS_WITH':
         return {
-          cypher: `${fieldRef} STARTS WITH $${paramName}`,
+          cypher: `${fieldRef} STARTS WITH ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_ENDS_WITH':
         return {
-          cypher: `${fieldRef} ENDS WITH $${paramName}`,
+          cypher: `${fieldRef} ENDS WITH ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_NOT_CONTAINS':
         return {
-          cypher: `NOT ${fieldRef} CONTAINS $${paramName}`,
+          cypher: `NOT ${fieldRef} CONTAINS ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_NOT_STARTS_WITH':
         return {
-          cypher: `NOT ${fieldRef} STARTS WITH $${paramName}`,
+          cypher: `NOT ${fieldRef} STARTS WITH ${paramRef}`,
           params: { [paramName]: value },
         };
       case '_NOT_ENDS_WITH':
         return {
-          cypher: `NOT ${fieldRef} ENDS WITH $${paramName}`,
+          cypher: `NOT ${fieldRef} ENDS WITH ${paramRef}`,
           params: { [paramName]: value },
         };
       default:
         throw new OGMError(`Unknown operator: ${operator}`);
     }
+  }
+
+  private isStringComparable(operator: OperatorSuffix | null): boolean {
+    return (
+      operator === null ||
+      operator === '_NOT' ||
+      operator === '_CONTAINS' ||
+      operator === '_STARTS_WITH' ||
+      operator === '_ENDS_WITH' ||
+      operator === '_NOT_CONTAINS' ||
+      operator === '_NOT_STARTS_WITH' ||
+      operator === '_NOT_ENDS_WITH'
+    );
   }
 }

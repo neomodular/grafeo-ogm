@@ -31,6 +31,8 @@ export interface SelectionNode {
   relationshipWhere?: Record<string, unknown>;
   connectionWhere?: Record<string, unknown>;
   edgeChildren?: SelectionNode[];
+  /** Sort spec for array relationship pattern comprehensions (Prisma-like select) */
+  orderBy?: Array<{ field: string; direction: 'ASC' | 'DESC' }>;
 }
 
 /**
@@ -330,6 +332,19 @@ export class SelectionCompiler {
 
     // Wrap singular relationships with head()
     if (!relDef.isArray) return `head(${comprehension})`;
+
+    // Wrap with apoc.coll.sortMulti() if orderBy is present.
+    // Requires the APOC plugin installed on the Neo4j instance.
+    if (node.orderBy && node.orderBy.length > 0) {
+      const sortKeys = node.orderBy
+        .map(({ field, direction }) => {
+          assertSafeIdentifier(field, 'orderBy sort key');
+          // apoc.coll.sortMulti convention: ^ prefix = ASC, no prefix = DESC
+          return direction === 'ASC' ? `'^${field}'` : `'${field}'`;
+        })
+        .join(', ');
+      return `apoc.coll.sortMulti(${comprehension}, [${sortKeys}])`;
+    }
 
     return comprehension;
   }

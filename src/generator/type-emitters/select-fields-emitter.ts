@@ -139,6 +139,9 @@ function emitEdgeSelectFields(schema: SchemaMetadata): string[] {
 
 /** Emits a single relationship field entry (non-connection). */
 function emitRelationshipField(rel: RelationshipDefinition): string {
+  if (rel.isArray)
+    return `  ${rel.fieldName}?: boolean | { where?: ${rel.target}Where; select?: ${rel.target}SelectFields; orderBy?: Array<Record<string, 'ASC' | 'DESC'>> };`;
+
   return `  ${rel.fieldName}?: boolean | { where?: ${rel.target}Where; select?: ${rel.target}SelectFields };`;
 }
 

@@ -126,7 +126,7 @@ describe('emitSelectFieldTypes', () => {
     const output = emitSelectFieldTypes(schema);
 
     expect(output).toContain(
-      'books?: boolean | { where?: BookWhere; select?: BookSelectFields }',
+      "books?: boolean | { where?: BookWhere; select?: BookSelectFields; orderBy?: Array<Record<string, 'ASC' | 'DESC'>> }",
     );
   });
 
@@ -221,7 +221,7 @@ describe('emitSelectFieldTypes', () => {
     expect(output).toContain('id?: boolean;');
     expect(output).toContain('name?: boolean;');
     expect(output).toContain(
-      'resources?: boolean | { where?: ResourceWhere; select?: ResourceSelectFields }',
+      "resources?: boolean | { where?: ResourceWhere; select?: ResourceSelectFields; orderBy?: Array<Record<string, 'ASC' | 'DESC'>> }",
     );
     expect(output).toContain('resourcesConnection?: boolean | {');
   });
