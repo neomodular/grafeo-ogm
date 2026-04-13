@@ -9,6 +9,7 @@ import {
   WhereCompiler,
   WhereCompilerOptions,
 } from './compilers/where.compiler';
+import { OGMError } from './errors';
 import { Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { InterfaceModel, InterfaceModelCompilers } from './interface-model';
@@ -16,14 +17,13 @@ import { Model, ModelCompilers } from './model';
 import { parseSchema } from './schema/parser';
 import { SchemaMetadata } from './schema/types';
 import { clearResolveTargetDefCache } from './schema/utils';
-import { OGMError } from './errors';
-import { assertSafeIdentifier, assertSafeLabel } from './utils/validation';
 import { cloneSubgraph, deleteSubgraph } from './subgraph/subgraph-operations';
 import {
   SubgraphCloneResult,
   SubgraphConfig,
   SubgraphDeleteResult,
 } from './subgraph/types';
+import { assertSafeIdentifier, assertSafeLabel } from './utils/validation';
 
 export interface OGMConfig {
   typeDefs: string;
@@ -385,12 +385,23 @@ export class OGM<
 
   /**
    * Clone a content subgraph rooted at the given source node.
-   * Opens a session and transaction internally; commits on success, rolls back on error.
+   *
+   * If a `transaction` is provided, uses it directly (caller manages commit/rollback).
+   * Otherwise opens a session and transaction internally; commits on success, rolls back on error.
    */
   async $cloneSubgraph(
     sourceRootId: string,
     config: SubgraphConfig,
+    transaction?: Transaction,
   ): Promise<SubgraphCloneResult> {
+    if (transaction)
+      return cloneSubgraph(
+        sourceRootId,
+        config,
+        transaction,
+        this.config.logger,
+      );
+
     const session = this.config.driver.session();
     const tx = session.beginTransaction();
     try {
@@ -412,12 +423,18 @@ export class OGM<
 
   /**
    * Delete a content subgraph rooted at the given node.
-   * Opens a session and transaction internally; commits on success, rolls back on error.
+   *
+   * If a `transaction` is provided, uses it directly (caller manages commit/rollback).
+   * Otherwise opens a session and transaction internally; commits on success, rolls back on error.
    */
   async $deleteSubgraph(
     rootId: string,
     config: SubgraphConfig,
+    transaction?: Transaction,
   ): Promise<SubgraphDeleteResult> {
+    if (transaction)
+      return deleteSubgraph(rootId, config, transaction, this.config.logger);
+
     const session = this.config.driver.session();
     const tx = session.beginTransaction();
     try {
