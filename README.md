@@ -473,6 +473,70 @@ Book.selectionSet = `{ id title }`;
 
 **Default (no selection):** Returns all scalar fields of the matched node.
 
+### Nested Sorting
+
+Array relationships and connection edges accept an `orderBy` clause that compiles to `apoc.coll.sortMulti` (requires the APOC plugin on the Neo4j instance).
+
+**Array relationships** — sort by target-node scalar fields. Priority follows array order:
+
+```typescript
+await Author.find({
+  select: {
+    books: {
+      orderBy: [{ year: 'DESC' }, { title: 'ASC' }],
+      select: { id: true, title: true },
+    },
+  },
+});
+```
+
+Singular relationships do not accept `orderBy` — sorting a single value is meaningless.
+
+**Connection edges** — sort by **node** scalars or **`@relationshipProperties`** scalars, or mix both. Each `orderBy` entry has exactly one key: `node` or `edge`.
+
+```typescript
+await Author.find({
+  select: {
+    booksConnection: {
+      where: { node: { published: true } },
+      orderBy: [
+        { edge: { since: 'DESC' } },   // sort edges first by relationship property
+        { node: { title: 'ASC' } },    // then by target-node field
+      ],
+      select: {
+        edges: {
+          node: { select: { id: true, title: true } },
+          properties: { select: { since: true } },
+        },
+      },
+    },
+  },
+});
+```
+
+Validation rules:
+- `edge` is only accepted when the relationship is declared with `@relationshipProperties`
+- Fields must be scalars on the target node (for `node`) or on the relationship properties type (for `edge`)
+- Direction must be `'ASC'` or `'DESC'`
+
+### Automatic `__typename` for Abstract Targets
+
+When a relationship resolves to a **union** or **interface**, `__typename` is emitted automatically into the projection — you don't need to add `__typename: true` to the select (or `__typename` to the `selectionSet`). This prevents silent discrimination failures on the client side where type guards return `false` because the discriminator was never projected.
+
+```typescript
+// Union target: __typename is synthesized from labels, no need to request it
+const chapters = await Book.find({
+  select: {
+    chapters: {                 // chapters targets ChapterType = StandardChapter | RangeChapter
+      select: { id: true },
+    },
+  },
+});
+// Each chapter still has chapter.__typename === 'StandardChapter' | 'RangeChapter'
+```
+
+Explicitly requesting `__typename: true` (or including it in a `selectionSet`) is still supported and idempotent — it will not be emitted twice.
+
 ### Sorting and Pagination
 
 ```typescript

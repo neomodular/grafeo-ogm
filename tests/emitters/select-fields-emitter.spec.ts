@@ -149,6 +149,52 @@ describe('emitSelectFieldTypes', () => {
     expect(output).toContain('booksConnection?: boolean | {');
     expect(output).toContain('AuthorBooksConnectionWhere');
     expect(output).toContain('node?: boolean | { select: BookSelectFields }');
+    // Connection orderBy: no edge arm when relationship has no @relationshipProperties
+    expect(output).toContain(
+      `orderBy?: Array<{ node: Record<string, 'ASC' | 'DESC'> }>`,
+    );
+    expect(output).not.toMatch(
+      /orderBy\?:.*\|\s*\{\s*edge: Record<string, 'ASC' \| 'DESC'>\s*\}>/,
+    );
+  });
+
+  it('emits connection orderBy with edge arm when relationship has properties', () => {
+    const schema = makeSchema(
+      new Map([
+        [
+          'Author',
+          makeNodeDef(
+            'Author',
+            [makeProp('id', 'ID')],
+            [
+              makeRel({
+                fieldName: 'books',
+                type: 'HAS',
+                target: 'Book',
+                properties: 'AuthorBookProps',
+              }),
+            ],
+          ),
+        ],
+        ['Book', makeNodeDef('Book', [makeProp('id', 'ID')])],
+      ]),
+      {
+        relationshipProperties: new Map([
+          [
+            'AuthorBookProps',
+            {
+              typeName: 'AuthorBookProps',
+              properties: new Map([['position', makeProp('position', 'Int')]]),
+            },
+          ],
+        ]),
+      },
+    );
+    const output = emitSelectFieldTypes(schema);
+
+    expect(output).toContain(
+      `orderBy?: Array<{ node: Record<string, 'ASC' | 'DESC'> } | { edge: Record<string, 'ASC' | 'DESC'> }>`,
+    );
   });
 
   it('emits edge SelectFields and connection properties when relationship has properties', () => {

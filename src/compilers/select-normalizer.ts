@@ -1,12 +1,16 @@
 import { OGMError } from '../errors';
-import type { SchemaMetadata, NodeDefinition } from '../schema/types';
+import type {
+  NodeDefinition,
+  RelationshipDefinition,
+  SchemaMetadata,
+} from '../schema/types';
 import { resolveTargetDef } from '../schema/utils';
-import type { SelectionNode } from './selection.compiler';
 import {
-  assertSafeKey,
   assertSafeIdentifier,
+  assertSafeKey,
   assertSortDirection,
 } from '../utils/validation';
+import type { SelectionNode } from './selection.compiler';
 
 /**
  * Converts a `select` object (used in the programmatic API) into the internal
@@ -277,6 +281,15 @@ export class SelectNormalizer {
     if (obj.where && typeof obj.where === 'object')
       node.connectionWhere = obj.where as Record<string, unknown>;
 
+    // Extract orderBy (node/edge scoped) for edge sorting
+    if (obj.orderBy !== undefined)
+      node.connectionOrderBy = this.normalizeConnectionOrderBy(
+        obj.orderBy,
+        targetDef,
+        relDef,
+        fieldName,
+      );
+
     // Extract edges -> node and edges -> properties from select
     if (obj.select && typeof obj.select === 'object') {
       const selectObj = obj.select as Record<string, unknown>;
@@ -319,6 +332,106 @@ export class SelectNormalizer {
     }
 
     return node;
+  }
+
+  /**
+   * Normalize and validate a connection orderBy input.
+   * Each entry must be an object with exactly one key: `node` or `edge`.
+   * The inner value is a `{ field: 'ASC' | 'DESC' }` map, which may contain
+   * multiple fields (preserving insertion order as sort priority).
+   */
+  private normalizeConnectionOrderBy(
+    orderByInput: unknown,
+    targetDef: NodeDefinition,
+    relDef: RelationshipDefinition,
+    fieldName: string,
+  ): Array<{
+    field: string;
+    direction: 'ASC' | 'DESC';
+    scope: 'node' | 'edge';
+  }> {
+    const items = Array.isArray(orderByInput) ? orderByInput : [orderByInput];
+    const result: Array<{
+      field: string;
+      direction: 'ASC' | 'DESC';
+      scope: 'node' | 'edge';
+    }> = [];
+
+    for (const item of items) {
+      if (typeof item !== 'object' || item === null)
+        throw new OGMError(
+          `Invalid orderBy entry on connection "${fieldName}". ` +
+            `Each entry must be an object like { node: { field: 'ASC' } } or { edge: { field: 'DESC' } }.`,
+        );
+
+      const entries = Object.entries(item as Record<string, unknown>);
+      if (entries.length === 0) continue;
+      if (entries.length > 1)
+        throw new OGMError(
+          `Invalid orderBy entry on connection "${fieldName}". ` +
+            `Each entry must have exactly one of "node" or "edge" — got keys: ${entries
+              .map(([k]) => `"${k}"`)
+              .join(', ')}.`,
+        );
+
+      const [scopeKey, scopeValue] = entries[0];
+      if (scopeKey !== 'node' && scopeKey !== 'edge')
+        throw new OGMError(
+          `Invalid orderBy scope "${scopeKey}" on connection "${fieldName}". ` +
+            `Use "node" (to sort by target node fields) or "edge" (to sort by relationship property fields).`,
+        );
+
+      if (typeof scopeValue !== 'object' || scopeValue === null)
+        throw new OGMError(
+          `Invalid orderBy "${scopeKey}" value on connection "${fieldName}". ` +
+            `Expected an object like { field: 'ASC' }.`,
+        );
+
+      const scope = scopeKey as 'node' | 'edge';
+      let edgePropsDef:
+        | { properties: NodeDefinition['properties'] }
+        | undefined;
+      if (scope === 'edge') {
+        if (!relDef.properties)
+          throw new OGMError(
+            `Invalid orderBy on connection "${fieldName}": relationship has no @relationshipProperties, ` +
+              `so "edge" sort keys are not available. Use { node: { ... } } instead.`,
+          );
+        const resolved = this.schema.relationshipProperties.get(
+          relDef.properties,
+        );
+        if (!resolved)
+          throw new OGMError(
+            `Invalid orderBy on connection "${fieldName}": relationship properties type ` +
+              `"${relDef.properties}" is not defined in the schema.`,
+          );
+        edgePropsDef = resolved;
+      }
+
+      for (const [sortField, rawDirection] of Object.entries(
+        scopeValue as Record<string, unknown>,
+      )) {
+        assertSafeKey(sortField, `orderBy ${scope} field`);
+        assertSafeIdentifier(sortField, `orderBy ${scope} field`);
+
+        if (scope === 'node') {
+          if (!targetDef.properties.has(sortField))
+            throw new OGMError(
+              `Invalid orderBy node field "${sortField}" on connection "${fieldName}". ` +
+                `Field must be a scalar property of ${targetDef.typeName}.`,
+            );
+        } else if (!edgePropsDef?.properties.has(sortField))
+          throw new OGMError(
+            `Invalid orderBy edge field "${sortField}" on connection "${fieldName}". ` +
+              `Field must be a scalar property of relationship type "${relDef.properties}".`,
+          );
+
+        const direction = assertSortDirection(String(rawDirection));
+        result.push({ field: sortField, direction, scope });
+      }
+    }
+
+    return result;
   }
 
   /**

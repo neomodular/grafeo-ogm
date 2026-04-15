@@ -588,6 +588,290 @@ describe('SelectionCompiler', () => {
       expect(result).toContain('booksConnection: { edges:');
       expect(result).toContain('properties: e0 { .\`position\` }');
     });
+
+    // --- Connection orderBy (apoc.coll.sortMulti) ---
+
+    it('compiles node-scope connection orderBy with synthetic sort key', () => {
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+          connectionOrderBy: [
+            { field: 'title', direction: 'ASC', scope: 'node' },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compiler.compile(selection, 'n', authorDef);
+
+      expect(result).toContain('apoc.coll.sortMulti(');
+      expect(result).toContain('__sk0: n0.`title`');
+      expect(result).toContain("['^__sk0']");
+      // outer projection strips synthetic keys
+      expect(result).toContain('| { node: x.node }');
+      expect(result).not.toContain('__sk0: x.');
+    });
+
+    it('compiles edge-scope connection orderBy reading from the edge var', () => {
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+          edgeChildren: [
+            {
+              fieldName: 'position',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+          connectionOrderBy: [
+            { field: 'position', direction: 'DESC', scope: 'edge' },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compiler.compile(selection, 'n', authorDef);
+
+      expect(result).toContain('__sk0: e0.`position`');
+      expect(result).toContain("['__sk0']");
+      expect(result).toContain('| { node: x.node, properties: x.properties }');
+    });
+
+    it('preserves priority with mixed node + edge sort keys', () => {
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+          edgeChildren: [
+            {
+              fieldName: 'position',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+          connectionOrderBy: [
+            { field: 'position', direction: 'ASC', scope: 'edge' },
+            { field: 'title', direction: 'DESC', scope: 'node' },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compiler.compile(selection, 'n', authorDef);
+
+      expect(result).toContain('__sk0: e0.`position`');
+      expect(result).toContain('__sk1: n0.`title`');
+      expect(result).toContain("['^__sk0', '__sk1']");
+    });
+
+    it('emits default edges shape when orderBy is absent (regression guard)', () => {
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compiler.compile(selection, 'n', authorDef);
+
+      expect(result).not.toContain('apoc.coll.sortMulti');
+      expect(result).not.toContain('__sk');
+    });
+  });
+
+  // --- Auto-emit __typename for abstract targets ---
+
+  describe('auto __typename for union / interface', () => {
+    it('auto-emits __typename for a union target without explicit selection', () => {
+      const unionSchema: SchemaMetadata = {
+        nodes: new Map([
+          [
+            'A',
+            makeNode('A', [
+              makeProp('id', 'ID', true),
+              makeProp('foo', 'String'),
+            ]),
+          ],
+          [
+            'B',
+            makeNode('B', [
+              makeProp('id', 'ID', true),
+              makeProp('bar', 'String'),
+            ]),
+          ],
+        ]),
+        interfaces: new Map(),
+        relationshipProperties: new Map(),
+        enums: new Map(),
+        unions: new Map([['Shape', ['A', 'B']]]),
+      };
+      const c = new SelectionCompiler(unionSchema);
+      const syntheticUnionDef: NodeDefinition = {
+        typeName: 'Shape',
+        label: 'Shape',
+        labels: ['Shape'],
+        pluralName: 'shapes',
+        properties: new Map([['id', makeProp('id', 'ID', true)]]),
+        relationships: new Map(),
+        fulltextIndexes: [],
+        implementsInterfaces: [],
+      };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'id',
+          isScalar: true,
+          isRelationship: false,
+          isConnection: false,
+        },
+      ];
+      const result = c.compile(selection, 'n', syntheticUnionDef);
+      expect(result).toContain(
+        "__typename: head([__label IN labels(n) WHERE __label IN ['A', 'B']])",
+      );
+    });
+
+    it('does not duplicate __typename when already requested', () => {
+      const unionSchema: SchemaMetadata = {
+        nodes: new Map([
+          ['A', makeNode('A', [makeProp('id', 'ID', true)])],
+          ['B', makeNode('B', [makeProp('id', 'ID', true)])],
+        ]),
+        interfaces: new Map(),
+        relationshipProperties: new Map(),
+        enums: new Map(),
+        unions: new Map([['Shape', ['A', 'B']]]),
+      };
+      const c = new SelectionCompiler(unionSchema);
+      const syntheticUnionDef: NodeDefinition = {
+        typeName: 'Shape',
+        label: 'Shape',
+        labels: ['Shape'],
+        pluralName: 'shapes',
+        properties: new Map([['id', makeProp('id', 'ID', true)]]),
+        relationships: new Map(),
+        fulltextIndexes: [],
+        implementsInterfaces: [],
+      };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: '__typename',
+          isScalar: true,
+          isRelationship: false,
+          isConnection: false,
+        },
+        {
+          fieldName: 'id',
+          isScalar: true,
+          isRelationship: false,
+          isConnection: false,
+        },
+      ];
+      const result = c.compile(selection, 'n', syntheticUnionDef);
+      const occurrences = result.match(/__typename:/g) ?? [];
+      expect(occurrences).toHaveLength(1);
+    });
+
+    it('auto-emits __typename for an interface target via implementedBy labels', () => {
+      const ifaceSchema: SchemaMetadata = {
+        nodes: new Map([
+          ['Dog', makeNode('Dog', [makeProp('id', 'ID', true)])],
+          ['Cat', makeNode('Cat', [makeProp('id', 'ID', true)])],
+        ]),
+        interfaces: new Map([
+          [
+            'Animal',
+            {
+              name: 'Animal',
+              label: 'Animal',
+              properties: new Map([['id', makeProp('id', 'ID', true)]]),
+              relationships: new Map(),
+              implementedBy: ['Dog', 'Cat'],
+            },
+          ],
+        ]),
+        relationshipProperties: new Map(),
+        enums: new Map(),
+        unions: new Map(),
+      };
+      const c = new SelectionCompiler(ifaceSchema);
+      const syntheticIfaceDef: NodeDefinition = {
+        typeName: 'Animal',
+        label: 'Animal',
+        labels: ['Animal'],
+        pluralName: 'animals',
+        properties: new Map([['id', makeProp('id', 'ID', true)]]),
+        relationships: new Map(),
+        fulltextIndexes: [],
+        implementsInterfaces: [],
+      };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'id',
+          isScalar: true,
+          isRelationship: false,
+          isConnection: false,
+        },
+      ];
+      const result = c.compile(selection, 'n', syntheticIfaceDef);
+      expect(result).toContain(
+        "__typename: head([__label IN labels(n) WHERE __label IN ['Dog', 'Cat']])",
+      );
+    });
+
+    it('does not auto-emit __typename for concrete types', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'id',
+          isScalar: true,
+          isRelationship: false,
+          isConnection: false,
+        },
+      ];
+      const result = compiler.compile(selection, 'n', authorDef);
+      expect(result).not.toContain('__typename');
+    });
   });
 
   describe('parseSelectionSet', () => {

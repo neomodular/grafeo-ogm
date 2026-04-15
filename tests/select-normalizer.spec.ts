@@ -399,4 +399,142 @@ describe('SelectNormalizer', () => {
       expect(result[0].relationshipWhere).toBeUndefined();
     });
   });
+
+  // --- Connection orderBy (node / edge scopes) ---
+
+  describe('connection orderBy', () => {
+    it('normalizes node-scope orderBy (single object form)', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      const result = normalizer.normalize(
+        {
+          booksConnection: {
+            orderBy: { node: { title: 'ASC' } },
+          },
+        },
+        authorDef,
+      );
+      expect(result[0].connectionOrderBy).toEqual([
+        { field: 'title', direction: 'ASC', scope: 'node' },
+      ]);
+    });
+
+    it('normalizes edge-scope orderBy via relationship properties', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      const result = normalizer.normalize(
+        {
+          booksConnection: {
+            orderBy: [{ edge: { position: 'DESC' } }],
+          },
+        },
+        authorDef,
+      );
+      expect(result[0].connectionOrderBy).toEqual([
+        { field: 'position', direction: 'DESC', scope: 'edge' },
+      ]);
+    });
+
+    it('preserves priority across mixed node + edge entries', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      const result = normalizer.normalize(
+        {
+          booksConnection: {
+            orderBy: [
+              { edge: { position: 'ASC' } },
+              { node: { title: 'DESC' } },
+            ],
+          },
+        },
+        authorDef,
+      );
+      expect(result[0].connectionOrderBy).toEqual([
+        { field: 'position', direction: 'ASC', scope: 'edge' },
+        { field: 'title', direction: 'DESC', scope: 'node' },
+      ]);
+    });
+
+    it('rejects entries with both node and edge keys', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            booksConnection: {
+              orderBy: [{ node: { title: 'ASC' }, edge: { position: 'DESC' } }],
+            },
+          },
+          authorDef,
+        ),
+      ).toThrow(/exactly one of "node" or "edge"/);
+    });
+
+    it('rejects unknown scope keys', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            booksConnection: {
+              orderBy: [{ bogus: { title: 'ASC' } }],
+            },
+          },
+          authorDef,
+        ),
+      ).toThrow(/Invalid orderBy scope "bogus"/);
+    });
+
+    it('rejects unknown node fields with a scoped message', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            booksConnection: {
+              orderBy: [{ node: { doesNotExist: 'ASC' } }],
+            },
+          },
+          authorDef,
+        ),
+      ).toThrow(/Invalid orderBy node field "doesNotExist"/);
+    });
+
+    it('rejects unknown edge fields with a scoped message', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            booksConnection: {
+              orderBy: [{ edge: { doesNotExist: 'ASC' } }],
+            },
+          },
+          authorDef,
+        ),
+      ).toThrow(/Invalid orderBy edge field "doesNotExist"/);
+    });
+
+    it('rejects edge orderBy on a relationship with no @relationshipProperties', () => {
+      // Book.hasStatus has no `properties` — edge sort must fail.
+      const bookDef = schema.nodes.get('Book')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            hasStatusConnection: {
+              orderBy: [{ edge: { since: 'DESC' } }],
+            },
+          },
+          bookDef,
+        ),
+      ).toThrow(/has no @relationshipProperties/);
+    });
+
+    it('rejects invalid directions', () => {
+      const authorDef = schema.nodes.get('Author')!;
+      expect(() =>
+        normalizer.normalize(
+          {
+            booksConnection: {
+              orderBy: [{ node: { title: 'sideways' } }],
+            },
+          },
+          authorDef,
+        ),
+      ).toThrow();
+    });
+  });
 });

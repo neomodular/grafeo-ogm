@@ -33,6 +33,15 @@ export interface SelectionNode {
   edgeChildren?: SelectionNode[];
   /** Sort spec for array relationship pattern comprehensions (Prisma-like select) */
   orderBy?: Array<{ field: string; direction: 'ASC' | 'DESC' }>;
+  /**
+   * Sort spec for connection edges. Each entry targets either the related node
+   * scalars (`scope: 'node'`) or @relationshipProperties scalars (`scope: 'edge'`).
+   */
+  connectionOrderBy?: Array<{
+    field: string;
+    direction: 'ASC' | 'DESC';
+    scope: 'node' | 'edge';
+  }>;
 }
 
 /**
@@ -88,8 +97,29 @@ export class SelectionCompiler {
     // fields need CASE WHEN branches since different union members may have
     // the same field name but different underlying relationship types.
     const unionMembers = this.schema.unions?.get(nodeDef.typeName);
+    const interfaceDef = this.schema.interfaces?.get(nodeDef.typeName);
+    const isAbstract =
+      (unionMembers && unionMembers.length > 0) ||
+      (interfaceDef &&
+        interfaceDef.implementedBy &&
+        interfaceDef.implementedBy.length > 0);
 
     const parts: string[] = [];
+
+    // Auto-emit __typename for abstract targets (unions/interfaces). Callers
+    // of a discriminated type cannot narrow the returned object without
+    // __typename, and requiring them to remember a boilerplate
+    // `__typename: true` is a footgun — type guards silently return false
+    // with no signal. Skip if the caller already asked for it explicitly.
+    if (isAbstract) {
+      const alreadyRequested = selection.some(
+        (node) => node.isScalar && node.fieldName === '__typename',
+      );
+      if (!alreadyRequested) {
+        const typenameExpr = this.compileTypename(nodeVar, nodeDef);
+        if (typenameExpr) parts.push(`__typename: ${typenameExpr}`);
+      }
+    }
 
     for (const node of selection) {
       if (node.isScalar) {
@@ -461,6 +491,7 @@ export class SelectionCompiler {
     );
 
     const mapParts: string[] = [];
+    const projectionKeys: string[] = [];
 
     // Compile node projection
     if (node.children && node.children.length > 0) {
@@ -474,6 +505,7 @@ export class SelectionCompiler {
         paramCounter,
       );
       mapParts.push(`node: ${nodeProjection}`);
+      projectionKeys.push('node');
     }
 
     // Compile edge properties projection
@@ -483,7 +515,26 @@ export class SelectionCompiler {
         .map((c) => `.${escapeIdentifier(c.fieldName)}`)
         .join(', ');
       mapParts.push(`properties: ${edgeVar} { ${edgeFields} }`);
+      projectionKeys.push('properties');
     }
+
+    // Inject synthetic sort scalars at the top level of the edge map so
+    // apoc.coll.sortMulti (which only accepts top-level keys) can order the
+    // collection. The outer list comprehension strips them on the way out.
+    const sortKeyTokens: string[] = [];
+    if (node.connectionOrderBy && node.connectionOrderBy.length > 0)
+      node.connectionOrderBy.forEach(({ field, direction, scope }, i) => {
+        assertSafeIdentifier(field, 'connection orderBy field');
+        const sourceVar = scope === 'edge' ? edgeVar : childVar;
+        const syntheticKey = `__sk${i}`;
+        mapParts.push(
+          `${syntheticKey}: ${sourceVar}.${escapeIdentifier(field)}`,
+        );
+        // apoc.coll.sortMulti convention: ^ prefix = ASC, no prefix = DESC
+        sortKeyTokens.push(
+          direction === 'ASC' ? `'^${syntheticKey}'` : `'${syntheticKey}'`,
+        );
+      });
 
     const innerMap = `{ ${mapParts.join(', ')} }`;
 
@@ -527,7 +578,18 @@ export class SelectionCompiler {
       }
     }
 
-    return `{ edges: [${pattern}${whereClause} | ${innerMap}] }`;
+    if (sortKeyTokens.length === 0)
+      return `{ edges: [${pattern}${whereClause} | ${innerMap}] }`;
+
+    // Re-project only the user-facing keys so synthetic __skN scalars don't
+    // leak out of the projection.
+    const outerProjection =
+      projectionKeys.length > 0
+        ? `{ ${projectionKeys.map((k) => `${k}: x.${k}`).join(', ')} }`
+        : `{}`;
+    return `{ edges: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
+      ', ',
+    )}]) | ${outerProjection}] }`;
   }
 
   /**
@@ -539,6 +601,17 @@ export class SelectionCompiler {
     const unionMembers = this.schema.unions?.get(nodeDef.typeName);
     if (unionMembers && unionMembers.length > 0) {
       const memberList = unionMembers.map((m) => `'${m}'`).join(', ');
+      return `head([__label IN labels(${nodeVar}) WHERE __label IN [${memberList}]])`;
+    }
+    const interfaceDef = this.schema.interfaces?.get(nodeDef.typeName);
+    if (
+      interfaceDef &&
+      interfaceDef.implementedBy &&
+      interfaceDef.implementedBy.length > 0
+    ) {
+      const memberList = interfaceDef.implementedBy
+        .map((m) => `'${m}'`)
+        .join(', ');
       return `head([__label IN labels(${nodeVar}) WHERE __label IN [${memberList}]])`;
     }
     return `'${nodeDef.typeName}'`;

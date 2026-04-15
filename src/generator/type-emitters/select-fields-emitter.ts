@@ -1,9 +1,9 @@
 import type {
-  SchemaMetadata,
-  NodeDefinition,
   InterfaceDefinition,
-  RelationshipDefinition,
+  NodeDefinition,
   PropertyDefinition,
+  RelationshipDefinition,
+  SchemaMetadata,
 } from '../../schema/types';
 import { toPascalCase } from './helpers';
 
@@ -175,20 +175,26 @@ function emitConnectionField(
     `        node?: boolean | { select: ${targetSelect} };`,
   ];
 
+  // Compute the orderBy union shape. Node sort is always available; edge sort
+  // is only offered when the relationship carries @relationshipProperties.
+  const hasEdgeProps =
+    !!rel.properties && schema.relationshipProperties.has(rel.properties);
+  const orderByArm = hasEdgeProps
+    ? `Array<{ node: Record<string, 'ASC' | 'DESC'> } | { edge: Record<string, 'ASC' | 'DESC'> }>`
+    : `Array<{ node: Record<string, 'ASC' | 'DESC'> }>`;
+
   // Only include properties if the relationship carries edge properties
-  if (rel.properties) {
-    const propsType = schema.relationshipProperties.get(rel.properties);
-    if (propsType) {
-      const edgeSelectName = buildEdgeSelectFieldsName(ownerTypeName, rel);
-      edgeMembers.push(
-        `        properties?: boolean | { select: ${edgeSelectName} };`,
-      );
-    }
+  if (hasEdgeProps) {
+    const edgeSelectName = buildEdgeSelectFieldsName(ownerTypeName, rel);
+    edgeMembers.push(
+      `        properties?: boolean | { select: ${edgeSelectName} };`,
+    );
   }
 
   const lines = [
     `  ${connFieldName}?: boolean | {`,
     `    where?: ${connWhereName};`,
+    `    orderBy?: ${orderByArm};`,
     `    select: {`,
     `      edges?: boolean | {`,
     ...edgeMembers,
