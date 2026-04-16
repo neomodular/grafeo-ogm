@@ -1,6 +1,8 @@
-# grafeo-ogm
+<p align="center">
+  <img src="./assets/logo.jpg" alt="grafeo-ogm — Type-safe OGM for Neo4j" width="640" />
+</p>
 
-**A type-safe Object-Graph Mapper for Neo4j, driven by GraphQL SDL.**
+<p align="center"><strong>A type-safe Object-Graph Mapper for Neo4j, driven by GraphQL SDL.</strong></p>
 
 [![npm version](https://img.shields.io/npm/v/grafeo-ogm.svg)](https://www.npmjs.com/package/grafeo-ogm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -17,6 +19,7 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 ## Table of Contents
 
 - [Why grafeo-ogm?](#why-grafeo-ogm)
+- [Common Use Cases](#common-use-cases)
 - [Quick Start](#quick-start)
 - [Features Overview](#features-overview)
 - [Schema Definition](#schema-definition)
@@ -27,6 +30,8 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 - [Testing Utilities](#testing-utilities)
 - [Security](#security)
 - [Migration from @neo4j/graphql-ogm](#migration-from-neo4jgraphql-ogm)
+- [Comparisons](#comparisons)
+- [FAQ](#faq)
 - [API Reference](#api-reference)
 - [Contributing](#contributing)
 - [License](#license)
@@ -74,6 +79,33 @@ RETURN n {
 ### CALL Subquery Isolation
 
 Mutations with multiple connect/disconnect operations are wrapped in `CALL { ... }` subqueries. Each operation runs in isolation -- no Cartesian products, no duplicate relationships, no silently dropped operations when a disconnect target doesn't exist.
+
+---
+
+## Common Use Cases
+
+grafeo-ogm fits any TypeScript application backed by Neo4j. Common patterns it solves cleanly:
+
+**Knowledge graphs & semantic search**
+Model entities, properties, and relationships in GraphQL SDL. Combine relationship traversal with `@fulltext` indexes for hybrid keyword + structural queries (e.g. "find all `Document` nodes mentioning *X* that are linked to active `Project` nodes owned by team *Y*").
+
+**Social graphs & follower networks**
+Multi-hop traversals with relationship properties (e.g. `since`, `weight`) become typed `*Connection` queries with sortable edges. No raw Cypher needed for "mutual followers", "friends of friends", or "shortest path between users".
+
+**Recommendation engines**
+Express collaborative filtering as relationship queries: "users who bought *X* also bought *Y*" becomes a typed `connect`/`*Connection` selection sorted by edge frequency or recency. Use `@cypher` directives for custom scoring algorithms in pure Cypher.
+
+**Permission & policy graphs (RBAC / ReBAC)**
+Model `User → ROLE → Permission` chains as native relationships. Filter queries with relationship existence (`Connection_SOME`) instead of joining tables. Multi-label nodes (`@node(labels: [...])`) handle hierarchical roles cleanly.
+
+**Master data management & data lineage**
+Track provenance, transformations, and dependencies between datasets. Interface types (`InterfaceModel`) let you query polymorphic entities (any `Asset`, any `Pipeline`) without losing type safety.
+
+**Fraud detection & anti-money laundering**
+Express patterns like "transaction chains > 3 hops between sanctioned accounts" using relationship quantifiers (`_SOME`, `_NONE`, `_ALL`). The mutation compiler's `CALL` subquery isolation prevents pipeline pollution when batching graph updates.
+
+**Content management with rich relationships**
+Articles, authors, tags, categories, and comments — all with edge metadata (timestamps, ordering, visibility). Connection edges with `orderBy: { edge: { ... } }` give you Prisma-style sortable joins on relationship properties.
 
 ---
 
@@ -1081,6 +1113,74 @@ These are incremental improvements you can adopt at your own pace:
 - Mutations use **CALL subquery isolation** -- prevents Cartesian products in connect/disconnect
 - All identifiers are **validated and escaped** -- injection-safe by default
 - Type generation is **modular and driver-free** -- smaller output, faster builds
+
+---
+
+## Comparisons
+
+### grafeo-ogm vs. raw `neo4j-driver`
+
+If you're writing Cypher strings by hand and concatenating user input, you have two problems: every query is unvalidated against your schema, and every query is a potential injection vector. grafeo-ogm gives you typed CRUD on top of the same driver — your existing `Driver` instance is what you pass to `new OGM(config)`. Raw Cypher is still available via `ogm.$queryRaw(...)` when you need it.
+
+### grafeo-ogm vs. `@neo4j/graphql-ogm` (deprecated)
+
+grafeo-ogm is a drop-in replacement: same constructor shape, same `model().find()` API, same selection set strings. The compiler under the hood is rewritten to use pattern comprehensions instead of `OPTIONAL MATCH` chains (eliminates Cartesian products), and the type generator is a modular emitter pipeline that doesn't need a live Neo4j driver at build time. See the [Migration section](#migration-from-neo4jgraphql-ogm) below.
+
+### grafeo-ogm vs. Prisma (for graph users)
+
+Prisma is the gold standard for relational ORMs but doesn't speak Cypher. grafeo-ogm gives you a **Prisma-like API for Neo4j** — `find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `create`, `createMany`, `update`, `upsert`, `delete`, `deleteMany`, `count`, `aggregate` — with the same `where`, `select`, and ordering ergonomics. If you're moving from Postgres to Neo4j and miss Prisma, this is the closest equivalent.
+
+### grafeo-ogm vs. Cypher query builders
+
+Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragments but don't model your schema, don't generate types, and don't validate identifiers against your data model. grafeo-ogm includes a query builder under the hood — but the public API is schema-aware, so you write `User.find({ where: { email_CONTAINS: 'foo' } })` instead of stringifying clauses by hand.
+
+### grafeo-ogm vs. neogma
+
+[neogma](https://github.com/themetalfleece/neogma) is an ODM-style library where you define models in JavaScript classes. grafeo-ogm is **schema-first**: you write your data model once in `.graphql`, and TypeScript types + runtime validation are generated from it. If you want to keep schema as the single source of truth shared with frontend GraphQL consumers, grafeo-ogm fits naturally.
+
+---
+
+## FAQ
+
+### Is grafeo-ogm production-ready?
+
+Yes. The library has 892 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
+
+### Does grafeo-ogm work with Neo4j Aura?
+
+Yes. grafeo-ogm uses the standard `neo4j-driver` package — anywhere the official driver works, grafeo-ogm works. Aura, self-hosted Neo4j 5.x, Docker images, embedded — all supported. The only optional dependency is the **APOC plugin**, used for nested `orderBy` (via `apoc.coll.sortMulti`) and subgraph operations (via `apoc.refactor.cloneSubgraph`).
+
+### Do I need to know Cypher?
+
+For most CRUD work, no. `find`, `create`, `update`, and the rest cover 95% of typical applications. For complex queries (custom scoring, multi-hop algorithms), use `@cypher` directives in your schema or `ogm.$queryRaw(...)` for ad-hoc Cypher. grafeo-ogm doesn't hide Cypher — it generates it transparently and you can log every query via `Executor.debug = true`.
+
+### Can I use grafeo-ogm with a GraphQL server (Apollo, Yoga, etc.)?
+
+Yes — grafeo-ogm is GraphQL-SDL-driven, so the same `typeDefs` you pass to `new OGM(config)` can be used as your GraphQL schema. Resolvers call `ogm.model(...)` methods. There is no built-in resolver auto-generation (unlike `@neo4j/graphql`) — you write your own resolvers and call into the OGM, giving you full control over auth, validation, and business logic.
+
+### How is grafeo-ogm different from `@neo4j/graphql`?
+
+`@neo4j/graphql` is a full **server framework** that auto-generates resolvers and exposes a GraphQL endpoint. grafeo-ogm is a **library** — you import it into any TypeScript app (Express, Fastify, Hono, NestJS, Next.js API routes, scripts, workers) and call typed methods. No HTTP layer, no auto-resolvers. If you want full control over your stack, choose grafeo-ogm. If you want a batteries-included GraphQL server, choose `@neo4j/graphql`.
+
+### Does it support transactions?
+
+Yes — `ogm.$transaction(async (ctx) => { ... })` runs multiple operations atomically. Pass the `ctx` object to any model method via `{ context: ctx }` to opt into the active transaction. See [Advanced Features → Transactions](#transactions).
+
+### Does it support multi-database / multi-tenant Neo4j setups?
+
+Yes — pass a `database` option per query via the `ExecutionContext`, or instantiate one OGM per database. Multi-label nodes (`@node(labels: [...])`) handle a different multi-tenant pattern where tenants share a graph but have isolated label sets.
+
+### What's the performance overhead vs. raw Cypher?
+
+Negligible. grafeo-ogm compiles each query once per shape (selection sets are cached), then sends a parameterized Cypher string + params to the driver. There is no runtime ORM hydration layer in the hot path — results come back from `neo4j-driver`, are converted from Neo4j types (Integer, DateTime, Point), and are returned as plain JS objects. For benchmark-sensitive workloads, the generated Cypher avoids `OPTIONAL MATCH` Cartesian products that the deprecated `@neo4j/graphql-ogm` produced, so it's typically *faster* than the official OGM in real-world queries.
+
+### Is there a CLI / migration tool / studio?
+
+Not yet. The library focuses on the runtime API and type generation. Schema migrations are intentionally out of scope — Neo4j's labels and properties are flexible enough that you typically migrate via Cypher scripts (`MATCH (n:OldLabel) SET n:NewLabel REMOVE n:OldLabel`) which you can run via `ogm.$executeRaw(...)`.
+
+### How do I report a bug or request a feature?
+
+Open an issue on [GitHub](https://github.com/neomodular/grafeo-ogm/issues). For security issues, see [SECURITY.md](SECURITY.md).
 
 ---
 

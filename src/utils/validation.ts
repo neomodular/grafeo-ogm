@@ -56,3 +56,28 @@ export function assertSortDirection(direction: string): 'ASC' | 'DESC' {
     );
   return direction;
 }
+
+/**
+ * Type guard that narrows an unknown value to a plain object.
+ * Returns false for null, arrays, and non-object primitives.
+ */
+export function isPlainObject(
+  value: unknown,
+): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge parameter records into the target. Skips merge if `source` is empty
+ * or undefined. Returns the target for chaining.
+ *
+ * Use this instead of `Object.assign(params, result.params)` to keep call sites
+ * declarative and centralize parameter accumulation logic.
+ */
+export function mergeParams(
+  target: Record<string, unknown>,
+  source: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (source) Object.assign(target, source);
+  return target;
+}

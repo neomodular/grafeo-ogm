@@ -391,26 +391,6 @@ describe('InterfaceModel', () => {
     });
   });
 
-  describe('mutation stubs', () => {
-    it('create() should throw with descriptive error', async () => {
-      await expect(model.create()).rejects.toThrow(
-        'Cannot create on interface type "Entity"',
-      );
-    });
-
-    it('update() should throw with descriptive error', async () => {
-      await expect(model.update()).rejects.toThrow(
-        'Cannot update on interface type "Entity"',
-      );
-    });
-
-    it('delete() should throw with descriptive error', async () => {
-      await expect(model.delete()).rejects.toThrow(
-        'Cannot delete on interface type "Entity"',
-      );
-    });
-  });
-
   describe('selectionSet setter', () => {
     it('should accept a selectionSet string and clear cached default selection', async () => {
       // First call to populate cache

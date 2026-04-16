@@ -8,7 +8,7 @@ import {
   SelectionNode,
 } from './compilers/selection.compiler';
 import { WhereCompiler } from './compilers/where.compiler';
-import { OGMError, RecordNotFoundError } from './errors';
+import { RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import {
@@ -22,6 +22,7 @@ import {
   assertSafeLabel,
   assertSortDirection,
   escapeIdentifier,
+  mergeParams,
 } from './utils/validation';
 
 interface FindOptions {
@@ -30,11 +31,13 @@ interface FindOptions {
   sort?: Array<Record<string, 'ASC' | 'DESC'>>;
 }
 
-export interface InterfaceModelCompilers {
-  where: WhereCompiler;
-  selection: SelectionCompiler;
-  fulltext: FulltextCompiler;
-}
+import type { QueryCompilers } from './model';
+
+/**
+ * InterfaceModel only needs query compilers (no mutations).
+ * Re-exported as a named type for backwards compatibility.
+ */
+export type InterfaceModelCompilers = QueryCompilers;
 
 /**
  * Public-facing interface for InterfaceModel — used in generated type aliases.
@@ -153,7 +156,7 @@ export class InterfaceModel<
     );
     if (whereResult.cypher) {
       cypherParts.push(`WHERE ${whereResult.cypher}`);
-      Object.assign(allParams, whereResult.params);
+      mergeParams(allParams, whereResult.params);
     }
 
     // __typename resolution via CASE
@@ -247,7 +250,7 @@ export class InterfaceModel<
     );
     if (whereResult.cypher) {
       cypherParts.push(`WHERE ${whereResult.cypher}`);
-      Object.assign(allParams, whereResult.params);
+      mergeParams(allParams, whereResult.params);
     }
 
     const returnParts: string[] = [];
@@ -375,27 +378,6 @@ export class InterfaceModel<
       fulltextIndexes: [],
       implementsInterfaces: [],
     };
-  }
-
-  async create(): Promise<never> {
-    throw new OGMError(
-      `Cannot create on interface type "${this.interfaceDef.name}". ` +
-        `Use ogm.model('ConcreteType') for mutations.`,
-    );
-  }
-
-  async update(): Promise<never> {
-    throw new OGMError(
-      `Cannot update on interface type "${this.interfaceDef.name}". ` +
-        `Use ogm.model('ConcreteType') for mutations.`,
-    );
-  }
-
-  async delete(): Promise<never> {
-    throw new OGMError(
-      `Cannot delete on interface type "${this.interfaceDef.name}". ` +
-        `Use ogm.model('ConcreteType') for mutations.`,
-    );
   }
 
   set selectionSet(value: string) {

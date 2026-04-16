@@ -709,7 +709,7 @@ describe('WhereCompiler', () => {
         'n',
         orphanNode,
       ),
-    ).toThrow('Target node "NonExistentNode" not found in schema');
+    ).toThrow('Invalid connection filter: target type for "missingTarget" is not defined in the schema.');
   });
 
   it('should throw when relationship target node is not in schema', () => {
@@ -730,7 +730,7 @@ describe('WhereCompiler', () => {
 
     expect(() =>
       compiler.compile({ missingTarget_SOME: { id: '1' } }, 'n', orphanNode),
-    ).toThrow('Target node "NonExistentNode" not found in schema');
+    ).toThrow('Invalid relationship filter: target type for "missingTarget" is not defined in the schema.');
   });
 
   it('should not treat non-relationship bare key as relationship', () => {
@@ -834,13 +834,14 @@ describe('WhereCompiler', () => {
       );
     });
 
-    it('should return empty cypher for union with no matching members', () => {
-      const result = unionCompiler.compile(
-        { chapters_SOME: { UnknownType: {} } },
-        'n',
-        doseNode,
-      );
-      expect(result.cypher).toBe('');
+    it('should throw on unknown union member key (security: prevent silent typos)', () => {
+      expect(() =>
+        unionCompiler.compile(
+          { chapters_SOME: { UnknownType: {} } },
+          'n',
+          doseNode,
+        ),
+      ).toThrow(/Invalid union member key "UnknownType"/);
     });
   });
 

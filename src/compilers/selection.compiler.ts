@@ -8,13 +8,14 @@ import {
 } from 'graphql';
 
 import { OGMError } from '../errors';
-import type {
-  NodeDefinition,
-  RelationshipDefinition,
-  SchemaMetadata,
-} from '../schema/types';
-import { resolveTargetDef } from '../schema/utils';
-import { assertSafeIdentifier, escapeIdentifier } from '../utils/validation';
+import type { NodeDefinition, SchemaMetadata } from '../schema/types';
+import { buildRelPattern, resolveTargetDef } from '../schema/utils';
+import {
+  assertSafeIdentifier,
+  escapeIdentifier,
+  isPlainObject,
+  mergeParams,
+} from '../utils/validation';
 import type { WhereCompiler } from './where.compiler';
 
 /**
@@ -324,7 +325,13 @@ export class SelectionCompiler {
     if (!targetDef) return null;
 
     const childVar = `n${currentDepth}`;
-    const pattern = this.buildRelationshipPattern(parentVar, childVar, relDef);
+    const pattern = buildRelPattern({
+      sourceVar: parentVar,
+      relDef,
+      targetVar: childVar,
+      targetLabel: 'auto',
+      schema: this.schema,
+    });
 
     const children = node.children ?? [];
     const innerProjection = this.compile(
@@ -353,7 +360,7 @@ export class SelectionCompiler {
         paramCounter,
       );
       if (whereResult.cypher) {
-        Object.assign(params, whereResult.params);
+        mergeParams(params, whereResult.params);
         whereClause = ` WHERE ${whereResult.cypher}`;
       }
     }
@@ -433,17 +440,13 @@ export class SelectionCompiler {
         paramCounter,
       );
 
-      const escapedType = escapeIdentifier(relDef.type);
-      const edgePart = `[:${escapedType}]`;
-      const escapedTarget = escapeIdentifier(relDef.target);
-      const targetLabel = this.isAbstractTarget(relDef.target)
-        ? `(${childVar})`
-        : `(${childVar}:${escapedTarget})`;
-
-      let pattern: string;
-      if (relDef.direction === 'IN')
-        pattern = `(${nodeVar})<-${edgePart}-${targetLabel}`;
-      else pattern = `(${nodeVar})-${edgePart}->${targetLabel}`;
+      const pattern = buildRelPattern({
+        sourceVar: nodeVar,
+        relDef,
+        targetVar: childVar,
+        targetLabel: 'auto',
+        schema: this.schema,
+      });
 
       // Wrap singular relationships with head() to return object instead of array
       const comprehension = isSingular
@@ -483,12 +486,14 @@ export class SelectionCompiler {
 
     const childVar = `n${currentDepth}`;
     const edgeVar = `e${currentDepth}`;
-    const pattern = this.buildRelationshipPattern(
-      parentVar,
-      childVar,
+    const pattern = buildRelPattern({
+      sourceVar: parentVar,
       relDef,
+      targetVar: childVar,
       edgeVar,
-    );
+      targetLabel: 'auto',
+      schema: this.schema,
+    });
 
     const mapParts: string[] = [];
     const projectionKeys: string[] = [];
@@ -549,11 +554,9 @@ export class SelectionCompiler {
         );
 
       // Unwrap { node: { ... } } wrapper if present
-      const nodeWhere =
-        typeof node.connectionWhere.node === 'object' &&
-        node.connectionWhere.node !== null
-          ? (node.connectionWhere.node as Record<string, unknown>)
-          : node.connectionWhere;
+      const nodeWhere = isPlainObject(node.connectionWhere.node)
+        ? node.connectionWhere.node
+        : node.connectionWhere;
 
       // If we have a full WhereCompiler, delegate to it for complete operator support
       if (this.whereCompiler && targetDef) {
@@ -564,7 +567,7 @@ export class SelectionCompiler {
           paramCounter,
         );
         if (whereResult.cypher) {
-          if (params) Object.assign(params, whereResult.params);
+          if (params) mergeParams(params, whereResult.params);
           whereClause = ` WHERE ${whereResult.cypher}`;
         }
       } else {
@@ -618,47 +621,6 @@ export class SelectionCompiler {
   }
 
   /**
-   * Check if a target type name is a union or interface (not a concrete node label).
-   * Union/interface names don't exist as Neo4j labels, so they must be omitted
-   * from relationship patterns to avoid matching zero nodes.
-   */
-  private isAbstractTarget(target: string): boolean {
-    if (this.schema.nodes.has(target)) return false;
-    return !!(
-      this.schema.unions?.has(target) || this.schema.interfaces?.has(target)
-    );
-  }
-
-  /**
-   * Build a Cypher relationship pattern string respecting direction.
-   * For union/interface targets, omits the label filter since those
-   * type names don't exist as Neo4j labels.
-   */
-  private buildRelationshipPattern(
-    parentVar: string,
-    childVar: string,
-    relDef: RelationshipDefinition,
-    edgeVar?: string,
-  ): string {
-    const escapedType = escapeIdentifier(relDef.type);
-    const edgePart = edgeVar
-      ? `[${edgeVar}:${escapedType}]`
-      : `[:${escapedType}]`;
-
-    // Union/interface targets don't have a corresponding Neo4j label —
-    // match by relationship type only, not by target label.
-    const targetPart = this.isAbstractTarget(relDef.target)
-      ? `(${childVar})`
-      : `(${childVar}:${escapeIdentifier(relDef.target)})`;
-
-    if (relDef.direction === 'IN')
-      return `(${parentVar})<-${edgePart}-${targetPart}`;
-
-    // OUT (default)
-    return `(${parentVar})-${edgePart}->${targetPart}`;
-  }
-
-  /**
    * Compile a simple where object into a Cypher WHERE clause fragment.
    * This is a minimal implementation for connection where filters.
    */
@@ -676,13 +638,8 @@ export class SelectionCompiler {
     const conditions: string[] = [];
     for (const [key, value] of Object.entries(where)) {
       // Handle nested { node: { ... } } pattern
-      if (key === 'node' && typeof value === 'object' && value !== null)
-        return this.compileSimpleWhere(
-          value as Record<string, unknown>,
-          nodeVar,
-          params,
-          paramCounter,
-        );
+      if (key === 'node' && isPlainObject(value))
+        return this.compileSimpleWhere(value, nodeVar, params, paramCounter);
 
       if (key.endsWith('_IN') && Array.isArray(value)) {
         const fieldName = key.slice(0, -3);

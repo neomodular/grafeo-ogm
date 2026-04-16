@@ -1,25 +1,59 @@
 {
   "name": "grafeo-ogm",
-  "version": "1.1.0",
-  "description": "Type-safe Object-Graph Mapper for Neo4j with GraphQL SDL schema support",
+  "version": "1.2.0",
+  "description": "Type-safe Neo4j ORM / OGM for TypeScript. Define your graph in GraphQL SDL, get fully typed Prisma-like CRUD, optimized Cypher, and zero-config code generation. Community successor to @neo4j/graphql-ogm.",
   "license": "MIT",
   "author": "Alejandro Guzman",
   "keywords": [
     "neo4j",
+    "neo4j-driver",
+    "neo4j-ogm",
+    "neo4j-orm",
+    "neo4j-graphql",
+    "neo4j-typescript",
+    "neo4j-client",
+    "neo4j-database",
     "ogm",
-    "cypher",
-    "graphql",
+    "orm",
+    "graph-orm",
+    "graph-ogm",
     "graph-database",
+    "graph",
+    "graphdb",
+    "cypher",
+    "cypher-query",
+    "cypher-builder",
+    "cypher-generator",
+    "graphql",
+    "graphql-sdl",
+    "graphql-schema",
+    "schema-first",
+    "prisma",
+    "prisma-like",
     "typescript",
-    "object-graph-mapper"
+    "type-safe",
+    "object-graph-mapper",
+    "code-generation",
+    "codegen",
+    "apoc",
+    "bolt",
+    "fulltext",
+    "fulltext-search",
+    "query-builder",
+    "knowledge-graph",
+    "social-graph",
+    "recommendation-engine",
+    "neo4j-graphql-ogm-alternative"
   ],
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
   "types": "dist/cjs/index.d.ts",
   "files": [
     "dist",
+    "assets",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "exports": {
     ".": {
@@ -83,6 +117,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/neomodular/grafeo-ogm.git"
+    "url": "git+https://github.com/neomodular/grafeo-ogm.git"
+  },
+  "homepage": "https://github.com/neomodular/grafeo-ogm#readme",
+  "bugs": {
+    "url": "https://github.com/neomodular/grafeo-ogm/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

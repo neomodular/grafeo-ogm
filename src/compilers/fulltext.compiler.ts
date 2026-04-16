@@ -6,7 +6,11 @@ import {
   FulltextIndexEntry,
 } from '../model';
 import { FulltextIndex, NodeDefinition, SchemaMetadata } from '../schema/types';
-import { assertSafeIdentifier, escapeIdentifier } from '../utils/validation';
+import {
+  assertSafeIdentifier,
+  escapeIdentifier,
+  mergeParams,
+} from '../utils/validation';
 
 /** Maximum recursion depth for nested fulltext logical operators */
 const MAX_DEPTH = 10;
@@ -338,7 +342,7 @@ export class FulltextCompiler {
         paramCounter,
         depth,
       );
-      Object.assign(allParams, result.params);
+      mergeParams(allParams, result.params);
       unionBranches.push(
         [
           `  ${result.cypher.split('\n').join('\n  ')}`,
@@ -391,7 +395,7 @@ export class FulltextCompiler {
       paramCounter,
       depth,
     );
-    Object.assign(allParams, first.params);
+    mergeParams(allParams, first.params);
     cypherParts.push(first.cypher);
 
     // Subsequent branches: correlated subqueries that filter to matching nodes
@@ -403,7 +407,7 @@ export class FulltextCompiler {
         paramCounter,
         depth,
       );
-      Object.assign(allParams, branch.params);
+      mergeParams(allParams, branch.params);
 
       cypherParts.push(
         [

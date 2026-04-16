@@ -3,7 +3,11 @@ import type {
   RelationshipDefinition,
   SchemaMetadata,
 } from './types';
-import { assertSafeLabel } from '../utils/validation';
+import {
+  assertSafeIdentifier,
+  assertSafeLabel,
+  escapeIdentifier,
+} from '../utils/validation';
 
 /**
  * Module-level cache for resolved union/interface target definitions.
@@ -102,4 +106,93 @@ export function getTargetLabelString(nodeDef: NodeDefinition): string {
     assertSafeLabel(l),
   );
   return allLabels.join(':');
+}
+
+/**
+ * Options for building a Cypher relationship pattern.
+ */
+export interface BuildRelPatternOptions {
+  /** Cypher variable for the source node (e.g. `'n'`) */
+  sourceVar: string;
+  /** Relationship definition from the schema */
+  relDef: RelationshipDefinition;
+  /** Cypher variable for the target node (e.g. `'n0'`). Empty string omits the var. */
+  targetVar: string;
+  /** Optional edge variable to bind the relationship (e.g. `'e0'`). Omit for anonymous `[:TYPE]`. */
+  edgeVar?: string;
+  /**
+   * Target label strategy:
+   * - `'auto'` — use `relDef.target` escaped as a label
+   * - a string — validated and escaped via assertSafeLabel
+   * - `undefined` / omit — no label on the target node
+   */
+  targetLabel?: string | 'auto';
+  /**
+   * Pre-escaped target label string (e.g. from `getTargetLabelString`).
+   * Bypasses validation — used when the caller already composed a multi-label
+   * string like `` `Type`:`Label` ``. Takes precedence over `targetLabel`.
+   */
+  targetLabelRaw?: string;
+  /**
+   * When true, checks if `relDef.target` is an abstract type (union/interface)
+   * and omits the target label. Requires `schema` to be passed.
+   */
+  schema?: SchemaMetadata;
+}
+
+/**
+ * Build a Cypher relationship pattern string from a RelationshipDefinition.
+ * Shared across SelectionCompiler, WhereCompiler, and MutationCompiler.
+ *
+ * Examples:
+ *   `(n)-[:HAS]->(n0:Book)`
+ *   `(n)<-[e0:WRITTEN_BY]-(n0)`
+ */
+export function buildRelPattern(opts: BuildRelPatternOptions): string {
+  assertSafeIdentifier(opts.relDef.type, 'relationship type');
+
+  const escapedType = escapeIdentifier(opts.relDef.type);
+  const relPart = opts.edgeVar
+    ? `[${opts.edgeVar}:${escapedType}]`
+    : `[:${escapedType}]`;
+
+  let targetPart: string;
+  if (opts.targetLabelRaw)
+    // Pre-escaped label string — use directly
+    targetPart = opts.targetVar
+      ? `(${opts.targetVar}:${opts.targetLabelRaw})`
+      : `(:${opts.targetLabelRaw})`;
+  else if (opts.targetLabel)
+    if (
+      opts.targetLabel === 'auto' &&
+      opts.schema &&
+      isAbstractTarget(opts.relDef.target, opts.schema)
+    )
+      targetPart = opts.targetVar ? `(${opts.targetVar})` : `()`;
+    else {
+      const rawLabel =
+        opts.targetLabel === 'auto' ? opts.relDef.target : opts.targetLabel;
+      const escapedLabel = assertSafeLabel(rawLabel);
+      targetPart = opts.targetVar
+        ? `(${opts.targetVar}:${escapedLabel})`
+        : `(:${escapedLabel})`;
+    }
+  else targetPart = opts.targetVar ? `(${opts.targetVar})` : `()`;
+
+  const sourcePart = `(${opts.sourceVar})`;
+  if (opts.relDef.direction === 'IN')
+    return `${sourcePart}<-${relPart}-${targetPart}`;
+
+  return `${sourcePart}-${relPart}->${targetPart}`;
+}
+
+/**
+ * Check if a target type name is a union or interface (not a concrete node).
+ */
+export function isAbstractTarget(
+  target: string,
+  schema: SchemaMetadata,
+): boolean {
+  if (schema.nodes.has(target)) return false;
+  return !!(schema.unions?.has(target) || schema.interfaces?.has(target));
 }

@@ -4,11 +4,17 @@ import {
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
-import { getTargetLabelString, resolveTargetDef } from '../schema/utils';
+import {
+  buildRelPattern,
+  getTargetLabelString,
+  resolveTargetDef,
+} from '../schema/utils';
 import {
   assertSafeIdentifier,
   assertSafeKey,
   escapeIdentifier,
+  isPlainObject,
+  mergeParams,
 } from '../utils/validation';
 
 export interface WhereResult {
@@ -18,25 +24,45 @@ export interface WhereResult {
 
 const MAX_DEPTH = 10;
 
-/** Ordered longest-first so greedy matching works */
-const OPERATOR_SUFFIXES = [
-  '_NOT_STARTS_WITH',
-  '_NOT_ENDS_WITH',
-  '_NOT_CONTAINS',
-  '_NOT_IN',
-  '_STARTS_WITH',
-  '_ENDS_WITH',
-  '_CONTAINS',
-  '_MATCHES',
-  '_GTE',
-  '_LTE',
-  '_NOT',
-  '_GT',
-  '_LT',
-  '_IN',
-] as const;
+/**
+ * Declarative operator definition. Use `%f` for (possibly case-insensitive) field
+ * reference, `%rf` for raw field reference, `%p` for (possibly case-insensitive)
+ * parameter reference, and `%rp` for raw parameter reference.
+ */
+interface OperatorDef {
+  template: string;
+  /** Whether this operator supports case-insensitive mode (toLower wrapping). */
+  ciAware: boolean;
+}
 
-type OperatorSuffix = (typeof OPERATOR_SUFFIXES)[number];
+/**
+ * Operator registry — adding a new scalar operator is a single entry here.
+ * Ordered longest-suffix-first so greedy matching works.
+ */
+const OPERATOR_REGISTRY: ReadonlyArray<[string, OperatorDef]> = [
+  ['_NOT_STARTS_WITH', { template: 'NOT %f STARTS WITH %p', ciAware: true }],
+  ['_NOT_ENDS_WITH', { template: 'NOT %f ENDS WITH %p', ciAware: true }],
+  ['_NOT_CONTAINS', { template: 'NOT %f CONTAINS %p', ciAware: true }],
+  ['_NOT_IN', { template: 'NOT %rf IN %rp', ciAware: false }],
+  ['_STARTS_WITH', { template: '%f STARTS WITH %p', ciAware: true }],
+  ['_ENDS_WITH', { template: '%f ENDS WITH %p', ciAware: true }],
+  ['_CONTAINS', { template: '%f CONTAINS %p', ciAware: true }],
+  ['_MATCHES', { template: '%rf =~ %rp', ciAware: false }],
+  ['_GTE', { template: '%rf >= %rp', ciAware: false }],
+  ['_LTE', { template: '%rf <= %rp', ciAware: false }],
+  ['_NOT', { template: '%f <> %p', ciAware: true }],
+  ['_GT', { template: '%rf > %rp', ciAware: false }],
+  ['_LT', { template: '%rf < %rp', ciAware: false }],
+  ['_IN', { template: '%rf IN %rp', ciAware: false }],
+];
+
+/** Fast lookup by suffix */
+const OPERATOR_MAP = new Map<string, OperatorDef>(OPERATOR_REGISTRY);
+
+/** Ordered list of suffixes for greedy matching */
+const OPERATOR_SUFFIXES = OPERATOR_REGISTRY.map(([s]) => s);
+
+type OperatorSuffix = string;
 
 const RELATIONSHIP_SUFFIXES = ['_SOME', '_NONE', '_ALL', '_SINGLE'] as const;
 type RelationshipSuffix = (typeof RELATIONSHIP_SUFFIXES)[number];
@@ -114,7 +140,7 @@ export class WhereCompiler {
         const subClauses = subResults.map((r) => r.cypher).filter(Boolean);
         if (subClauses.length > 0) {
           clauses.push(`(${subClauses.join(` ${key} `)})`);
-          for (const r of subResults) Object.assign(params, r.params);
+          for (const r of subResults) mergeParams(params, r.params);
         }
         continue;
       }
@@ -124,8 +150,11 @@ export class WhereCompiler {
           // NOT: null inside a relationship context is a no-op (handled by bare relationship _SOME)
           continue;
 
+        if (!isPlainObject(value))
+          throw new OGMError(`NOT operator requires an object value.`);
+
         const sub = this.compileConditions(
-          value as Record<string, unknown>,
+          value,
           nodeVar,
           nodeDef,
           counter,
@@ -133,7 +162,7 @@ export class WhereCompiler {
         );
         if (sub.cypher) {
           clauses.push(`NOT (${sub.cypher})`);
-          Object.assign(params, sub.params);
+          mergeParams(params, sub.params);
         }
         continue;
       }
@@ -147,7 +176,12 @@ export class WhereCompiler {
           if (targetNodeDef) {
             const relVar = `r${counter.count}`;
             counter.count++;
-            const pattern = this.buildRelPattern(nodeVar, relDef, relVar);
+            const pattern = buildRelPattern({
+              sourceVar: nodeVar,
+              relDef,
+              targetVar: relVar,
+              targetLabel: 'auto',
+            });
             clauses.push(`NOT EXISTS { MATCH ${pattern} }`);
           }
         } else {
@@ -169,7 +203,7 @@ export class WhereCompiler {
       );
       if (connResult) {
         clauses.push(connResult.cypher);
-        Object.assign(params, connResult.params);
+        mergeParams(params, connResult.params);
         continue;
       }
 
@@ -184,7 +218,7 @@ export class WhereCompiler {
       );
       if (relResult) {
         clauses.push(relResult.cypher);
-        Object.assign(params, relResult.params);
+        mergeParams(params, relResult.params);
         continue;
       }
 
@@ -197,7 +231,7 @@ export class WhereCompiler {
         caseInsensitive,
       );
       clauses.push(scalarResult.cypher);
-      Object.assign(params, scalarResult.params);
+      mergeParams(params, scalarResult.params);
     }
 
     return {
@@ -233,14 +267,20 @@ export class WhereCompiler {
     const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
     if (!targetNodeDef)
       throw new OGMError(
-        `Target node "${relDef.target}" not found in schema for connection "${key}"`,
+        `Invalid connection filter: target type for "${fieldName}" is not defined in the schema.`,
       );
 
     const relVar = `r${counter.count}`;
     const edgeVar = `e${counter.count}`;
     counter.count++;
 
-    const pattern = this.buildRelPattern(nodeVar, relDef, relVar, edgeVar);
+    const pattern = buildRelPattern({
+      sourceVar: nodeVar,
+      relDef,
+      targetVar: relVar,
+      edgeVar,
+      targetLabel: 'auto',
+    });
 
     const innerClauses: string[] = [];
     const innerParams: Record<string, unknown> = {};
@@ -256,7 +296,7 @@ export class WhereCompiler {
       );
       if (nodeResult.cypher) {
         innerClauses.push(nodeResult.cypher);
-        Object.assign(innerParams, nodeResult.params);
+        mergeParams(innerParams, nodeResult.params);
       }
     }
 
@@ -274,7 +314,7 @@ export class WhereCompiler {
         );
         if (edgeResult.cypher) {
           innerClauses.push(edgeResult.cypher);
-          Object.assign(innerParams, edgeResult.params);
+          mergeParams(innerParams, edgeResult.params);
         }
       }
     }
@@ -363,13 +403,18 @@ export class WhereCompiler {
     const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
     if (!targetNodeDef)
       throw new OGMError(
-        `Target node "${relDef.target}" not found in schema for relationship "${key}"`,
+        `Invalid relationship filter: target type for "${fieldName}" is not defined in the schema.`,
       );
 
     const relVar = `r${counter.count}`;
     counter.count++;
 
-    const pattern = this.buildRelPattern(nodeVar, relDef, relVar);
+    const pattern = buildRelPattern({
+      sourceVar: nodeVar,
+      relDef,
+      targetVar: relVar,
+      targetLabel: 'auto',
+    });
 
     const innerResult = this.compileConditions(
       value,
@@ -435,7 +480,10 @@ export class WhereCompiler {
     const allParams: Record<string, unknown> = {};
 
     for (const [memberKey, memberValue] of Object.entries(value)) {
-      if (!unionMembers.includes(memberKey)) continue;
+      if (!unionMembers.includes(memberKey))
+        throw new OGMError(
+          `Invalid union member key "${memberKey}" in WHERE filter. Expected one of: ${unionMembers.join(', ')}.`,
+        );
 
       const memberDef = this.schema.nodes.get(memberKey);
       if (!memberDef) continue;
@@ -444,12 +492,12 @@ export class WhereCompiler {
       counter.count++;
 
       const labelStr = getTargetLabelString(memberDef);
-      const pattern = this.buildRelPatternWithLabel(
-        nodeVar,
+      const pattern = buildRelPattern({
+        sourceVar: nodeVar,
         relDef,
-        relVar,
-        labelStr,
-      );
+        targetVar: relVar,
+        targetLabelRaw: labelStr,
+      });
 
       // Compile inner WHERE conditions for this member (if any properties specified)
       const memberWhere = memberValue as Record<string, unknown> | null;
@@ -464,7 +512,7 @@ export class WhereCompiler {
         );
         if (innerResult.cypher) {
           whereClause = ` WHERE ${innerResult.cypher}`;
-          Object.assign(allParams, innerResult.params);
+          mergeParams(allParams, innerResult.params);
         }
       }
 
@@ -498,42 +546,6 @@ export class WhereCompiler {
     }
   }
 
-  private buildRelPattern(
-    nodeVar: string,
-    relDef: RelationshipDefinition,
-    targetVar: string,
-    edgeVar?: string,
-  ): string {
-    const escapedType = escapeIdentifier(relDef.type);
-    const edgePart = edgeVar
-      ? `[${edgeVar}:${escapedType}]`
-      : `[:${escapedType}]`;
-
-    const escapedTarget = escapeIdentifier(relDef.target);
-    if (relDef.direction === 'OUT')
-      return `(${nodeVar})-${edgePart}->(${targetVar}:${escapedTarget})`;
-
-    return `(${nodeVar})<-${edgePart}-(${targetVar}:${escapedTarget})`;
-  }
-
-  private buildRelPatternWithLabel(
-    nodeVar: string,
-    relDef: RelationshipDefinition,
-    targetVar: string,
-    labelStr: string,
-    edgeVar?: string,
-  ): string {
-    const escapedType = escapeIdentifier(relDef.type);
-    const edgePart = edgeVar
-      ? `[${edgeVar}:${escapedType}]`
-      : `[:${escapedType}]`;
-
-    if (relDef.direction === 'OUT')
-      return `(${nodeVar})-${edgePart}->(${targetVar}:${labelStr})`;
-
-    return `(${nodeVar})<-${edgePart}-(${targetVar}:${labelStr})`;
-  }
-
   private compileEdgeConditions(
     edgeWhere: Record<string, unknown>,
     edgeVar: string,
@@ -546,7 +558,7 @@ export class WhereCompiler {
       assertSafeKey(key, 'edge where input');
       const result = this.compileScalarCondition(key, value, edgeVar, counter);
       clauses.push(result.cypher);
-      Object.assign(params, result.params);
+      mergeParams(params, result.params);
     }
 
     return {
@@ -584,104 +596,35 @@ export class WhereCompiler {
     counter.count++;
 
     const rawFieldRef = `${nodeVar}.${escapeIdentifier(fieldName)}`;
+    const rawParamRef = `$${paramName}`;
 
-    const ci = caseInsensitive && this.isStringComparable(operator);
-    const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;
-    const paramRef = ci ? `toLower($${paramName})` : `$${paramName}`;
-
-    if (operator === null)
-      // Exact match
+    if (operator === null) {
+      // Exact match — always CI-aware
+      const fieldRef = caseInsensitive
+        ? `toLower(${rawFieldRef})`
+        : rawFieldRef;
+      const paramRef = caseInsensitive
+        ? `toLower(${rawParamRef})`
+        : rawParamRef;
       return {
         cypher: `${fieldRef} = ${paramRef}`,
         params: { [paramName]: value },
       };
-
-    switch (operator) {
-      case '_IN':
-        return {
-          cypher: `${rawFieldRef} IN $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_NOT':
-        return {
-          cypher: `${fieldRef} <> ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_NOT_IN':
-        return {
-          cypher: `NOT ${rawFieldRef} IN $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_CONTAINS':
-        return {
-          cypher: `${fieldRef} CONTAINS ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_GTE':
-        return {
-          cypher: `${rawFieldRef} >= $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_LTE':
-        return {
-          cypher: `${rawFieldRef} <= $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_GT':
-        return {
-          cypher: `${rawFieldRef} > $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_LT':
-        return {
-          cypher: `${rawFieldRef} < $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_MATCHES':
-        return {
-          cypher: `${rawFieldRef} =~ $${paramName}`,
-          params: { [paramName]: value },
-        };
-      case '_STARTS_WITH':
-        return {
-          cypher: `${fieldRef} STARTS WITH ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_ENDS_WITH':
-        return {
-          cypher: `${fieldRef} ENDS WITH ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_NOT_CONTAINS':
-        return {
-          cypher: `NOT ${fieldRef} CONTAINS ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_NOT_STARTS_WITH':
-        return {
-          cypher: `NOT ${fieldRef} STARTS WITH ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      case '_NOT_ENDS_WITH':
-        return {
-          cypher: `NOT ${fieldRef} ENDS WITH ${paramRef}`,
-          params: { [paramName]: value },
-        };
-      default:
-        throw new OGMError(`Unknown operator: ${operator}`);
     }
-  }
 
-  private isStringComparable(operator: OperatorSuffix | null): boolean {
-    return (
-      operator === null ||
-      operator === '_NOT' ||
-      operator === '_CONTAINS' ||
-      operator === '_STARTS_WITH' ||
-      operator === '_ENDS_WITH' ||
-      operator === '_NOT_CONTAINS' ||
-      operator === '_NOT_STARTS_WITH' ||
-      operator === '_NOT_ENDS_WITH'
-    );
+    const opDef = OPERATOR_MAP.get(operator);
+    if (!opDef) throw new OGMError(`Unknown operator: ${operator}`);
+
+    const ci = caseInsensitive && opDef.ciAware;
+    const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;
+    const paramRef = ci ? `toLower(${rawParamRef})` : rawParamRef;
+
+    const cypher = opDef.template
+      .replace(/%rf/g, rawFieldRef)
+      .replace(/%rp/g, rawParamRef)
+      .replace(/%f/g, fieldRef)
+      .replace(/%p/g, paramRef);
+
+    return { cypher, params: { [paramName]: value } };
   }
 }

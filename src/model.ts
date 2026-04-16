@@ -17,6 +17,7 @@ import {
   assertSafeLabel,
   assertSortDirection,
   escapeIdentifier,
+  mergeParams,
 } from './utils/validation';
 
 interface FindOptions {
@@ -208,13 +209,21 @@ export interface ModelInterface<
   }): Promise<{ count: number }>;
 }
 
-export interface ModelCompilers {
+/** Compilers needed for read-only operations (find, aggregate, count). */
+export interface QueryCompilers {
   where: WhereCompiler;
   selection: SelectionCompiler;
-  selectNormalizer: SelectNormalizer;
-  mutation: MutationCompiler;
   fulltext: FulltextCompiler;
 }
+
+/** Additional compilers needed for write operations (create, update, delete). */
+export interface MutationCompilers {
+  selectNormalizer: SelectNormalizer;
+  mutation: MutationCompiler;
+}
+
+/** All compilers used by Model. */
+export interface ModelCompilers extends QueryCompilers, MutationCompilers {}
 
 export class Model<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -360,7 +369,7 @@ export class Model<
         'n',
       );
       cypherParts.push(ft.cypher);
-      Object.assign(allParams, ft.params);
+      mergeParams(allParams, ft.params);
 
       // Add label filter in WHERE for fulltext queries
       const labelFilters: string[] = [
@@ -377,7 +386,7 @@ export class Model<
         this.nodeDef,
         paramCounter,
       );
-      Object.assign(allParams, whereResult.params);
+      mergeParams(allParams, whereResult.params);
 
       const whereParts = [labelFilters.join(' AND ')];
       if (ft.scoreThreshold !== undefined)
@@ -403,7 +412,7 @@ export class Model<
       );
       if (whereResult.cypher) {
         cypherParts.push(`WHERE ${whereResult.cypher}`);
-        Object.assign(allParams, whereResult.params);
+        mergeParams(allParams, whereResult.params);
       }
     }
 
@@ -624,7 +633,7 @@ export class Model<
         'n',
       );
       cypherParts.push(ft.cypher);
-      Object.assign(allParams, ft.params);
+      mergeParams(allParams, ft.params);
 
       const labelFilters = [`n:${escapeIdentifier(this.nodeDef.label)}`];
       if (params.labels)
@@ -637,7 +646,7 @@ export class Model<
         this.nodeDef,
         paramCounter,
       );
-      Object.assign(allParams, whereResult.params);
+      mergeParams(allParams, whereResult.params);
 
       const whereParts = [labelFilters.join(' AND ')];
       if (ft.scoreThreshold !== undefined)
@@ -661,7 +670,7 @@ export class Model<
       );
       if (whereResult.cypher) {
         cypherParts.push(`WHERE ${whereResult.cypher}`);
-        Object.assign(allParams, whereResult.params);
+        mergeParams(allParams, whereResult.params);
       }
     }
 

@@ -4,11 +4,16 @@ import {
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
-import { getTargetLabelString, resolveTargetDef } from '../schema/utils';
+import {
+  buildRelPattern,
+  getTargetLabelString,
+  resolveTargetDef,
+} from '../schema/utils';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
   escapeIdentifier,
+  mergeParams,
 } from '../utils/validation';
 
 /**
@@ -76,7 +81,7 @@ export class MutationCompiler {
       const labelStr = this.getCachedLabelString(nodeDef);
 
       lines.push(`CREATE (${nodeVar}:${labelStr} { ${propString} })`);
-      Object.assign(params, propParams);
+      mergeParams(params, propParams);
 
       createdVars.push(nodeVar);
 
@@ -206,16 +211,15 @@ export class MutationCompiler {
         const relDef = nodeDef.relationships.get(fieldName);
         if (!relDef) continue;
 
-        const cascadeVar = this.getCascadeVarName(varCounter);
+        const cascadeVar = `cascade_${varCounter}`;
         varCounter++;
 
-        const pattern = this.buildRelPattern(
-          'n',
+        const pattern = buildRelPattern({
+          sourceVar: 'n',
           relDef,
-          cascadeVar,
-          undefined,
-          relDef.target,
-        );
+          targetVar: cascadeVar,
+          targetLabel: relDef.target,
+        });
         lines.push(`OPTIONAL MATCH ${pattern}`);
         deleteVars.push(cascadeVar);
       }
@@ -586,7 +590,11 @@ export class MutationCompiler {
             ? ` { ${propString} }`
             : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
 
-        const relPattern = this.buildRelPattern(nodeVar, relDef, createVar);
+        const relPattern = buildRelPattern({
+          sourceVar: nodeVar,
+          relDef,
+          targetVar: createVar,
+        });
 
         // Handle edge properties if present in createSpec
         const edgeInput = createSpec.edge as
@@ -602,20 +610,20 @@ export class MutationCompiler {
         } else lines.push(withClause);
 
         lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
-        Object.assign(params, propParams);
+        mergeParams(params, propParams);
         lines.push(`CREATE ${relPattern}`);
 
         // Set edge properties if present
         if (edgeInput && Object.keys(edgeInput).length > 0) {
           const relVar = `r_edge_${startCounter + counter - 1}`;
           // Re-match the relationship to set edge props
-          const relArrow = this.buildRelPattern(
-            nodeVar,
+          const relArrow = buildRelPattern({
+            sourceVar: nodeVar,
             relDef,
-            createVar,
-            relVar,
-            'auto',
-          );
+            targetVar: createVar,
+            edgeVar: relVar,
+            targetLabel: 'auto',
+          });
           lines.push(`WITH ${[...allVars, createVar].join(', ')}`);
           lines.push(`MATCH ${relArrow}`);
           const setItems: string[] = [];
@@ -697,7 +705,11 @@ export class MutationCompiler {
           }
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         } else {
-          const relPattern = this.buildRelPattern(nodeVar, relDef, connectVar);
+          const relPattern = buildRelPattern({
+            sourceVar: nodeVar,
+            relDef,
+            targetVar: connectVar,
+          });
           lines.push(`MERGE ${relPattern}`);
         }
 
@@ -787,11 +799,11 @@ export class MutationCompiler {
               }
               if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
             } else {
-              const mergePattern = this.buildRelPattern(
-                'n',
+              const mergePattern = buildRelPattern({
+                sourceVar: 'n',
                 relDef,
-                connectVar,
-              );
+                targetVar: connectVar,
+              });
               lines.push(`MERGE ${mergePattern}`);
             }
 
@@ -829,7 +841,11 @@ export class MutationCompiler {
           if (whereConditions.length > 0)
             lines.push(`WHERE ${whereConditions.join(' AND ')}`);
 
-          const mergePattern = this.buildRelPattern('n', relDef, 'target');
+          const mergePattern = buildRelPattern({
+            sourceVar: 'n',
+            relDef,
+            targetVar: 'target',
+          });
           lines.push(`MERGE ${mergePattern}`);
 
           // Handle edge properties from first item structure
@@ -891,7 +907,11 @@ export class MutationCompiler {
           }
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         } else {
-          const mergePattern = this.buildRelPattern('n', relDef, 'target');
+          const mergePattern = buildRelPattern({
+            sourceVar: 'n',
+            relDef,
+            targetVar: 'target',
+          });
           lines.push(`MERGE ${mergePattern}`);
         }
       }
@@ -929,7 +949,12 @@ export class MutationCompiler {
           (typeof item === 'object' && Object.keys(item).length === 0)
         ) {
           // Blanket disconnect — remove all relationships of this type
-          const pattern = this.buildRelPattern('n', relDef, '', relVar);
+          const pattern = buildRelPattern({
+            sourceVar: 'n',
+            relDef,
+            targetVar: '',
+            edgeVar: relVar,
+          });
           lines.push(`OPTIONAL MATCH ${pattern}`);
           lines.push(`DELETE ${relVar}`);
         } else {
@@ -940,13 +965,13 @@ export class MutationCompiler {
             | undefined;
 
           const targetVar = `target_${fieldName}_${si}`;
-          const pattern = this.buildRelPattern(
-            'n',
+          const pattern = buildRelPattern({
+            sourceVar: 'n',
             relDef,
             targetVar,
-            relVar,
-            'auto',
-          );
+            edgeVar: relVar,
+            targetLabel: 'auto',
+          });
           lines.push(`OPTIONAL MATCH ${pattern}`);
 
           const conditions = this.buildConnectionWhereConditions(
@@ -963,6 +988,59 @@ export class MutationCompiler {
           lines.push(`DELETE ${relVar}`);
         }
       }
+    }
+
+    return lines;
+  }
+
+  /**
+   * Dispatch update operations for a union-typed relationship.
+   * Each member key in the input is recursed into buildUpdateRelationships
+   * with a narrowed relDef pointing at the concrete member type.
+   */
+  private dispatchUnionUpdateOps(
+    key: string,
+    memberEntries: Record<string, unknown>,
+    relDef: RelationshipDefinition,
+    nodeDef: NodeDefinition,
+    sourceVar: string,
+    prefix: string,
+    params: Record<string, unknown>,
+    depth: number,
+    ancestorVars: string[],
+  ): string[] {
+    const unionMembers = this.schema.unions!.get(relDef.target)!;
+    const lines: string[] = [];
+
+    for (const [memberKey, memberValue] of Object.entries(memberEntries)) {
+      if (!unionMembers.includes(memberKey)) continue;
+      const memberNodeDef = this.schema.nodes.get(memberKey);
+      if (!memberNodeDef || memberValue == null) continue;
+
+      const memberRelDef: RelationshipDefinition = {
+        ...relDef,
+        target: memberKey,
+      };
+      const memberItems = Array.isArray(memberValue)
+        ? (memberValue as Record<string, unknown>[])
+        : [memberValue as Record<string, unknown>];
+
+      const memberNodeDef2: NodeDefinition = {
+        ...nodeDef,
+        relationships: new Map([[key, memberRelDef]]),
+      };
+
+      lines.push(
+        ...this.buildUpdateRelationships(
+          { [key]: memberItems },
+          memberNodeDef2,
+          sourceVar,
+          `${prefix}_${key}_${memberKey}`,
+          params,
+          depth + 1,
+          ancestorVars,
+        ),
+      );
     }
 
     return lines;
@@ -997,49 +1075,25 @@ export class MutationCompiler {
       const relDef = nodeDef.relationships.get(key);
       if (!relDef || value == null) continue;
 
-      // Check if target is a union type — if so, value uses per-member keys
-      // e.g., doseTypes: { InfusionStandard: [{ update: { node: { minValue: 1 } } }] }
+      // Union targets use per-member keys — dispatch each member recursively
       const isUnionTarget =
         !this.schema.nodes.has(relDef.target) &&
         this.schema.unions?.has(relDef.target);
 
       if (isUnionTarget) {
-        const unionMembers = this.schema.unions!.get(relDef.target)!;
-        const memberEntries = value as Record<string, unknown>;
-        for (const [memberKey, memberValue] of Object.entries(memberEntries)) {
-          if (!unionMembers.includes(memberKey)) continue;
-          const memberNodeDef = this.schema.nodes.get(memberKey);
-          if (!memberNodeDef || memberValue == null) continue;
-
-          // Recurse: treat as if the relationship points directly to the member type
-          const memberRelDef: RelationshipDefinition = {
-            ...relDef,
-            target: memberKey,
-          };
-
-          // Build a pseudo-update object with just this relationship
-          // so we can reuse buildUpdateRelationships logic
-          const memberItems = Array.isArray(memberValue)
-            ? (memberValue as Record<string, unknown>[])
-            : [memberValue as Record<string, unknown>];
-
-          const memberUpdate = { [key]: memberItems };
-          const memberNodeDef2: NodeDefinition = {
-            ...nodeDef,
-            relationships: new Map([[key, memberRelDef]]),
-          };
-
-          const memberLines = this.buildUpdateRelationships(
-            memberUpdate,
-            memberNodeDef2,
+        lines.push(
+          ...this.dispatchUnionUpdateOps(
+            key,
+            value as Record<string, unknown>,
+            relDef,
+            nodeDef,
             sourceVar,
-            `${prefix}_${key}_${memberKey}`,
+            prefix,
             params,
-            depth + 1,
+            depth,
             ancestorVars,
-          );
-          lines.push(...memberLines);
-        }
+          ),
+        );
         continue;
       }
 
@@ -1081,13 +1135,13 @@ export class MutationCompiler {
             lines.push(`CALL {`);
             lines.push(withClause);
 
-            const pattern = this.buildRelPattern(
+            const pattern = buildRelPattern({
               sourceVar,
               relDef,
-              delTarget,
-              delRel,
-              'auto',
-            );
+              targetVar: delTarget,
+              edgeVar: delRel,
+              targetLabel: 'auto',
+            });
             lines.push(`OPTIONAL MATCH ${pattern}`);
 
             if (whereSpec && Object.keys(whereSpec).length > 0) {
@@ -1151,11 +1205,11 @@ export class MutationCompiler {
                 ? ` { ${propString} }`
                 : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
 
-            const relPattern = this.buildRelPattern(
+            const relPattern = buildRelPattern({
               sourceVar,
               relDef,
-              createVar,
-            );
+              targetVar: createVar,
+            });
 
             // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
             const hasNestedOps = nestedRelLines.length > 0;
@@ -1166,7 +1220,7 @@ export class MutationCompiler {
             } else lines.push(withClause);
 
             lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
-            Object.assign(params, propParams);
+            mergeParams(params, propParams);
             lines.push(`CREATE ${relPattern}`);
 
             if (hasNestedOps) {
@@ -1194,12 +1248,12 @@ export class MutationCompiler {
             lines.push(withClause);
 
             if (!whereSpec || Object.keys(whereSpec).length === 0) {
-              const pattern = this.buildRelPattern(
+              const pattern = buildRelPattern({
                 sourceVar,
                 relDef,
-                '',
-                relVar,
-              );
+                targetVar: '',
+                edgeVar: relVar,
+              });
               lines.push(`OPTIONAL MATCH ${pattern}`);
               lines.push(`DELETE ${relVar}`);
             } else {
@@ -1210,13 +1264,13 @@ export class MutationCompiler {
               const discTarget = `${sourceVar}_disc${varCounter}`;
               varCounter++;
 
-              const pattern = this.buildRelPattern(
+              const pattern = buildRelPattern({
                 sourceVar,
                 relDef,
-                discTarget,
-                relVar,
-                'auto',
-              );
+                targetVar: discTarget,
+                edgeVar: relVar,
+                targetLabel: 'auto',
+              });
               lines.push(`OPTIONAL MATCH ${pattern}`);
 
               const conditions = this.buildNodeWhereConditions(
@@ -1296,11 +1350,11 @@ export class MutationCompiler {
               }
               if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
             } else {
-              const relPattern = this.buildRelPattern(
+              const relPattern = buildRelPattern({
                 sourceVar,
                 relDef,
-                connectVar,
-              );
+                targetVar: connectVar,
+              });
               lines.push(`MERGE ${relPattern}`);
             }
 
@@ -1376,13 +1430,13 @@ export class MutationCompiler {
             lines.push(`CALL {`);
             lines.push(withClause);
 
-            const relArrow = this.buildRelPattern(
+            const relArrow = buildRelPattern({
               sourceVar,
               relDef,
-              updateVar,
-              relVar,
-              'auto',
-            );
+              targetVar: updateVar,
+              edgeVar: relVar,
+              targetLabel: 'auto',
+            });
             lines.push(`MATCH ${relArrow}`);
 
             // WHERE on the target
@@ -1406,13 +1460,13 @@ export class MutationCompiler {
 
             if (setClauses.length > 0)
               lines.push(`SET ${setClauses.join(', ')}`);
-            Object.assign(params, setParams);
+            mergeParams(params, setParams);
 
             if (edgeClauses.length > 0)
               lines.push(`SET ${edgeClauses.join(', ')}`);
-            Object.assign(params, edgeParams);
+            mergeParams(params, edgeParams);
 
-            Object.assign(params, nestedParams);
+            mergeParams(params, nestedParams);
             lines.push(...nestedRelLines);
 
             lines.push(`RETURN count(*) AS _uc_${key}_${i}`);
@@ -1711,42 +1765,6 @@ export class MutationCompiler {
     }
   }
 
-  /**
-   * Build a Cypher relationship pattern string.
-   *
-   * @param sourceVar - Cypher variable for the source node
-   * @param relDef - Relationship definition
-   * @param targetVar - Cypher variable for the target node (empty string for anonymous)
-   * @param relVar - Optional relationship variable (omit for anonymous `[:TYPE]`)
-   * @param targetLabel - Target label override. Pass explicit label, `'auto'` to use
-   *   `relDef.target`, or omit for no label on the target node.
-   */
-  private buildRelPattern(
-    sourceVar: string,
-    relDef: RelationshipDefinition,
-    targetVar: string,
-    relVar?: string,
-    targetLabel?: string | 'auto',
-  ): string {
-    assertSafeIdentifier(relDef.type, 'relationship type');
-
-    const escapedType = escapeIdentifier(relDef.type);
-    const relPart = relVar ? `[${relVar}:${escapedType}]` : `[:${escapedType}]`;
-
-    let targetPart: string;
-    if (targetLabel) {
-      const label = targetLabel === 'auto' ? relDef.target : targetLabel;
-      const escapedLabel = assertSafeLabel(label);
-      targetPart = `(${targetVar}:${escapedLabel})`;
-    } else if (targetVar) targetPart = `(${targetVar})`;
-    else targetPart = `()`;
-
-    if (relDef.direction === 'OUT')
-      return `(${sourceVar})-${relPart}->${targetPart}`;
-
-    return `(${sourceVar})<-${relPart}-${targetPart}`;
-  }
-
   private buildGeneratedIdClause(nodeDef: NodeDefinition): string {
     const parts: string[] = [];
     for (const [, propDef] of nodeDef.properties)
@@ -1754,10 +1772,6 @@ export class MutationCompiler {
         parts.push(`${escapeIdentifier(propDef.name)}: randomUUID()`);
 
     return parts.join(', ');
-  }
-
-  private getCascadeVarName(index: number): string {
-    return `cascade_${index}`;
   }
 
   /**

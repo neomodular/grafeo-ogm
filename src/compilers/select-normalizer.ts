@@ -9,6 +9,7 @@ import {
   assertSafeIdentifier,
   assertSafeKey,
   assertSortDirection,
+  isPlainObject,
 } from '../utils/validation';
 import type { SelectionNode } from './selection.compiler';
 
@@ -51,7 +52,7 @@ export class SelectNormalizer {
     const nodes: SelectionNode[] = [];
 
     for (const [fieldName, value] of Object.entries(select)) {
-      if (!value) continue; // false, null, undefined → skip
+      if (value == null || value === false) continue;
 
       assertSafeKey(fieldName, 'select input');
 
@@ -116,8 +117,8 @@ export class SelectNormalizer {
     }
 
     // `{ drugs: { where: {...}, select: { id: true, drugName: true }, orderBy: {...} } }`
-    if (typeof value === 'object' && value !== null) {
-      const obj = value as Record<string, unknown>;
+    if (isPlainObject(value)) {
+      const obj = value;
       if (obj.select && typeof obj.select === 'object') {
         let children = this.normalize(
           obj.select as Record<string, unknown>,
@@ -273,9 +274,9 @@ export class SelectNormalizer {
       isConnection: true,
     };
 
-    if (typeof value !== 'object' || value === null) return node;
+    if (!isPlainObject(value)) return node;
 
-    const obj = value as Record<string, unknown>;
+    const obj = value;
 
     // Extract where clause
     if (obj.where && typeof obj.where === 'object')
@@ -381,7 +382,7 @@ export class SelectNormalizer {
             `Use "node" (to sort by target node fields) or "edge" (to sort by relationship property fields).`,
         );
 
-      if (typeof scopeValue !== 'object' || scopeValue === null)
+      if (!isPlainObject(scopeValue))
         throw new OGMError(
           `Invalid orderBy "${scopeKey}" value on connection "${fieldName}". ` +
             `Expected an object like { field: 'ASC' }.`,
@@ -408,9 +409,7 @@ export class SelectNormalizer {
         edgePropsDef = resolved;
       }
 
-      for (const [sortField, rawDirection] of Object.entries(
-        scopeValue as Record<string, unknown>,
-      )) {
+      for (const [sortField, rawDirection] of Object.entries(scopeValue)) {
         assertSafeKey(sortField, `orderBy ${scope} field`);
         assertSafeIdentifier(sortField, `orderBy ${scope} field`);
 
