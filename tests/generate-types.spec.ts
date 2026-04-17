@@ -328,6 +328,27 @@ describe('generateTypes', () => {
       expect(content).toContain('BookFulltextResult');
     });
 
+    it('emits per-node FulltextLeaf and FulltextInput for nodes with @fulltext', () => {
+      expect(content).toContain('export type BookFulltextLeaf');
+      expect(content).toContain('BookSearch?: FulltextIndexEntry;');
+      expect(content).toContain('export type BookFulltextInput');
+      expect(content).toContain('| BookFulltextLeaf');
+    });
+
+    it('threads per-node FulltextInput into the generated BookModel.find signature', () => {
+      // The typed override must reference BookFulltextInput, not the loose
+      // global FulltextInput.
+      expect(content).toContain('fulltext?: BookFulltextInput;');
+      expect(content).not.toContain('fulltext?: FulltextInput;');
+    });
+
+    it('nodes without fulltext keep the plain ModelInterface alias', () => {
+      // Author has no @fulltext index — its model must NOT be wrapped
+      // in the Omit<>-based override.
+      expect(content).toContain('export type AuthorModel = ModelInterface<');
+      expect(content).not.toMatch(/export type AuthorModel = Omit</);
+    });
+
     // --- SelectFields ---
     it('emits SelectFields per node', () => {
       expect(content).toContain('BookSelectFields');
@@ -356,7 +377,12 @@ describe('generateTypes', () => {
 
     // --- Model Declarations ---
     it('emits Model type for each node', () => {
-      expect(content).toContain('export type BookModel = ModelInterface<');
+      // Book has a @fulltext directive in the test schema, so its model type
+      // is emitted as `Omit<ModelInterface<...>, ...> & { ... }` to refine
+      // the `fulltext` parameter with the per-node BookFulltextInput.
+      expect(content).toMatch(
+        /export type BookModel = (?:Omit<\s*)?ModelInterface</,
+      );
       expect(content).toContain('export type AuthorModel = ModelInterface<');
     });
 
@@ -385,8 +411,10 @@ describe('generateTypes', () => {
     });
 
     it('model type alias includes MutationSelectFields as 10th param', () => {
+      // The `(?:Omit<\s*)?` prefix allows for the fulltext-typed wrapper
+      // form that nodes with fulltext indexes receive.
       expect(content).toMatch(
-        /BookModel = ModelInterface<[\s\S]*?'books',\s*BookMutationSelectFields/,
+        /BookModel = (?:Omit<\s*)?ModelInterface<[\s\S]*?'books',\s*BookMutationSelectFields/,
       );
     });
 

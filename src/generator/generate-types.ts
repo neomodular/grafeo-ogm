@@ -21,6 +21,7 @@ import { emitSortOptions } from './type-emitters/sort-options-emitter';
 import { emitAggregationTypes } from './type-emitters/aggregation-emitter';
 import { emitMutationResponseTypes } from './type-emitters/mutation-response-emitter';
 import { emitFulltextTypes } from './type-emitters/fulltext-emitter';
+import { emitVectorTypes } from './type-emitters/vector-emitter';
 import { emitSelectFieldTypes } from './type-emitters/select-fields-emitter';
 import { emitSelectResultType } from './type-emitters/select-result-emitter';
 import {
@@ -175,6 +176,7 @@ export async function generateTypes(
     emitAggregationTypes(metadata),
     emitMutationResponseTypes(metadata),
     emitFulltextTypes(metadata),
+    emitVectorTypes(metadata),
     emitSelectFieldTypes(metadata),
     emitSelectResultType(),
     emitModelDeclarations(metadata),

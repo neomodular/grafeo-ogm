@@ -26,6 +26,7 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 - [Query API](#query-api)
 - [Mutation API](#mutation-api)
 - [Advanced Features](#advanced-features)
+- [Vector Search](#vector-search)
 - [Type Generation](#type-generation)
 - [Testing Utilities](#testing-utilities)
 - [Security](#security)
@@ -221,7 +222,8 @@ await ogm.$transaction(async (ctx) => {
 | **Full TypeScript type safety** | Code generation produces typed models, where inputs, create/update inputs, select fields, and connection types |
 | **Pattern comprehensions** | Relationship traversal without Cartesian products -- O(1) rows per node |
 | **Typed `select` API** | `select: { id: true, author: { select: { name: true } } }` with compile-time type checking |
-| **Fulltext search** | Node and relationship indexes with phrase matching, score thresholds, and logical operators (`AND`, `OR`, `NOT`) |
+| **Fulltext search** | Node and relationship indexes with phrase matching, score thresholds, and logical operators (`AND`, `OR`, `NOT`). Per-node typed inputs with literal-string autocomplete for index names |
+| **Vector search** | `@vector` directive with `searchByVector` (top-k similarity) and `searchByPhrase` (via the Neo4j GenAI plugin). Typed results as `{ node, score }[]` |
 | **Subgraph operations** | Clone and delete entire subgraphs via APOC with reference relationship re-attachment |
 | **Runtime multi-label** | Add/remove/filter by labels at query time: `labels: ['Active']`, `setLabels()` |
 | **Interface models** | Polymorphic read queries across all types implementing a shared interface, with `__typename` discrimination |
@@ -251,6 +253,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `@cypher` | Field | Computed field resolved via a custom Cypher statement |
 | `@default` | Field | Sets a default value on create |
 | `@fulltext` | Type | Defines fulltext search indexes with `name` and `fields` |
+| `@vector` | Type | Registers one or more Neo4j vector indexes on a node (see [Vector Search](#vector-search)) |
 
 ### Supported Scalar Types
 
@@ -766,6 +769,18 @@ const results = await Book.find({
 });
 ```
 
+**Typed index names (v1.3.0+).** The generated `<Node>FulltextInput` type now carries the list of valid index names as literal-keyed optional fields. Typos surface as TypeScript errors and IDEs autocomplete the available indexes.
+
+```typescript
+// Before v1.3.0 — any string key compiled, typos only failed at runtime
+await Book.find({ fulltext: { BokSearch: { phrase: 'graph' } } }); // silently accepted at type-check
+
+// v1.3.0+ — `BokSearch` is a compile-time error; `BookSearch` autocompletes
+await Book.find({ fulltext: { BookSearch: { phrase: 'graph' } } });
+```
+
+The runtime compiler is unchanged; this is a purely ergonomic type-level improvement. The global `FulltextInput`, `FulltextLeaf`, and `FulltextIndexEntry` exports remain for writing generic helpers across models.
+
 ### Subgraph Operations
 
 Clone or delete entire subgraphs using APOC procedures. Requires the APOC plugin installed in Neo4j.
@@ -880,6 +895,146 @@ const publishedStats = await Book.aggregate({
   aggregate: { count: true, price: true },
 });
 ```
+
+---
+
+## Vector Search
+
+grafeo-ogm supports Neo4j's native vector indexes via the `@vector` directive. The directive lives on `@node` types, mirrors the official `@neo4j/graphql` spec shape, and enables two typed query methods on the generated model: `searchByVector` (pass a pre-computed embedding) and `searchByPhrase` (encode text server-side via the Neo4j GenAI plugin). Results are returned as `Array<{ node, score }>`.
+
+### Schema
+
+Declare one or more vector indexes on a node type. Set `provider` only on indexes that should support phrase search; plain vector search is always available.
+
+```graphql
+type Article @node @vector(indexes: [
+  {
+    indexName: "article_content_idx"
+    queryName: "similarArticles"
+    embeddingProperty: "embedding"
+    provider: "OpenAI"
+  },
+  {
+    indexName: "article_title_idx"
+    queryName: "similarTitles"
+    embeddingProperty: "titleEmbedding"
+    # no provider — only searchByVector is available for this index
+  }
+]) {
+  id: ID! @id
+  title: String!
+  content: String!
+  embedding: [Float!]!
+  titleEmbedding: [Float!]!
+  published: Boolean!
+}
+```
+
+### Creating the index in Neo4j
+
+grafeo-ogm does **not** create vector indexes for you in this release. Run the `CREATE VECTOR INDEX` Cypher yourself as part of your migration:
+
+```cypher
+CREATE VECTOR INDEX article_content_idx FOR (n:Article) ON n.embedding
+OPTIONS { indexConfig: { 'vector.dimensions': 1536, 'vector.similarity_function': 'cosine' } }
+```
+
+### `searchByVector` — top-k similarity with a pre-computed embedding
+
+Use this when you already have an embedding vector (for example, computed via an external SDK in your application code). `k` is clamped to the range `[1, 1000]`.
+
+```typescript
+const Article = ogm.model('Article');
+
+const vector = await myEmbedder.embed('distributed consensus algorithms');
+
+const results = await Article.searchByVector({
+  indexName: 'article_content_idx',
+  vector,
+  k: 10,
+  where: { published: true },
+  select: { id: true, title: true },
+});
+// results: Array<{ node: { id: string, title: string }, score: number }>
+```
+
+Compiles to:
+
+```cypher
+CALL db.index.vector.queryNodes($v_name, $v_k, $v_vector) YIELD node AS n, score
+WHERE n.published = $param0
+RETURN n { .id, .title } AS n, score
+```
+
+### `searchByPhrase` — server-side encoding via Neo4j GenAI
+
+Use this when you want Neo4j to encode the phrase for you. This requires two things:
+
+1. The index's `@vector` entry has a `provider` set (e.g. `"OpenAI"`, `"AzureOpenAI"`, `"VertexAI"` — whatever the GenAI plugin accepts).
+2. The **Neo4j GenAI plugin** is installed on the database.
+
+API credentials never appear in the schema. Pass them at query time via `providerConfig`:
+
+```typescript
+const results = await Article.searchByPhrase({
+  indexName: 'article_content_idx',
+  phrase: 'distributed consensus algorithms',
+  k: 10,
+  providerConfig: { token: process.env.OPENAI_API_KEY },
+  where: { published: true },
+  select: { id: true, title: true },
+});
+// results: Array<{ node: { id: string, title: string }, score: number }>
+```
+
+Compiles to:
+
+```cypher
+CALL genai.vector.encode($v_phrase, $v_provider, $v_providerConfig) YIELD vector AS __v_encoded
+CALL db.index.vector.queryNodes($v_name, $v_k, __v_encoded) YIELD node AS n, score
+WHERE n.published = $param0
+RETURN n { .id, .title } AS n, score
+```
+
+Calling `searchByPhrase` on an index that does not have `provider` set throws at compile time with a descriptive error.
+
+### Generated types
+
+For the `Article` schema above, `generateTypes` emits typed helpers with literal-string index names:
+
+```typescript
+export type ArticleVectorResult = { node: Article; score: number };
+
+export type ArticleVectorSearchByVectorInput = {
+  indexName: 'article_content_idx' | 'article_title_idx';
+  vector: number[];
+  k: number;
+  where?: ArticleWhere;
+  selectionSet?: string;
+  labels?: string[];
+};
+
+export type ArticleVectorSearchByPhraseInput = {
+  indexName: 'article_content_idx'; // only indexes with provider set
+  phrase: string;
+  k: number;
+  providerConfig?: Record<string, unknown>;
+  where?: ArticleWhere;
+  selectionSet?: string;
+  labels?: string[];
+};
+```
+
+`ArticleVectorSearchByPhraseInput` is only emitted when at least one `@vector` index declares `provider`. Index-name typos surface as TypeScript errors.
+
+### Not supported (deferred)
+
+The following were intentionally left out of this release:
+
+- **`@embedded(from:, using:)` auto-write directive** — automatic embedding on create / update. Requires a pluggable embedder port and peer-dependency adapters.
+- **Third-party embedder SDKs** (`grafeo-ogm/embedders/openai`, etc.) — tracked for a future release with optional peer dependencies.
+- **Relationship-level `@vector` indexes** — the current Neo4j / official spec only supports node vector indexes.
+- **Automatic index creation via `assertIndexesAndConstraints`** — you must run `CREATE VECTOR INDEX` yourself.
 
 ---
 

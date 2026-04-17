@@ -5,6 +5,7 @@ import { FulltextCompiler } from './compilers/fulltext.compiler';
 import { MutationCompiler } from './compilers/mutation.compiler';
 import { SelectNormalizer } from './compilers/select-normalizer';
 import { SelectionCompiler } from './compilers/selection.compiler';
+import { VectorCompiler } from './compilers/vector.compiler';
 import {
   WhereCompiler,
   WhereCompilerOptions,
@@ -56,6 +57,7 @@ export class OGM<
     const where = new WhereCompiler(this.schema, whereOptions);
     const selection = new SelectionCompiler(this.schema, where);
     const fulltext = new FulltextCompiler(this.schema);
+    const vector = new VectorCompiler();
 
     this.modelCompilers = {
       where,
@@ -63,6 +65,7 @@ export class OGM<
       selectNormalizer: new SelectNormalizer(this.schema),
       mutation: new MutationCompiler(this.schema),
       fulltext,
+      vector,
     };
 
     this.interfaceModelCompilers = {

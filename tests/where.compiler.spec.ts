@@ -709,7 +709,9 @@ describe('WhereCompiler', () => {
         'n',
         orphanNode,
       ),
-    ).toThrow('Invalid connection filter: target type for "missingTarget" is not defined in the schema.');
+    ).toThrow(
+      'Invalid connection filter: target type for "missingTarget" is not defined in the schema.',
+    );
   });
 
   it('should throw when relationship target node is not in schema', () => {
@@ -730,7 +732,9 @@ describe('WhereCompiler', () => {
 
     expect(() =>
       compiler.compile({ missingTarget_SOME: { id: '1' } }, 'n', orphanNode),
-    ).toThrow('Invalid relationship filter: target type for "missingTarget" is not defined in the schema.');
+    ).toThrow(
+      'Invalid relationship filter: target type for "missingTarget" is not defined in the schema.',
+    );
   });
 
   it('should not treat non-relationship bare key as relationship', () => {

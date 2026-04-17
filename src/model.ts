@@ -7,6 +7,7 @@ import {
   SelectionCompiler,
   SelectionNode,
 } from './compilers/selection.compiler';
+import { VectorCompiler } from './compilers/vector.compiler';
 import { WhereCompiler } from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
@@ -207,6 +208,27 @@ export interface ModelInterface<
     where?: TWhere;
     context?: ExecutionContext;
   }): Promise<{ count: number }>;
+  searchByVector?(params: {
+    indexName: string;
+    vector: number[];
+    k: number;
+    where?: TWhere;
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+    labels?: string[];
+    context?: ExecutionContext;
+  }): Promise<Array<{ node: T; score: number }>>;
+  searchByPhrase?(params: {
+    indexName: string;
+    phrase: string;
+    k: number;
+    providerConfig?: Record<string, unknown>;
+    where?: TWhere;
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+    labels?: string[];
+    context?: ExecutionContext;
+  }): Promise<Array<{ node: T; score: number }>>;
 }
 
 /** Compilers needed for read-only operations (find, aggregate, count). */
@@ -222,8 +244,19 @@ export interface MutationCompilers {
   mutation: MutationCompiler;
 }
 
-/** All compilers used by Model. */
-export interface ModelCompilers extends QueryCompilers, MutationCompilers {}
+/**
+ * All compilers used by Model.
+ *
+ * `vector` is kept on `ModelCompilers` (not on `QueryCompilers`) because
+ * vector search is a Model-only read-path concern and `InterfaceModel`
+ * (which shares `QueryCompilers`) does not support it. Keeping it outside
+ * `MutationCompilers` preserves that interface's "writes only" meaning.
+ * Marked optional for backward compatibility with callers constructing
+ * `ModelCompilers` literals before v1.3.0.
+ */
+export interface ModelCompilers extends QueryCompilers, MutationCompilers {
+  vector?: VectorCompiler;
+}
 
 export class Model<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -280,6 +313,7 @@ export class Model<
   private selectNormalizer: SelectNormalizer;
   private mutationCompiler: MutationCompiler;
   private fulltextCompiler: FulltextCompiler;
+  private vectorCompiler: VectorCompiler;
   private executor: Executor;
 
   constructor(
@@ -296,6 +330,7 @@ export class Model<
       compilers?.selectNormalizer ?? new SelectNormalizer(schema);
     this.mutationCompiler = compilers?.mutation ?? new MutationCompiler(schema);
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
+    this.vectorCompiler = compilers?.vector ?? new VectorCompiler();
     this.executor = new Executor(driver, logger);
   }
 
@@ -339,27 +374,9 @@ export class Model<
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
 
-    // Determine selection
-    let selection: SelectionNode[];
-    if (params?.select)
-      selection = this.selectNormalizer.normalize(params.select, this.nodeDef);
-    else if (params?.selectionSet) {
-      const selStr =
-        typeof params.selectionSet === 'string'
-          ? params.selectionSet
-          : (params.selectionSet.loc?.source?.body ??
-            String(params.selectionSet));
-      if (Model._selectionCache.has(selStr))
-        selection = Model._selectionCache.get(selStr)!;
-      else {
-        selection = this.selectionCompiler.parseSelectionSet(selStr);
-        if (Model._selectionCache.size < 500)
-          Model._selectionCache.set(selStr, selection);
-      }
-    } else if (this._parsedSelection) selection = this._parsedSelection;
-    else
-      // Default: return all scalar properties
-      selection = this.defaultSelection();
+    // Determine selection — delegated to the shared dispatcher so `find`,
+    // `searchByVector`, and `searchByPhrase` all resolve selection identically.
+    const selection = this.resolveSelection(params ?? {});
 
     // Fulltext or MATCH
     if (params?.fulltext) {
@@ -968,6 +985,220 @@ export class Model<
     return { count: counters.nodesDeleted };
   }
 
+  // --- searchByVector / searchByPhrase --------------------------------------
+
+  /**
+   * Run a top-k vector similarity search against a pre-computed embedding.
+   *
+   * The emitted Cypher binds the matched node to `n` via
+   * `db.index.vector.queryNodes(...) YIELD node AS n, score`, then applies
+   * the node's label (plus any additional `labels`) and the user-supplied
+   * `where` as a post-filter. The selection is compiled through the same
+   * pipeline as `find()`, so `select` / `selectionSet` semantics match.
+   *
+   * **Requirements**
+   * - Neo4j **5.11+** (for `db.index.vector.queryNodes`).
+   * - A vector index must be created out-of-band via
+   *   `CREATE VECTOR INDEX ... FOR (n:Label) ON n.embedding OPTIONS { ... }`.
+   *   grafeo-ogm does not create vector indexes automatically.
+   *
+   * **`k` clamping** — `k` is silently clamped to the range `[1, 1000]` by
+   * the compiler to prevent unbounded result sets. Requests for `k > 1000`
+   * will return at most 1000 results without a runtime warning.
+   *
+   * @returns Array of `{ node, score }` pairs ordered as returned by the
+   * Neo4j vector index (most similar first).
+   */
+  async searchByVector(params: {
+    indexName: string;
+    vector: number[];
+    k: number;
+    where?: TWhere;
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+    labels?: string[];
+    context?: ExecutionContext;
+  }): Promise<Array<{ node: T; score: number }>> {
+    return this.runVectorSearch({
+      params,
+      compile: (paramCounter) =>
+        this.vectorCompiler.compileByVector({
+          indexName: params.indexName,
+          vector: params.vector,
+          k: params.k,
+          nodeDef: this.nodeDef,
+          paramCounter,
+        }),
+    });
+  }
+
+  /**
+   * Run a top-k vector similarity search keyed on a text phrase. Requires
+   * the matching `@vector` index to declare a `provider` so Neo4j's
+   * `genai.vector.encode` can produce the embedding server-side.
+   *
+   * `providerConfig` (API tokens, model overrides, etc.) is passed as a
+   * Cypher parameter, never interpolated into the query string.
+   *
+   * **Requirements**
+   * - Neo4j **5.11+** with the **GenAI plugin** installed
+   *   (`genai.vector.encode` is shipped by the plugin, not core).
+   * - The matching `@vector` index in your schema must set `provider` (e.g.
+   *   `"OpenAI"`, `"VertexAI"`). Without it, `searchByPhrase` throws an
+   *   `OGMError` at compile time.
+   * - A vector index must exist in the database (create it manually via
+   *   `CREATE VECTOR INDEX ...`).
+   *
+   * **`k` clamping** — same as `searchByVector`: silently clamped to
+   * `[1, 1000]` to prevent unbounded result sets.
+   */
+  async searchByPhrase(params: {
+    indexName: string;
+    phrase: string;
+    k: number;
+    providerConfig?: Record<string, unknown>;
+    where?: TWhere;
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+    labels?: string[];
+    context?: ExecutionContext;
+  }): Promise<Array<{ node: T; score: number }>> {
+    return this.runVectorSearch({
+      params,
+      compile: (paramCounter) =>
+        this.vectorCompiler.compileByPhrase({
+          indexName: params.indexName,
+          phrase: params.phrase,
+          k: params.k,
+          providerConfig: params.providerConfig,
+          nodeDef: this.nodeDef,
+          paramCounter,
+        }),
+    });
+  }
+
+  /**
+   * Shared pipeline for `searchByVector` / `searchByPhrase`. Handles the
+   * selection resolution, label filter, user WHERE composition, projection
+   * compilation, and record mapping. The CALL prelude is supplied by the
+   * caller so that the vector vs. phrase branches share everything else.
+   */
+  private async runVectorSearch(args: {
+    params: {
+      where?: TWhere;
+      selectionSet?: string | DocumentNode;
+      select?: TSelect;
+      labels?: string[];
+      context?: ExecutionContext;
+    };
+    compile: (paramCounter: { count: number }) => {
+      cypher: string;
+      params: Record<string, unknown>;
+    };
+  }): Promise<Array<{ node: T; score: number }>> {
+    const { params } = args;
+
+    if (params.select && params.selectionSet)
+      throw new OGMError(
+        'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
+      );
+
+    const allParams: Record<string, unknown> = {};
+    const paramCounter = { count: 0 };
+
+    // 1. Compile the CALL prelude (binds `n` and `score`).
+    const call = args.compile(paramCounter);
+    mergeParams(allParams, call.params);
+
+    // 2. Resolve the selection — mirror find()'s dispatch.
+    const selection = this.resolveSelection(params);
+
+    // 3. Build the label filter. The vector index can match anything with
+    //    the indexed property, so we constrain to the expected label(s).
+    const labelFilters: string[] = [
+      `n:${escapeIdentifier(this.nodeDef.label)}`,
+    ];
+    if (params.labels)
+      for (const label of params.labels)
+        labelFilters.push(`n:${assertSafeLabel(label)}`);
+
+    // 4. Compile the user WHERE (optional) and AND it into the label filter.
+    const whereResult = this.whereCompiler.compile(
+      params.where,
+      'n',
+      this.nodeDef,
+      paramCounter,
+    );
+    mergeParams(allParams, whereResult.params);
+
+    const whereParts = [labelFilters.join(' AND ')];
+    if (whereResult.cypher) whereParts.push(whereResult.cypher);
+
+    // 5. Compile the projection through the shared selection pipeline.
+    const returnClause = this.selectionCompiler.compile(
+      selection,
+      'n',
+      this.nodeDef,
+      this._maxDepth,
+      0,
+      allParams,
+      paramCounter,
+    );
+
+    const cypher = [
+      call.cypher,
+      `WHERE ${whereParts.join(' AND ')}`,
+      `RETURN ${returnClause}, score`,
+    ].join('\n');
+
+    // 6. Execute and map each record into { node, score }.
+    const result = await this.executor.execute(
+      cypher,
+      allParams,
+      params.context,
+    );
+    return result.records.map((record) => ({
+      node: ResultMapper.convertNeo4jTypes(record.get('n')) as T,
+      score: ResultMapper.convertNeo4jTypes(record.get('score')) as number,
+    }));
+  }
+
+  /**
+   * Parse a selectionSet string (or DocumentNode) with LRU caching. Extracted
+   * from the four previously-duplicated resolve-selection sites so one cache
+   * dance lives in one place. Cache is capped at 500 entries (same as before).
+   */
+  private parseSelectionSetCached(
+    selectionSet: string | DocumentNode,
+  ): SelectionNode[] {
+    const selStr =
+      typeof selectionSet === 'string'
+        ? selectionSet
+        : (selectionSet.loc?.source?.body ?? String(selectionSet));
+    const cached = Model._selectionCache.get(selStr);
+    if (cached) return cached;
+    const parsed = this.selectionCompiler.parseSelectionSet(selStr);
+    if (Model._selectionCache.size < 500)
+      Model._selectionCache.set(selStr, parsed);
+    return parsed;
+  }
+
+  /**
+   * Resolve a `SelectionNode[]` from `select` / `selectionSet` / the
+   * instance-level selectionSet / defaults — matching `find()`'s behavior.
+   */
+  private resolveSelection(params: {
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+  }): SelectionNode[] {
+    if (params.select)
+      return this.selectNormalizer.normalize(params.select, this.nodeDef);
+    if (params.selectionSet)
+      return this.parseSelectionSetCached(params.selectionSet);
+    if (this._parsedSelection) return this._parsedSelection;
+    return this.defaultSelection();
+  }
+
   // --- Private helpers ------------------------------------------------------
 
   private defaultSelection(): SelectionNode[] {
@@ -997,19 +1228,7 @@ export class Model<
   ): string {
     if (!selectionSet) return cypher;
 
-    const selStr =
-      typeof selectionSet === 'string'
-        ? selectionSet
-        : (selectionSet.loc?.source?.body ?? String(selectionSet));
-
-    let selection: SelectionNode[];
-    if (Model._selectionCache.has(selStr))
-      selection = Model._selectionCache.get(selStr)!;
-    else {
-      selection = this.selectionCompiler.parseSelectionSet(selStr);
-      if (Model._selectionCache.size < 500)
-        Model._selectionCache.set(selStr, selection);
-    }
+    let selection = this.parseSelectionSetCached(selectionSet);
 
     // Mutation selectionSets use the pattern: { <pluralName> { <actual fields> } }
     // or { info { ... } <pluralName> { <actual fields> } }
@@ -1113,19 +1332,7 @@ export class Model<
   ): string {
     if (!selectionSet) return cypher;
 
-    const selStr =
-      typeof selectionSet === 'string'
-        ? selectionSet
-        : (selectionSet.loc?.source?.body ?? String(selectionSet));
-
-    let selection: SelectionNode[];
-    if (Model._selectionCache.has(selStr))
-      selection = Model._selectionCache.get(selStr)!;
-    else {
-      selection = this.selectionCompiler.parseSelectionSet(selStr);
-      if (Model._selectionCache.size < 500)
-        Model._selectionCache.set(selStr, selection);
-    }
+    const selection = this.parseSelectionSetCached(selectionSet);
 
     const paramCounter = { count: 0 };
     const returnClause = this.selectionCompiler.compile(

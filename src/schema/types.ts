@@ -43,6 +43,13 @@ export interface FulltextIndex {
   fields: string[]; // e.g., ['title']
 }
 
+export interface VectorIndex {
+  indexName: string; // Neo4j vector index name
+  queryName: string; // Spec metadata (preserved for GraphQL emitters)
+  embeddingProperty: string; // Node property holding the Float[] embedding
+  provider?: string; // Optional — enables searchByPhrase when set
+}
+
 export interface NodeDefinition {
   typeName: string; // e.g., 'Book' (the GraphQL type name)
   label: string; // Primary label (usually same as typeName)
@@ -51,6 +58,7 @@ export interface NodeDefinition {
   properties: Map<string, PropertyDefinition>;
   relationships: Map<string, RelationshipDefinition>;
   fulltextIndexes: FulltextIndex[];
+  vectorIndexes?: VectorIndex[];
   implementsInterfaces: string[]; // Interface names e.g., ['Entity']
 }
 

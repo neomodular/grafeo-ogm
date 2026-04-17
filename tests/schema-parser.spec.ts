@@ -273,6 +273,186 @@ describe('parseSchema - fulltext indexes', () => {
   });
 });
 
+describe('parseSchema - @vector directive', () => {
+  it('should parse a single vector index with required fields only', () => {
+    const schema = `
+      type Article
+        @node(labels: ["Article"])
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          queryName: "similarArticles"
+          embeddingProperty: "embedding"
+        }]) {
+        id: ID! @id @unique
+        title: String!
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(1);
+    const idx = article.vectorIndexes![0];
+    expect(idx.indexName).toBe('article_content_idx');
+    expect(idx.queryName).toBe('similarArticles');
+    expect(idx.embeddingProperty).toBe('embedding');
+    expect(idx.provider).toBeUndefined();
+  });
+
+  it('should parse a vector index with provider set', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          queryName: "similarArticles"
+          embeddingProperty: "embedding"
+          provider: "OpenAI"
+        }]) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(1);
+    expect(article.vectorIndexes![0].provider).toBe('OpenAI');
+  });
+
+  it('should parse multiple vector indexes on the same type', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [
+          {
+            indexName: "article_content_idx"
+            queryName: "similarArticles"
+            embeddingProperty: "contentEmbedding"
+          },
+          {
+            indexName: "article_title_idx"
+            queryName: "similarTitles"
+            embeddingProperty: "titleEmbedding"
+            provider: "VoyageAI"
+          }
+        ]) {
+        id: ID! @id @unique
+        contentEmbedding: [Float!]!
+        titleEmbedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(2);
+    expect(article.vectorIndexes![0].indexName).toBe('article_content_idx');
+    expect(article.vectorIndexes![0].embeddingProperty).toBe(
+      'contentEmbedding',
+    );
+    expect(article.vectorIndexes![0].provider).toBeUndefined();
+    expect(article.vectorIndexes![1].indexName).toBe('article_title_idx');
+    expect(article.vectorIndexes![1].embeddingProperty).toBe('titleEmbedding');
+    expect(article.vectorIndexes![1].provider).toBe('VoyageAI');
+  });
+
+  it('should throw descriptive OGMError when embeddingProperty is unknown', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          queryName: "similarArticles"
+          embeddingProperty: "missingEmbedding"
+        }]) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    expect(() => parseSchema(schema)).toThrow(
+      /@vector index "article_content_idx" references unknown embeddingProperty "missingEmbedding" on type "Article"/,
+    );
+  });
+
+  it('should skip index entries missing required indexName', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [{
+          queryName: "similarArticles"
+          embeddingProperty: "embedding"
+        }]) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(0);
+  });
+
+  it('should skip index entries missing required queryName', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          embeddingProperty: "embedding"
+        }]) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(0);
+  });
+
+  it('should skip index entries missing required embeddingProperty', () => {
+    const schema = `
+      type Article
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          queryName: "similarArticles"
+        }]) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toHaveLength(0);
+  });
+
+  it('should coexist with @fulltext on the same type', () => {
+    const schema = `
+      type Article
+        @node(labels: ["Article"])
+        @fulltext(indexes: [{ name: "ArticleTitleSearch", fields: ["title"] }])
+        @vector(indexes: [{
+          indexName: "article_content_idx"
+          queryName: "similarArticles"
+          embeddingProperty: "embedding"
+        }]) {
+        id: ID! @id @unique
+        title: String!
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.fulltextIndexes).toHaveLength(1);
+    expect(article.fulltextIndexes[0].name).toBe('ArticleTitleSearch');
+    expect(article.vectorIndexes).toHaveLength(1);
+    expect(article.vectorIndexes![0].indexName).toBe('article_content_idx');
+  });
+
+  it('should produce an empty array when indexes: [] is supplied', () => {
+    const schema = `
+      type Article
+        @vector(indexes: []) {
+        id: ID! @id @unique
+        embedding: [Float!]!
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const article = metadata.nodes.get('Article')!;
+    expect(article.vectorIndexes).toEqual([]);
+  });
+});
+
 describe('parseSchema - enums', () => {
   it('should parse enum definitions', () => {
     const schema = `

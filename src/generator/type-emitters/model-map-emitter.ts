@@ -1,4 +1,5 @@
 import type { SchemaMetadata } from '../../schema/types';
+import { nodeHasAnyFulltext } from './fulltext-emitter';
 
 /**
  * Emits a model declaration type for each node type, wrapping the generic
@@ -18,6 +19,12 @@ import type { SchemaMetadata } from '../../schema/types';
  *   'books'
  * >;
  * ```
+ *
+ * When the node has at least one fulltext index (directly or via a
+ * relationship-properties type), the fulltext-accepting methods (`find`,
+ * `findFirst`, `findFirstOrThrow`, `count`, `aggregate`) are re-declared with
+ * a narrowed `fulltext?: <Node>FulltextInput` so users get autocomplete and
+ * typo-checking on index names.
  */
 export function emitModelDeclarations(schema: SchemaMetadata): string {
   const blocks: string[] = [];
@@ -27,7 +34,10 @@ export function emitModelDeclarations(schema: SchemaMetadata): string {
   for (const typeName of sortedNodes) {
     const node = schema.nodes.get(typeName)!;
     const hasRels = node.relationships.size > 0;
-    blocks.push(buildModelType(typeName, node.pluralName, hasRels));
+    const hasFulltext = nodeHasAnyFulltext(node, schema);
+    blocks.push(
+      buildModelType(typeName, node.pluralName, hasRels, hasFulltext),
+    );
   }
 
   // Interface model declarations
@@ -86,6 +96,7 @@ function buildModelType(
   typeName: string,
   pluralName: string,
   hasRels: boolean,
+  hasFulltext: boolean,
 ): string {
   const connectType = hasRels
     ? `${typeName}ConnectInput`
@@ -96,8 +107,9 @@ function buildModelType(
   const deleteType = hasRels
     ? `${typeName}DeleteInput`
     : 'Record<string, never>';
-  return [
-    `export type ${typeName}Model = ModelInterface<`,
+
+  const baseAlias = [
+    `ModelInterface<`,
     `  ${typeName},`,
     `  ${typeName}SelectFields,`,
     `  ${typeName}Where,`,
@@ -108,7 +120,80 @@ function buildModelType(
     `  ${deleteType},`,
     `  '${pluralName}',`,
     `  ${typeName}MutationSelectFields`,
-    `>;`,
+    `>`,
+  ].join('\n');
+
+  if (!hasFulltext) return `export type ${typeName}Model = ${baseAlias};`;
+
+  return buildModelTypeWithTypedFulltext(typeName, baseAlias);
+}
+
+/**
+ * Builds a `<Node>Model` alias that keeps every method from `ModelInterface`
+ * but replaces the `fulltext` parameter with the node-specific
+ * `<Node>FulltextInput`, giving users autocomplete + typo-checking on
+ * index names.
+ *
+ * Uses `Omit<..., 'find' | ...>` to strip the loose variants from the base,
+ * then intersects with the refined signatures.
+ */
+function buildModelTypeWithTypedFulltext(
+  typeName: string,
+  baseAlias: string,
+): string {
+  const fulltextInput = `${typeName}FulltextInput`;
+  const where = `${typeName}Where`;
+  const select = `${typeName}SelectFields`;
+
+  // We only re-declare what we need to change. The shared parameter shapes
+  // are inlined to stay decoupled from the non-exported runtime
+  // `FindOptions`; `ExecutionContext` is imported from the package.
+  const findParams = `{
+    where?: ${where};
+    selectionSet?: string | DocumentNode;
+    select?: ${select};
+    labels?: string[];
+    options?: { limit?: number; offset?: number; sort?: Array<Record<string, 'ASC' | 'DESC'>> };
+    fulltext?: ${fulltextInput};
+    context?: ExecutionContext;
+  }`;
+
+  const findFirstParams = `{
+    where?: ${where};
+    selectionSet?: string | DocumentNode;
+    select?: ${select};
+    labels?: string[];
+    options?: { offset?: number; sort?: Array<Record<string, 'ASC' | 'DESC'>> };
+    fulltext?: ${fulltextInput};
+    context?: ExecutionContext;
+  }`;
+
+  const countParams = `{
+    where?: ${where};
+    labels?: string[];
+    fulltext?: ${fulltextInput};
+    context?: ExecutionContext;
+  }`;
+
+  const aggregateParams = `{
+    where?: ${where};
+    aggregate: { count?: boolean; [field: string]: boolean | undefined };
+    labels?: string[];
+    fulltext?: ${fulltextInput};
+    context?: ExecutionContext;
+  }`;
+
+  return [
+    `export type ${typeName}Model = Omit<`,
+    `  ${baseAlias.split('\n').join('\n  ')},`,
+    `  'find' | 'findFirst' | 'findFirstOrThrow' | 'count' | 'aggregate'`,
+    `> & {`,
+    `  find(params?: ${findParams}): Promise<${typeName}[]>;`,
+    `  findFirst(params?: ${findFirstParams}): Promise<${typeName} | null>;`,
+    `  findFirstOrThrow(params?: ${findFirstParams}): Promise<${typeName}>;`,
+    `  count(params?: ${countParams}): Promise<number>;`,
+    `  aggregate(params: ${aggregateParams}): Promise<{ count?: number; [field: string]: unknown }>;`,
+    `};`,
   ].join('\n');
 }
 

@@ -28,7 +28,11 @@ function makeProp(name: string): PropertyDefinition {
   };
 }
 
-function makeNodeDef(typeName: string, pluralName: string): NodeDefinition {
+function makeNodeDef(
+  typeName: string,
+  pluralName: string,
+  overrides: Partial<NodeDefinition> = {},
+): NodeDefinition {
   return {
     typeName,
     label: typeName,
@@ -38,6 +42,7 @@ function makeNodeDef(typeName: string, pluralName: string): NodeDefinition {
     relationships: new Map(),
     fulltextIndexes: [],
     implementsInterfaces: [],
+    ...overrides,
   };
 }
 
@@ -127,6 +132,101 @@ describe('emitModelDeclarations', () => {
     const appleIdx = output.indexOf('AppleModel');
     const zebraIdx = output.indexOf('ZebraModel');
     expect(appleIdx).toBeLessThan(zebraIdx);
+  });
+
+  describe('per-node typed fulltext', () => {
+    it('nodes without fulltext indexes keep the plain ModelInterface alias', () => {
+      const schema = makeSchema(
+        new Map([['Category', makeNodeDef('Category', 'categories')]]),
+      );
+      const output = emitModelDeclarations(schema);
+
+      expect(output).toContain('export type CategoryModel = ModelInterface<');
+      // Plain alias ends with the closing angle bracket + semicolon;
+      // no `Omit<` wrapper is introduced for this node.
+      expect(output).not.toContain('export type CategoryModel = Omit<');
+    });
+
+    it('nodes with fulltext indexes get Omit<ModelInterface<...>> + typed fulltext overrides', () => {
+      const schema = makeSchema(
+        new Map([
+          [
+            'Drug',
+            makeNodeDef('Drug', 'drugs', {
+              fulltextIndexes: [
+                { name: 'IndicationsFullSearch', fields: ['indications'] },
+              ],
+            }),
+          ],
+        ]),
+      );
+      const output = emitModelDeclarations(schema);
+
+      expect(output).toContain('export type DrugModel = Omit<');
+      expect(output).toContain('ModelInterface<');
+      expect(output).toContain(
+        "'find' | 'findFirst' | 'findFirstOrThrow' | 'count' | 'aggregate'",
+      );
+
+      // All five fulltext-accepting methods are re-declared with the
+      // per-node input type.
+      expect(output).toContain('fulltext?: DrugFulltextInput;');
+      expect(output).toMatch(/find\(params\?:/);
+      expect(output).toMatch(/findFirst\(params\?:/);
+      expect(output).toMatch(/findFirstOrThrow\(params\?:/);
+      expect(output).toMatch(/count\(params\?:/);
+      expect(output).toMatch(/aggregate\(params:/);
+
+      // The generated signatures should NOT use the loose global FulltextInput.
+      expect(output).not.toContain('fulltext?: FulltextInput;');
+    });
+
+    it('nodes with only relationship-level fulltext also get the typed override', () => {
+      const relationships = new Map([
+        [
+          'categories',
+          {
+            fieldName: 'categories',
+            type: 'IN_CATEGORY',
+            direction: 'OUT' as const,
+            target: 'Category',
+            properties: 'InCategory',
+            isArray: true,
+            isRequired: false,
+          },
+        ],
+      ]);
+
+      const schema: SchemaMetadata = {
+        nodes: new Map([
+          ['Article', makeNodeDef('Article', 'articles', { relationships })],
+          ['Category', makeNodeDef('Category', 'categories')],
+        ]),
+        interfaces: new Map(),
+        relationshipProperties: new Map([
+          [
+            'InCategory',
+            {
+              typeName: 'InCategory',
+              properties: new Map(),
+              fulltextIndexes: [
+                { name: 'CategoryLabelSearch', fields: ['label'] },
+              ],
+            },
+          ],
+        ]),
+        enums: new Map(),
+        unions: new Map(),
+      };
+
+      const output = emitModelDeclarations(schema);
+
+      expect(output).toContain('export type ArticleModel = Omit<');
+      expect(output).toContain('fulltext?: ArticleFulltextInput;');
+
+      // Category has no fulltext anywhere → stays plain.
+      expect(output).toContain('export type CategoryModel = ModelInterface<');
+    });
   });
 });
 

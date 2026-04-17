@@ -28,7 +28,7 @@ export function emitHeader(
 export function emitImports(packageName = 'grafeo-ogm'): string {
   return [
     'import type { SelectionSetNode, DocumentNode } from "graphql";',
-    `import type { Model, ModelInterface, InterfaceModelInterface } from "${packageName}";`,
+    `import type { ModelInterface, InterfaceModelInterface, ExecutionContext } from "${packageName}";`,
   ].join('\n');
 }
 

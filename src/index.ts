@@ -32,6 +32,7 @@ export type {
   RelationshipPropertiesDefinition,
   PropertyDefinition,
   FulltextIndex,
+  VectorIndex,
   Neo4jValue,
   WhereInput,
   MutationInput,
@@ -55,6 +56,8 @@ export { SelectNormalizer } from './compilers/select-normalizer';
 export { MutationCompiler } from './compilers/mutation.compiler';
 export type { MutationResult } from './compilers/mutation.compiler';
 export { FulltextCompiler } from './compilers/fulltext.compiler';
+export { VectorCompiler } from './compilers/vector.compiler';
+export type { VectorResult } from './compilers/vector.compiler';
 
 // Execution
 export { Executor } from './execution/executor';

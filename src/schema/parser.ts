@@ -26,7 +26,11 @@ import type {
   PropertyDefinition,
   RelationshipDefinition,
   FulltextIndex,
+  VectorIndex,
 } from './types';
+
+import { assertSafeIdentifier } from '../utils/validation';
+import { OGMError } from '../errors';
 
 /**
  * Generate a plural name from a type name following OGM conventions.
@@ -275,6 +279,67 @@ function parseFulltextIndexes(
   return results;
 }
 
+/** Parse @vector indexes from an object type definition */
+function parseVectorIndexes(
+  node: ObjectTypeDefinitionNode,
+  properties: Map<string, PropertyDefinition>,
+  typeName: string,
+): VectorIndex[] {
+  const vDirective = getDirective(node, 'vector');
+  if (!vDirective) return [];
+
+  const indexesArg = getDirectiveArgValue(vDirective, 'indexes');
+  if (!indexesArg || indexesArg.kind !== Kind.LIST) return [];
+
+  const results: VectorIndex[] = [];
+  for (const item of (indexesArg as ListValueNode).values) {
+    if (item.kind !== Kind.OBJECT) continue;
+    const obj = item as ObjectValueNode;
+
+    let indexName = '';
+    let queryName = '';
+    let embeddingProperty = '';
+    let provider: string | undefined;
+
+    for (const field of obj.fields) {
+      if (field.name.value === 'indexName' && field.value.kind === Kind.STRING)
+        indexName = (field.value as StringValueNode).value;
+
+      if (field.name.value === 'queryName' && field.value.kind === Kind.STRING)
+        queryName = (field.value as StringValueNode).value;
+
+      if (
+        field.name.value === 'embeddingProperty' &&
+        field.value.kind === Kind.STRING
+      )
+        embeddingProperty = (field.value as StringValueNode).value;
+
+      if (field.name.value === 'provider' && field.value.kind === Kind.STRING)
+        provider = (field.value as StringValueNode).value;
+    }
+
+    if (!indexName || !queryName || !embeddingProperty) continue;
+
+    assertSafeIdentifier(indexName, '@vector indexName');
+    assertSafeIdentifier(queryName, '@vector queryName');
+    assertSafeIdentifier(embeddingProperty, '@vector embeddingProperty');
+    if (provider !== undefined)
+      assertSafeIdentifier(provider, '@vector provider');
+
+    if (!properties.has(embeddingProperty))
+      throw new OGMError(
+        `@vector index "${indexName}" references unknown embeddingProperty "${embeddingProperty}" on type "${typeName}"`,
+      );
+
+    const entry: VectorIndex = { indexName, queryName, embeddingProperty };
+    if (provider !== undefined) entry.provider = provider;
+
+    results.push(entry);
+  }
+
+  return results;
+}
+
 /** Parse @node labels directive */
 function parseNodeLabels(node: ObjectTypeDefinitionNode): string[] | undefined {
   const nodeDirective = getDirective(node, 'node');
@@ -417,6 +482,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     }
 
     const fulltextIndexes = parseFulltextIndexes(objDef);
+    const vectorIndexes = parseVectorIndexes(objDef, properties, typeName);
 
     const nodeDef: NodeDefinition = {
       typeName,
@@ -426,6 +492,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
       properties,
       relationships,
       fulltextIndexes,
+      vectorIndexes,
       implementsInterfaces,
     };
 
