@@ -997,6 +997,74 @@ describe('Model', () => {
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
     });
+
+    // Regression: the selection compiler used to be invoked with a fresh
+    // paramCounter, so a connection-where in the projection would allocate
+    // $param0 and clobber the value from the outer WHERE that `compileUpdate`
+    // had already merged into mutParams. Both params must survive, under
+    // distinct names.
+    it('should not overwrite outer WHERE params when selection has a connection-where', async () => {
+      await model.update({
+        where: { id: 'book-id' },
+        update: { title: 'Updated' },
+        select: {
+          books: {
+            id: true,
+            hasStatusConnection: {
+              where: { node: { id: 'status-id' } },
+              select: {
+                edges: {
+                  node: { select: { id: true } },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const params = getParams(mockSession);
+      // Outer WHERE must retain its value — no param0 collision.
+      expect(params.param0).toBe('book-id');
+      // Connection-where value must be present under a distinct param name.
+      const paramValues = Object.values(params);
+      expect(paramValues).toContain('status-id');
+      // And the two values must live under different keys.
+      const keysPointingToBookId = Object.keys(params).filter(
+        (k) => params[k] === 'book-id',
+      );
+      const keysPointingToStatusId = Object.keys(params).filter(
+        (k) => params[k] === 'status-id',
+      );
+      expect(keysPointingToBookId).toEqual(['param0']);
+      expect(keysPointingToStatusId).toHaveLength(1);
+      expect(keysPointingToStatusId[0]).not.toBe('param0');
+    });
+
+    // Same collision class, via the relationship path (select.where on a
+    // non-connection relationship field).
+    it('should not overwrite outer WHERE params when selection has a relationship-where', async () => {
+      await model.update({
+        where: { id: 'book-id' },
+        update: { title: 'Updated' },
+        select: {
+          books: {
+            id: true,
+            hasStatus: {
+              where: { id: 'status-id' },
+              select: { id: true },
+            },
+          },
+        },
+      });
+
+      const params = getParams(mockSession);
+      expect(params.param0).toBe('book-id');
+      const statusKeys = Object.keys(params).filter(
+        (k) => params[k] === 'status-id',
+      );
+      expect(statusKeys).toHaveLength(1);
+      expect(statusKeys[0]).not.toBe('param0');
+    });
   });
 
   describe('backward compat: mutations without select', () => {

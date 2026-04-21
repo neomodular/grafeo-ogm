@@ -480,18 +480,23 @@ export class Model<
       params.labels,
     );
 
+    // Shared counter so the selection's connection-where params don't collide
+    // with anything the mutation compiler already emitted into mutParams.
+    const paramCounter = { count: 0 };
     let finalCypher: string;
     if (params.select)
       finalCypher = this.applySelectToMutation(
         cypher,
         params.select,
         mutParams,
+        paramCounter,
       );
     else
       finalCypher = this.applySelectionSetToMutation(
         cypher,
         params.selectionSet ?? this._selectionSet,
         mutParams,
+        paramCounter,
       );
 
     const result = await this.executor.execute(
@@ -562,12 +567,14 @@ export class Model<
         cypher,
         params.select,
         mutParams,
+        paramCounter,
       );
     else
       finalCypher = this.applySelectionSetToMutation(
         cypher,
         params.selectionSet ?? this._selectionSet,
         mutParams,
+        paramCounter,
       );
 
     const result = await this.executor.execute(
@@ -866,18 +873,23 @@ export class Model<
       params.labels,
     );
 
+    // Shared counter so the selection's connection-where params don't collide
+    // with anything already in mergeParams.
+    const paramCounter = { count: 0 };
     let finalCypher: string;
     if (params.select)
       finalCypher = this.applySelectToUpsert(
         cypher,
         params.select,
         mergeParams,
+        paramCounter,
       );
     else
       finalCypher = this.applySelectionSetToUpsert(
         cypher,
         params.selectionSet ?? this._selectionSet,
         mergeParams,
+        paramCounter,
       );
 
     const result = await this.executor.execute(
@@ -1225,6 +1237,7 @@ export class Model<
     cypher: string,
     selectionSet: string | DocumentNode | undefined,
     params: Record<string, unknown>,
+    paramCounter: { count: number },
   ): string {
     if (!selectionSet) return cypher;
 
@@ -1256,7 +1269,6 @@ export class Model<
       if (entityField) selection = entityField.children!;
     }
 
-    const paramCounter = { count: 0 };
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1278,6 +1290,7 @@ export class Model<
     cypher: string,
     select: Record<string, unknown>,
     params: Record<string, unknown>,
+    paramCounter: { count: number },
   ): string {
     const entitySelect = select[this.nodeDef.pluralName];
     if (!entitySelect || typeof entitySelect !== 'object') return cypher;
@@ -1286,7 +1299,6 @@ export class Model<
       entitySelect as Record<string, unknown>,
       this.nodeDef,
     );
-    const paramCounter = { count: 0 };
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1329,12 +1341,12 @@ export class Model<
     cypher: string,
     selectionSet: string | DocumentNode | undefined,
     params: Record<string, unknown>,
+    paramCounter: { count: number },
   ): string {
     if (!selectionSet) return cypher;
 
     const selection = this.parseSelectionSetCached(selectionSet);
 
-    const paramCounter = { count: 0 };
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1355,9 +1367,9 @@ export class Model<
     cypher: string,
     select: Record<string, unknown>,
     params: Record<string, unknown>,
+    paramCounter: { count: number },
   ): string {
     const selection = this.selectNormalizer.normalize(select, this.nodeDef);
-    const paramCounter = { count: 0 };
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
