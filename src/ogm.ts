@@ -186,20 +186,28 @@ export class OGM<
       PluralKey: infer PK extends string;
     }
       ? PK
-      : string
+      : string,
+    TModelMap[K] extends {
+      MutationSelectFields: infer MS extends Record<string, unknown>;
+    }
+      ? MS
+      : Record<string, unknown>,
+    TModelMap[K] extends { Sort: infer So }
+      ? So
+      : Record<string, 'ASC' | 'DESC'>
   >;
   /** @deprecated Legacy overload for backward compatibility with @neo4j/graphql-ogm. Use the single-generic overload instead. */
   model<_T, K extends string>(
     name: K,
-  ): Model<any, any, any, any, any, any, any, any, any>;
+  ): Model<any, any, any, any, any, any, any, any, any, any, any>;
   model<T = Record<string, unknown>>(
     name: string,
-  ): Model<T, any, any, any, any, any, any, any, any>;
+  ): Model<T, any, any, any, any, any, any, any, any, any, any>;
   model(
     name: string,
   ):
-    | Model<any, any, any, any, any, any, any, any, any>
-    | InterfaceModel<any, any> {
+    | Model<any, any, any, any, any, any, any, any, any, any, any>
+    | InterfaceModel<any, any, any> {
     const existing = this.models.get(name);
     if (existing) return existing;
 
@@ -246,12 +254,15 @@ export class OGM<
       : Record<string, unknown>,
     TInterfaceModelMap[K] extends { Where: infer W }
       ? W
-      : Record<string, unknown>
+      : Record<string, unknown>,
+    TInterfaceModelMap[K] extends { Sort: infer So }
+      ? So
+      : Record<string, 'ASC' | 'DESC'>
   >;
   interfaceModel<T = Record<string, unknown>>(name: string): InterfaceModel<T>;
-  interfaceModel(name: string): InterfaceModel<any, any> {
+  interfaceModel(name: string): InterfaceModel<any, any, any> {
     const existing = this.interfaceModels.get(name);
-    if (existing) return existing as InterfaceModel<any, any>;
+    if (existing) return existing as InterfaceModel<any, any, any>;
 
     const interfaceDef = this.schema.interfaces.get(name);
     if (!interfaceDef) throw new OGMError(`Unknown interface type: ${name}`);

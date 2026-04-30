@@ -21,10 +21,10 @@ import {
   mergeParams,
 } from './utils/validation';
 
-interface FindOptions {
+interface FindOptions<TSort = Record<string, 'ASC' | 'DESC'>> {
   limit?: number;
   offset?: number;
-  sort?: Array<Record<string, 'ASC' | 'DESC'>>;
+  sort?: TSort[];
 }
 
 /** A single fulltext index query entry */
@@ -106,13 +106,14 @@ export interface ModelInterface<
   TPluralKey extends string = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TMutationSelect extends Record<string, unknown> = any,
+  TSort = Record<string, 'ASC' | 'DESC'>,
 > {
   find(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: FindOptions;
+    options?: FindOptions<TSort>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T[]>;
@@ -150,7 +151,7 @@ export interface ModelInterface<
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T | null>;
@@ -166,7 +167,7 @@ export interface ModelInterface<
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T>;
@@ -279,6 +280,7 @@ export class Model<
   TPluralKey extends string = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TMutationSelect extends Record<string, unknown> = any,
+  TSort = Record<string, 'ASC' | 'DESC'>,
 > implements ModelInterface<
   T,
   TSelect,
@@ -289,7 +291,8 @@ export class Model<
   TDisconnectInput,
   TDeleteInput,
   TPluralKey,
-  TMutationSelect
+  TMutationSelect,
+  TSort
 > {
   private _selectionSet: string | undefined;
   private _parsedSelection: SelectionNode[] | undefined;
@@ -361,7 +364,7 @@ export class Model<
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: FindOptions;
+    options?: FindOptions<TSort>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T[]> {
@@ -776,7 +779,7 @@ export class Model<
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T | null> {
@@ -802,7 +805,7 @@ export class Model<
     selectionSet?: string | DocumentNode;
     select?: TSelect;
     labels?: string[];
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
   }): Promise<T> {
@@ -1383,14 +1386,16 @@ export class Model<
   }
 
   private compileOptions(
-    options: FindOptions,
+    options: FindOptions<TSort>,
     params: Record<string, unknown>,
   ): string {
     const parts: string[] = [];
 
     if (options.sort && options.sort.length > 0) {
       const sortItems = options.sort.map((sortObj) => {
-        const [field, direction] = Object.entries(sortObj)[0];
+        const [field, direction] = Object.entries(
+          sortObj as Record<string, string>,
+        )[0];
         assertSafeIdentifier(field, 'sort field');
         const validDirection = assertSortDirection(direction);
         return `n.${escapeIdentifier(field)} ${validDirection}`;

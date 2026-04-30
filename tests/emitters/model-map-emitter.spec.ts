@@ -106,6 +106,28 @@ describe('emitModelDeclarations', () => {
     expect(output).toMatch(/'books',\s*BookMutationSelectFields/);
   });
 
+  it('should include Sort as 11th generic parameter', () => {
+    const schema = makeSchema(
+      new Map([['Book', makeNodeDef('Book', 'books')]]),
+    );
+    const output = emitModelDeclarations(schema);
+
+    expect(output).toContain('BookSort');
+    // Should follow MutationSelectFields with a trailing comma
+    expect(output).toMatch(/BookMutationSelectFields,\s*BookSort/);
+  });
+
+  it('should pass Sort to InterfaceModelInterface', () => {
+    const schema = makeSchema(
+      new Map([['User', makeNodeDef('User', 'users')]]),
+      new Map([['Entity', makeInterfaceDef('Entity')]]),
+    );
+    const output = emitModelDeclarations(schema);
+
+    expect(output).toContain('EntitySort');
+    expect(output).toMatch(/EntityWhere,\s*EntitySort/);
+  });
+
   it('should emit InterfaceModelInterface type for each interface', () => {
     const schema = makeSchema(
       new Map([['User', makeNodeDef('User', 'users')]]),
@@ -253,6 +275,25 @@ describe('emitModelMap', () => {
     expect(output).toContain('MutationSelectFields: BookMutationSelectFields;');
   });
 
+  it('should include Sort in ModelMap entries for nodes', () => {
+    const schema = makeSchema(
+      new Map([['Book', makeNodeDef('Book', 'books')]]),
+    );
+    const output = emitModelMap(schema);
+
+    expect(output).toContain('Sort: BookSort;');
+  });
+
+  it('should include Sort in ModelMap entries for interfaces', () => {
+    const schema = makeSchema(
+      new Map([['User', makeNodeDef('User', 'users')]]),
+      new Map([['Entity', makeInterfaceDef('Entity')]]),
+    );
+    const output = emitModelMap(schema);
+
+    expect(output).toContain('Sort: EntitySort;');
+  });
+
   it('should include interfaces in ModelMap with correct type references', () => {
     const schema = makeSchema(
       new Map([['User', makeNodeDef('User', 'users')]]),
@@ -282,6 +323,7 @@ describe('emitInterfaceModelMap', () => {
     expect(output).toContain('Entity: {');
     expect(output).toContain('Type: Entity;');
     expect(output).toContain('Where: EntityWhere;');
+    expect(output).toContain('Sort: EntitySort;');
   });
 
   it('should NOT include nodes in InterfaceModelMap', () => {

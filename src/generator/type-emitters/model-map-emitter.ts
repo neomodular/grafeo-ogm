@@ -16,7 +16,9 @@ import { nodeHasAnyFulltext } from './fulltext-emitter';
  *   BookConnectInput,
  *   BookDisconnectInput,
  *   BookDeleteInput,
- *   'books'
+ *   'books',
+ *   BookMutationSelectFields,
+ *   BookSort
  * >;
  * ```
  *
@@ -119,7 +121,8 @@ function buildModelType(
     `  ${disconnectType},`,
     `  ${deleteType},`,
     `  '${pluralName}',`,
-    `  ${typeName}MutationSelectFields`,
+    `  ${typeName}MutationSelectFields,`,
+    `  ${typeName}Sort`,
     `>`,
   ].join('\n');
 
@@ -148,12 +151,14 @@ function buildModelTypeWithTypedFulltext(
   // We only re-declare what we need to change. The shared parameter shapes
   // are inlined to stay decoupled from the non-exported runtime
   // `FindOptions`; `ExecutionContext` is imported from the package.
+  const sort = `${typeName}Sort`;
+
   const findParams = `{
     where?: ${where};
     selectionSet?: string | DocumentNode;
     select?: ${select};
     labels?: string[];
-    options?: { limit?: number; offset?: number; sort?: Array<Record<string, 'ASC' | 'DESC'>> };
+    options?: { limit?: number; offset?: number; sort?: Array<${sort}> };
     fulltext?: ${fulltextInput};
     context?: ExecutionContext;
   }`;
@@ -163,7 +168,7 @@ function buildModelTypeWithTypedFulltext(
     selectionSet?: string | DocumentNode;
     select?: ${select};
     labels?: string[];
-    options?: { offset?: number; sort?: Array<Record<string, 'ASC' | 'DESC'>> };
+    options?: { offset?: number; sort?: Array<${sort}> };
     fulltext?: ${fulltextInput};
     context?: ExecutionContext;
   }`;
@@ -201,7 +206,8 @@ function buildInterfaceModelType(ifaceName: string): string {
   return [
     `export type ${ifaceName}Model = InterfaceModelInterface<`,
     `  ${ifaceName},`,
-    `  ${ifaceName}Where`,
+    `  ${ifaceName}Where,`,
+    `  ${ifaceName}Sort`,
     `>;`,
   ].join('\n');
 }
@@ -232,6 +238,7 @@ function buildModelMapEntry(
     `    DisconnectInput: ${disconnectType};`,
     `    DeleteInput: ${deleteType};`,
     `    PluralKey: '${pluralName}';`,
+    `    Sort: ${typeName}Sort;`,
     `  };`,
   ].join('\n');
 }
@@ -248,6 +255,7 @@ function buildInterfaceAsModelMapEntry(ifaceName: string): string {
     `    DisconnectInput: Record<string, never>;`,
     `    DeleteInput: Record<string, never>;`,
     `    PluralKey: never;`,
+    `    Sort: ${ifaceName}Sort;`,
     `  };`,
   ].join('\n');
 }
@@ -257,6 +265,7 @@ function buildInterfaceModelMapEntry(ifaceName: string): string {
     `  ${ifaceName}: {`,
     `    Type: ${ifaceName};`,
     `    Where: ${ifaceName}Where;`,
+    `    Sort: ${ifaceName}Sort;`,
     `  };`,
   ].join('\n');
 }

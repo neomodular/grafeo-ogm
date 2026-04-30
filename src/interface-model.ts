@@ -25,10 +25,10 @@ import {
   mergeParams,
 } from './utils/validation';
 
-interface FindOptions {
+interface FindOptions<TSort = Record<string, 'ASC' | 'DESC'>> {
   limit?: number;
   offset?: number;
-  sort?: Array<Record<string, 'ASC' | 'DESC'>>;
+  sort?: TSort[];
 }
 
 import type { QueryCompilers } from './model';
@@ -43,11 +43,15 @@ export type InterfaceModelCompilers = QueryCompilers;
  * Public-facing interface for InterfaceModel — used in generated type aliases.
  * Excludes internal class properties so jest.Mocked<XModel> only requires find/aggregate.
  */
-export interface InterfaceModelInterface<T = any, TWhere = any> {
+export interface InterfaceModelInterface<
+  T = any,
+  TWhere = any,
+  TSort = Record<string, 'ASC' | 'DESC'>,
+> {
   find(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: FindOptions;
+    options?: FindOptions<TSort>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<(T & { __typename: string })[]>;
@@ -62,7 +66,7 @@ export interface InterfaceModelInterface<T = any, TWhere = any> {
   findFirst?(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<(T & { __typename: string }) | null>;
@@ -77,7 +81,7 @@ export interface InterfaceModelInterface<T = any, TWhere = any> {
   findFirstOrThrow?(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<T & { __typename: string }>;
@@ -99,7 +103,8 @@ export interface InterfaceModelInterface<T = any, TWhere = any> {
 export class InterfaceModel<
   T = Record<string, unknown>,
   TWhere = any,
-> implements InterfaceModelInterface<T, TWhere> {
+  TSort = Record<string, 'ASC' | 'DESC'>,
+> implements InterfaceModelInterface<T, TWhere, TSort> {
   private whereCompiler: WhereCompiler;
   private selectionCompiler: SelectionCompiler;
   private fulltextCompiler: FulltextCompiler;
@@ -126,7 +131,7 @@ export class InterfaceModel<
   async find(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: FindOptions;
+    options?: FindOptions<TSort>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<(T & { __typename: string })[]> {
@@ -194,7 +199,9 @@ export class InterfaceModel<
     if (params?.options) {
       if (params.options.sort?.length) {
         const sortItems = params.options.sort.map((sortObj) => {
-          const [field, direction] = Object.entries(sortObj)[0];
+          const [field, direction] = Object.entries(
+            sortObj as Record<string, string>,
+          )[0];
           assertSafeIdentifier(field, 'sort field');
           const validDirection = assertSortDirection(direction);
           return `n.${escapeIdentifier(field)} ${validDirection}`;
@@ -300,7 +307,7 @@ export class InterfaceModel<
   async findFirst(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<(T & { __typename: string }) | null> {
@@ -323,7 +330,7 @@ export class InterfaceModel<
   async findFirstOrThrow(params?: {
     where?: TWhere;
     selectionSet?: string | DocumentNode;
-    options?: Omit<FindOptions, 'limit'>;
+    options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
   }): Promise<T & { __typename: string }> {

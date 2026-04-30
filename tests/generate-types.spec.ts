@@ -261,9 +261,17 @@ describe('generateTypes', () => {
       expect(content).toContain('export type AuthorSort');
     });
 
+    it('emits Sort types for interfaces', () => {
+      expect(content).toContain('export type EntitySort');
+    });
+
     it('emits Options types', () => {
       expect(content).toContain('export type BookOptions');
       expect(content).toContain('export type AuthorOptions');
+    });
+
+    it('emits Options types for interfaces', () => {
+      expect(content).toContain('export type EntityOptions');
     });
 
     // --- Connection & Edge ---
