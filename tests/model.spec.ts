@@ -265,6 +265,83 @@ describe('Model', () => {
       expect((params.options_limit as any).toInt()).toBe(25);
     });
 
+    it('should emit CALL subquery + WITH + ORDER BY alias for an @cypher sort', async () => {
+      // Build a Drug model with one @cypher sortable field. Isolated from
+      // the shared bookNode fixture so we can assert exact Cypher.
+      const drugNode = nodeDef('Drug', [
+        prop('id'),
+        prop('drugName'),
+        prop('insensitiveDrugName', {
+          isCypher: true,
+          cypherStatement:
+            'RETURN toLower(this.drugName) AS insensitiveDrugName',
+          cypherColumnName: 'insensitiveDrugName',
+        }),
+      ]);
+      const drugSchema: SchemaMetadata = {
+        nodes: new Map([['Drug', drugNode]]),
+        interfaces: new Map(),
+        relationshipProperties: new Map(),
+        enums: new Map(),
+        unions: new Map(),
+      };
+      const fresh = createMockDriver();
+      mockSession = fresh.mockSession;
+      const drugModel = new Model(drugNode, drugSchema, fresh.mockDriver);
+
+      await drugModel.find({
+        options: { sort: [{ insensitiveDrugName: 'ASC' }] },
+      });
+
+      const cypher = getCypher(mockSession);
+      expect(cypher).toContain('CALL {\n  WITH n\n  WITH n AS this');
+      expect(cypher).toContain(
+        'RETURN toLower(this.drugName) AS insensitiveDrugName',
+      );
+      expect(cypher).toContain(
+        'WITH n, `insensitiveDrugName` AS __sort_insensitiveDrugName',
+      );
+      expect(cypher).toContain('ORDER BY __sort_insensitiveDrugName ASC');
+
+      // The pre-RETURN block must come BEFORE the RETURN clause.
+      const preIdx = cypher.indexOf('CALL {');
+      const returnIdx = cypher.indexOf('RETURN n {');
+      const orderByIdx = cypher.indexOf('ORDER BY');
+      expect(preIdx).toBeGreaterThan(-1);
+      expect(returnIdx).toBeGreaterThan(preIdx);
+      expect(orderByIdx).toBeGreaterThan(returnIdx);
+    });
+
+    it('should mix stored and @cypher sorts in a single ORDER BY', async () => {
+      const drugNode = nodeDef('Drug', [
+        prop('id'),
+        prop('drugName'),
+        prop('lname', {
+          isCypher: true,
+          cypherStatement: 'RETURN toLower(this.drugName) AS lname',
+        }),
+      ]);
+      const drugSchema: SchemaMetadata = {
+        nodes: new Map([['Drug', drugNode]]),
+        interfaces: new Map(),
+        relationshipProperties: new Map(),
+        enums: new Map(),
+        unions: new Map(),
+      };
+      const fresh = createMockDriver();
+      mockSession = fresh.mockSession;
+      const drugModel = new Model(drugNode, drugSchema, fresh.mockDriver);
+
+      await drugModel.find({
+        options: {
+          sort: [{ lname: 'ASC' }, { drugName: 'DESC' }],
+        },
+      });
+
+      const cypher = getCypher(mockSession);
+      expect(cypher).toContain('ORDER BY __sort_lname ASC, n.`drugName` DESC');
+    });
+
     it('should throw when both select and selectionSet are provided', async () => {
       await expect(
         model.find({

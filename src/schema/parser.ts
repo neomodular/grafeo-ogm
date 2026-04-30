@@ -243,6 +243,16 @@ function parseField(
     defaultValue,
   };
 
+  if (cypherDirective) {
+    const statement = getDirectiveArgStringValue(cypherDirective, 'statement');
+    if (statement) prop.cypherStatement = statement;
+    const columnName = getDirectiveArgStringValue(
+      cypherDirective,
+      'columnName',
+    );
+    if (columnName) prop.cypherColumnName = columnName;
+  }
+
   return { property: prop };
 }
 

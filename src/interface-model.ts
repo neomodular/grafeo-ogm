@@ -17,10 +17,10 @@ import {
   SchemaMetadata,
   WhereInput,
 } from './schema/types';
+import { compileSortClause } from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
-  assertSortDirection,
   escapeIdentifier,
   mergeParams,
 } from './utils/validation';
@@ -193,29 +193,35 @@ export class InterfaceModel<
     );
     // Inject __typename into the projection: "n { .id, .name }" → "n { .id, .name, __typename: __typename }"
     const injected = returnClause.replace(/\}$/, ', __typename: __typename }');
-    cypherParts.push(`RETURN ${injected}`);
 
-    // OPTIONS
-    if (params?.options) {
-      if (params.options.sort?.length) {
-        const sortItems = params.options.sort.map((sortObj) => {
-          const [field, direction] = Object.entries(
-            sortObj as Record<string, string>,
-          )[0];
-          assertSafeIdentifier(field, 'sort field');
-          const validDirection = assertSortDirection(direction);
-          return `n.${escapeIdentifier(field)} ${validDirection}`;
-        });
-        cypherParts.push(`ORDER BY ${sortItems.join(', ')}`);
-      }
-      if (params.options.offset !== undefined) {
-        allParams.options_offset = neo4jInt(params.options.offset);
-        cypherParts.push(`SKIP $options_offset`);
-      }
-      if (params.options.limit !== undefined) {
-        allParams.options_limit = neo4jInt(params.options.limit);
-        cypherParts.push(`LIMIT $options_limit`);
-      }
+    // OPTIONS — sort `pre` (CALL subqueries + WITH for `@cypher` sorts) is
+    // injected BEFORE the RETURN so the projected aliases are in scope; the
+    // WITH must preserve `__typename` (already in scope from the typename
+    // resolution step above).
+    let sortPre = '';
+    let sortOrderBy = '';
+    if (params?.options?.sort?.length) {
+      const compiled = compileSortClause({
+        sort: params.options.sort as ReadonlyArray<Record<string, unknown>>,
+        nodeVar: 'n',
+        propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
+        preserveVars: ['__typename'],
+      });
+      sortPre = compiled.pre;
+      sortOrderBy = compiled.orderBy;
+    }
+
+    if (sortPre) cypherParts.push(sortPre);
+    cypherParts.push(`RETURN ${injected}`);
+    if (sortOrderBy) cypherParts.push(sortOrderBy);
+
+    if (params?.options?.offset !== undefined) {
+      allParams.options_offset = neo4jInt(params.options.offset);
+      cypherParts.push(`SKIP $options_offset`);
+    }
+    if (params?.options?.limit !== undefined) {
+      allParams.options_limit = neo4jInt(params.options.limit);
+      cypherParts.push(`LIMIT $options_limit`);
     }
 
     const cypher = cypherParts.join('\n');

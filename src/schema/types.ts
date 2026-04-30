@@ -24,6 +24,8 @@ export interface PropertyDefinition {
   isGenerated: boolean; // @id directive
   isUnique: boolean; // @unique directive
   isCypher: boolean; // @cypher directive (computed field, not stored)
+  cypherStatement?: string; // @cypher(statement: "...") — the user's Cypher subquery body
+  cypherColumnName?: string; // @cypher(columnName: "...") — column to project (defaults to the field name)
   directives: string[]; // Directive names (e.g., ['id', 'unique'])
   defaultValue?: string; // @default directive
 }

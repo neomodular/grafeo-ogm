@@ -551,6 +551,48 @@ describe('parseSchema - @cypher fields', () => {
     expect(insensitiveProp.type).toBe('String');
     expect(insensitiveProp.required).toBe(true);
   });
+
+  it('should capture statement and columnName from @cypher directive', () => {
+    const schema = `
+      type Drug {
+        id: ID!
+        drugName: String!
+        insensitiveDrugName: String
+          @cypher(
+            statement: "RETURN toLower(this.drugName) AS insensitiveDrugName"
+            columnName: "insensitiveDrugName"
+          )
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const drug = metadata.nodes.get('Drug')!;
+    const cypherProp = drug.properties.get('insensitiveDrugName')!;
+
+    expect(cypherProp.isCypher).toBe(true);
+    expect(cypherProp.cypherStatement).toBe(
+      'RETURN toLower(this.drugName) AS insensitiveDrugName',
+    );
+    expect(cypherProp.cypherColumnName).toBe('insensitiveDrugName');
+  });
+
+  it('should leave cypherColumnName undefined when not provided', () => {
+    const schema = `
+      type Drug {
+        id: ID!
+        drugName: String!
+        upper: String
+          @cypher(statement: "RETURN toUpper(this.drugName) AS upper")
+      }
+    `;
+    const metadata = parseSchema(schema);
+    const cypherProp = metadata.nodes.get('Drug')!.properties.get('upper')!;
+
+    expect(cypherProp.isCypher).toBe(true);
+    expect(cypherProp.cypherStatement).toBe(
+      'RETURN toUpper(this.drugName) AS upper',
+    );
+    expect(cypherProp.cypherColumnName).toBeUndefined();
+  });
 });
 
 describe('parseSchema - @id and @unique directives', () => {

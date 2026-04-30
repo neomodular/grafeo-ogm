@@ -13,10 +13,10 @@ import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
+import { compileSortClause } from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
-  assertSortDirection,
   escapeIdentifier,
   mergeParams,
 } from './utils/validation';
@@ -446,13 +446,17 @@ export class Model<
       allParams,
       paramCounter,
     );
-    cypherParts.push(`RETURN ${returnClause}`);
 
-    // OPTIONS (sort, limit, offset)
-    if (params?.options) {
-      const optCypher = this.compileOptions(params.options, allParams);
-      if (optCypher) cypherParts.push(optCypher);
-    }
+    // OPTIONS (sort, limit, offset) — `pre` holds CALL subqueries + WITH
+    // projections for any `@cypher` sorts and must be inserted BEFORE the
+    // RETURN; `post` is the trailing ORDER BY / SKIP / LIMIT.
+    const opts = params?.options
+      ? this.compileOptions(params.options, allParams)
+      : { pre: '', post: '' };
+
+    if (opts.pre) cypherParts.push(opts.pre);
+    cypherParts.push(`RETURN ${returnClause}`);
+    if (opts.post) cypherParts.push(opts.post);
 
     const cypher = cypherParts.join('\n');
     const result = await this.executor.execute(
@@ -1388,19 +1392,18 @@ export class Model<
   private compileOptions(
     options: FindOptions<TSort>,
     params: Record<string, unknown>,
-  ): string {
-    const parts: string[] = [];
+  ): { pre: string; post: string } {
+    const postParts: string[] = [];
+    let pre = '';
 
     if (options.sort && options.sort.length > 0) {
-      const sortItems = options.sort.map((sortObj) => {
-        const [field, direction] = Object.entries(
-          sortObj as Record<string, string>,
-        )[0];
-        assertSafeIdentifier(field, 'sort field');
-        const validDirection = assertSortDirection(direction);
-        return `n.${escapeIdentifier(field)} ${validDirection}`;
+      const compiled = compileSortClause({
+        sort: options.sort as ReadonlyArray<Record<string, unknown>>,
+        nodeVar: 'n',
+        propertyLookup: (field) => this.nodeDef.properties.get(field),
       });
-      parts.push(`ORDER BY ${sortItems.join(', ')}`);
+      pre = compiled.pre;
+      if (compiled.orderBy) postParts.push(compiled.orderBy);
     }
 
     if (options.offset != null) {
@@ -1408,7 +1411,7 @@ export class Model<
       if (!Number.isFinite(offset) || offset < 0)
         throw new OGMError('offset must be a non-negative integer');
       params.options_offset = neo4jInt(offset);
-      parts.push(`SKIP $options_offset`);
+      postParts.push(`SKIP $options_offset`);
     }
 
     if (options.limit != null) {
@@ -1418,9 +1421,9 @@ export class Model<
       // Cap at 10,000 to prevent runaway queries
       const MAX_LIMIT = 10_000;
       params.options_limit = neo4jInt(Math.min(limit, MAX_LIMIT));
-      parts.push(`LIMIT $options_limit`);
+      postParts.push(`LIMIT $options_limit`);
     }
 
-    return parts.join('\n');
+    return { pre, post: postParts.join('\n') };
   }
 }
