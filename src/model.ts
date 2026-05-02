@@ -147,6 +147,7 @@ export interface ModelInterface<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TMutationSelect extends Record<string, unknown> = any,
   TSort = Record<string, 'ASC' | 'DESC'>,
+  TFulltext = FulltextInput,
 > {
   find(params?: {
     where?: TWhere;
@@ -154,7 +155,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     options?: FindOptions<TSort>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T[]>;
@@ -187,7 +188,7 @@ export interface ModelInterface<
     where?: TWhere;
     aggregate: { count?: boolean; [field: string]: boolean | undefined };
     labels?: string[];
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }>;
@@ -197,7 +198,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     options?: Omit<FindOptions<TSort>, 'limit'>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T | null>;
@@ -215,7 +216,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     options?: Omit<FindOptions<TSort>, 'limit'>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T>;
@@ -230,7 +231,7 @@ export interface ModelInterface<
   count?(params?: {
     where?: TWhere;
     labels?: string[];
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number>;
@@ -337,6 +338,7 @@ export class Model<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TMutationSelect extends Record<string, unknown> = any,
   TSort = Record<string, 'ASC' | 'DESC'>,
+  TFulltext = FulltextInput,
 > implements ModelInterface<
   T,
   TSelect,
@@ -348,7 +350,8 @@ export class Model<
   TDeleteInput,
   TPluralKey,
   TMutationSelect,
-  TSort
+  TSort,
+  TFulltext
 > {
   private _selectionSet: string | undefined;
   private _parsedSelection: SelectionNode[] | undefined;
@@ -528,7 +531,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     options?: FindOptions<TSort>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T[]> {
@@ -888,7 +891,7 @@ export class Model<
     where?: TWhere;
     aggregate: { count?: boolean; [field: string]: boolean | undefined };
     labels?: string[];
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }> {
@@ -1058,7 +1061,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     options?: Omit<FindOptions<TSort>, 'limit'>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T | null> {
@@ -1086,7 +1089,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     options?: Omit<FindOptions<TSort>, 'limit'>;
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T> {
@@ -1121,7 +1124,7 @@ export class Model<
   async count(params?: {
     where?: TWhere;
     labels?: string[];
-    fulltext?: FulltextInput;
+    fulltext?: TFulltext;
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number> {

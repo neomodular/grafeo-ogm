@@ -343,17 +343,26 @@ describe('generateTypes', () => {
       expect(content).toContain('| BookFulltextLeaf');
     });
 
-    it('threads per-node FulltextInput into the generated BookModel.find signature', () => {
-      // The typed override must reference BookFulltextInput, not the loose
-      // global FulltextInput.
-      expect(content).toContain('fulltext?: BookFulltextInput;');
+    it('threads per-node FulltextInput as the 12th generic of BookModel', () => {
+      // From v1.7.0-beta.2: <Node>FulltextInput is passed as the TFulltext
+      // generic on ModelInterface, not via an Omit-and-override hack. The
+      // generic threading flows fulltext typing into every method that
+      // accepts a fulltext param — find/findFirst/findFirstOrThrow/count/
+      // aggregate — without per-method redeclaration.
+      expect(content).toContain('export type BookModel = ModelInterface<');
+      expect(content).toContain('BookSort,\n  BookFulltextInput\n>');
+      expect(content).not.toContain('export type BookModel = Omit<');
+      // The generated alias must not redeclare the fulltext param shape.
+      expect(content).not.toContain('fulltext?: BookFulltextInput;');
       expect(content).not.toContain('fulltext?: FulltextInput;');
     });
 
-    it('nodes without fulltext keep the plain ModelInterface alias', () => {
-      // Author has no @fulltext index — its model must NOT be wrapped
-      // in the Omit<>-based override.
+    it('nodes without fulltext keep the plain ModelInterface alias (no 12th generic)', () => {
+      // Author has no @fulltext index — its model alias stops at TSort
+      // (the 11th generic) and the runtime default `TFulltext = FulltextInput`
+      // applies.
       expect(content).toContain('export type AuthorModel = ModelInterface<');
+      expect(content).not.toContain('AuthorFulltextInput');
       expect(content).not.toMatch(/export type AuthorModel = Omit</);
     });
 

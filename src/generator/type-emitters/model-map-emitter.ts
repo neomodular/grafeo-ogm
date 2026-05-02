@@ -5,7 +5,16 @@ import { nodeHasAnyFulltext } from './fulltext-emitter';
  * Emits a model declaration type for each node type, wrapping the generic
  * `ModelInterface` from `grafeo-ogm` with the correct type parameters.
  *
- * Example output:
+ * When the node has at least one fulltext index (directly or via a
+ * relationship-properties type), `<Node>FulltextInput` is passed as the
+ * 12th generic (`TFulltext`) on `ModelInterface`. That threads typed
+ * fulltext inputs into every method that accepts `fulltext` — `find`,
+ * `findFirst`, `findFirstOrThrow`, `count`, `aggregate` — without
+ * per-method redeclaration. Logical operators (`OR`/`AND`/`NOT`) recurse
+ * over the same per-node input, so typos in index names surface as
+ * compile errors at any nesting level.
+ *
+ * Example output (with fulltext):
  * ```typescript
  * export type BookModel = ModelInterface<
  *   Book,
@@ -18,15 +27,10 @@ import { nodeHasAnyFulltext } from './fulltext-emitter';
  *   BookDeleteInput,
  *   'books',
  *   BookMutationSelectFields,
- *   BookSort
+ *   BookSort,
+ *   BookFulltextInput
  * >;
  * ```
- *
- * When the node has at least one fulltext index (directly or via a
- * relationship-properties type), the fulltext-accepting methods (`find`,
- * `findFirst`, `findFirstOrThrow`, `count`, `aggregate`) are re-declared with
- * a narrowed `fulltext?: <Node>FulltextInput` so users get autocomplete and
- * typo-checking on index names.
  */
 export function emitModelDeclarations(schema: SchemaMetadata): string {
   const blocks: string[] = [];
@@ -110,6 +114,8 @@ function buildModelType(
     ? `${typeName}DeleteInput`
     : 'Record<string, never>';
 
+  const fulltextGeneric = hasFulltext ? `,\n  ${typeName}FulltextInput` : '';
+
   const baseAlias = [
     `ModelInterface<`,
     `  ${typeName},`,
@@ -122,84 +128,11 @@ function buildModelType(
     `  ${deleteType},`,
     `  '${pluralName}',`,
     `  ${typeName}MutationSelectFields,`,
-    `  ${typeName}Sort`,
+    `  ${typeName}Sort${fulltextGeneric}`,
     `>`,
   ].join('\n');
 
-  if (!hasFulltext) return `export type ${typeName}Model = ${baseAlias};`;
-
-  return buildModelTypeWithTypedFulltext(typeName, baseAlias);
-}
-
-/**
- * Builds a `<Node>Model` alias that keeps every method from `ModelInterface`
- * but replaces the `fulltext` parameter with the node-specific
- * `<Node>FulltextInput`, giving users autocomplete + typo-checking on
- * index names.
- *
- * Uses `Omit<..., 'find' | ...>` to strip the loose variants from the base,
- * then intersects with the refined signatures.
- */
-function buildModelTypeWithTypedFulltext(
-  typeName: string,
-  baseAlias: string,
-): string {
-  const fulltextInput = `${typeName}FulltextInput`;
-  const where = `${typeName}Where`;
-  const select = `${typeName}SelectFields`;
-
-  // We only re-declare what we need to change. The shared parameter shapes
-  // are inlined to stay decoupled from the non-exported runtime
-  // `FindOptions`; `ExecutionContext` is imported from the package.
-  const sort = `${typeName}Sort`;
-
-  const findParams = `{
-    where?: ${where};
-    selectionSet?: string | DocumentNode;
-    select?: ${select};
-    labels?: string[];
-    options?: { limit?: number; offset?: number; sort?: Array<${sort}> };
-    fulltext?: ${fulltextInput};
-    context?: ExecutionContext;
-  }`;
-
-  const findFirstParams = `{
-    where?: ${where};
-    selectionSet?: string | DocumentNode;
-    select?: ${select};
-    labels?: string[];
-    options?: { offset?: number; sort?: Array<${sort}> };
-    fulltext?: ${fulltextInput};
-    context?: ExecutionContext;
-  }`;
-
-  const countParams = `{
-    where?: ${where};
-    labels?: string[];
-    fulltext?: ${fulltextInput};
-    context?: ExecutionContext;
-  }`;
-
-  const aggregateParams = `{
-    where?: ${where};
-    aggregate: { count?: boolean; [field: string]: boolean | undefined };
-    labels?: string[];
-    fulltext?: ${fulltextInput};
-    context?: ExecutionContext;
-  }`;
-
-  return [
-    `export type ${typeName}Model = Omit<`,
-    `  ${baseAlias.split('\n').join('\n  ')},`,
-    `  'find' | 'findFirst' | 'findFirstOrThrow' | 'count' | 'aggregate'`,
-    `> & {`,
-    `  find(params?: ${findParams}): Promise<${typeName}[]>;`,
-    `  findFirst(params?: ${findFirstParams}): Promise<${typeName} | null>;`,
-    `  findFirstOrThrow(params?: ${findFirstParams}): Promise<${typeName}>;`,
-    `  count(params?: ${countParams}): Promise<number>;`,
-    `  aggregate(params: ${aggregateParams}): Promise<{ count?: number; [field: string]: unknown }>;`,
-    `};`,
-  ].join('\n');
+  return `export type ${typeName}Model = ${baseAlias};`;
 }
 
 function buildInterfaceModelType(ifaceName: string): string {

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.0-beta.2] (2026-05-02)
+
+> **BETA — type-safety hardening.** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.
+
+### Changed
+
+- **`ModelInterface` and `Model` gain a 12th generic `TFulltext`**, defaulting to the loose `FulltextInput`. The generated type file now passes `<Node>FulltextInput` as that generic for every node with a fulltext index (direct or via a relationship-properties type). The previous `Omit<..., 'find' | ...> & { find(...) }` override pattern is gone — typed fulltext flows through `find`, `findFirst`, `findFirstOrThrow`, `count`, and `aggregate` purely via generic substitution. Same mechanism `<Node>Sort` already used.
+- **Result: typos in fulltext index names are now compile errors at every nesting level**, including inside `OR` / `AND` / `NOT` logical compositions. The recursive `<Node>FulltextInput` shape closes over the per-node leaf, so `{ OR: [{ TpoIndex: { phrase: '...' } }] }` fails type-checking against `<Node>FulltextInput[]`.
+- Public API surface: no breaking changes. The new `TFulltext` parameter has a default, so existing `Model<...>` consumers without the generated `<ModelMap>` see the same loose `FulltextInput` they always did. Generated types narrow it automatically.
+
 ## [1.7.0-beta.1] (2026-05-02)
 
 > **BETA — republish of beta.0 with no code changes.** Install with `npm install grafeo-ogm@beta`.

@@ -169,7 +169,7 @@ describe('emitModelDeclarations', () => {
       expect(output).not.toContain('export type CategoryModel = Omit<');
     });
 
-    it('nodes with fulltext indexes get Omit<ModelInterface<...>> + typed fulltext overrides', () => {
+    it('nodes with fulltext indexes thread <Node>FulltextInput as the 12th generic of ModelInterface', () => {
       const schema = makeSchema(
         new Map([
           [
@@ -184,26 +184,20 @@ describe('emitModelDeclarations', () => {
       );
       const output = emitModelDeclarations(schema);
 
-      expect(output).toContain('export type DrugModel = Omit<');
-      expect(output).toContain('ModelInterface<');
-      expect(output).toContain(
-        "'find' | 'findFirst' | 'findFirstOrThrow' | 'count' | 'aggregate'",
-      );
+      // New shape: a single `ModelInterface<...>` alias with the per-node
+      // fulltext input passed as the 12th generic — no Omit-and-override
+      // hack, no per-method redeclarations.
+      expect(output).toContain('export type DrugModel = ModelInterface<');
+      expect(output).toContain('DrugSort,\n  DrugFulltextInput\n>');
 
-      // All five fulltext-accepting methods are re-declared with the
-      // per-node input type.
-      expect(output).toContain('fulltext?: DrugFulltextInput;');
-      expect(output).toMatch(/find\(params\?:/);
-      expect(output).toMatch(/findFirst\(params\?:/);
-      expect(output).toMatch(/findFirstOrThrow\(params\?:/);
-      expect(output).toMatch(/count\(params\?:/);
-      expect(output).toMatch(/aggregate\(params:/);
-
-      // The generated signatures should NOT use the loose global FulltextInput.
+      // The Omit-and-override hack from <= v1.7.0-beta.1 must be gone.
+      expect(output).not.toContain('export type DrugModel = Omit<');
+      expect(output).not.toContain('fulltext?: DrugFulltextInput;');
+      // The generated alias should NOT mention the loose global FulltextInput.
       expect(output).not.toContain('fulltext?: FulltextInput;');
     });
 
-    it('nodes with only relationship-level fulltext also get the typed override', () => {
+    it('nodes with only relationship-level fulltext also thread the per-node fulltext generic', () => {
       const relationships = new Map([
         [
           'categories',
@@ -243,11 +237,14 @@ describe('emitModelDeclarations', () => {
 
       const output = emitModelDeclarations(schema);
 
-      expect(output).toContain('export type ArticleModel = Omit<');
-      expect(output).toContain('fulltext?: ArticleFulltextInput;');
+      expect(output).toContain('export type ArticleModel = ModelInterface<');
+      expect(output).toContain('ArticleSort,\n  ArticleFulltextInput\n>');
+      expect(output).not.toContain('export type ArticleModel = Omit<');
 
-      // Category has no fulltext anywhere → stays plain.
+      // Category has no fulltext anywhere → no 12th generic, defaults to
+      // the loose FulltextInput at the runtime base.
       expect(output).toContain('export type CategoryModel = ModelInterface<');
+      expect(output).not.toContain('CategoryFulltextInput');
     });
   });
 });
