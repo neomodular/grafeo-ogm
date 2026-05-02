@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.7.0-beta.3] (2026-05-02)
+
+> **BETA — type-safety hardening (continuation of beta.2).** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.
+
+### Fixed
+
+- **`ogm.model<K>(name)` now threads `<Node>FulltextInput` to the typed model.** v1.7.0-beta.2 added the `TFulltext` generic to `ModelInterface` and `Model`, but the `OGM<ModelMap>.model<K>(name)` overload still returned `Model<...>` with only 11 type arguments — the 12th was missing, so it defaulted to the loose `FulltextInput`. The chain `OGM<ModelMap> → ogm.model('Drug') → Drug.find({ fulltext })` silently fell back to the unsafe `FulltextInput` shape, defeating the whole point of beta.2.
+- **`ModelMap` entries gain a `Fulltext` key** when the node has a fulltext index (direct or via a relationship-properties type). The `OGM.model` overload reads `TModelMap[K]['Fulltext']` and passes it as the 12th generic to `Model`. Nodes without indexes omit the key and inherit the loose default.
+- **`OGMWithContext.model<K>` (returned from `withContext`)** received the same fix — typed fulltext now flows through the policy-bound model surface as well.
+
+### Result
+
+`Drug.find({ fulltext: { AND: [{ TpoIndex: { phrase: 'x' } }] } })` is now a compile error at ANY nesting depth. The previously-broken case the user reported on v1.7.0-beta.2 (autocomplete suggesting `phrase` and `score?` inside an `AND` array, hover showing `FulltextIndexEntry | FulltextRelationshipEntry`) is fixed — the cursor position is now correctly typed as `<Node>FulltextInput`.
+
+### Test coverage
+
+- Added regression tests in `tests/emitters/model-map-emitter.spec.ts` asserting `Fulltext: <Node>FulltextInput;` is present in `ModelMap` entries for nodes with indexes and absent for nodes without.
+
 ## [1.7.0-beta.2] (2026-05-02)
 
 > **BETA — type-safety hardening.** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.

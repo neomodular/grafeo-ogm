@@ -14,7 +14,12 @@ import { OGMError } from './errors';
 import { Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { InterfaceModel, InterfaceModelCompilers } from './interface-model';
-import { Model, ModelCompilers, ModelPolicyBinding } from './model';
+import {
+  FulltextInput,
+  Model,
+  ModelCompilers,
+  ModelPolicyBinding,
+} from './model';
 import { PolicyResolver } from './policy/resolver';
 import type {
   PoliciesByModel,
@@ -348,19 +353,20 @@ export class OGM<
       : Record<string, unknown>,
     TModelMap[K] extends { Sort: infer So }
       ? So
-      : Record<string, 'ASC' | 'DESC'>
+      : Record<string, 'ASC' | 'DESC'>,
+    TModelMap[K] extends { Fulltext: infer F } ? F : FulltextInput
   >;
   /** @deprecated Legacy overload for backward compatibility with @neo4j/graphql-ogm. Use the single-generic overload instead. */
   model<_T, K extends string>(
     name: K,
-  ): Model<any, any, any, any, any, any, any, any, any, any, any>;
+  ): Model<any, any, any, any, any, any, any, any, any, any, any, any>;
   model<T = Record<string, unknown>>(
     name: string,
-  ): Model<T, any, any, any, any, any, any, any, any, any, any>;
+  ): Model<T, any, any, any, any, any, any, any, any, any, any, any>;
   model(
     name: string,
   ):
-    | Model<any, any, any, any, any, any, any, any, any, any, any>
+    | Model<any, any, any, any, any, any, any, any, any, any, any, any>
     | InterfaceModel<any, any, any> {
     const existing = this.models.get(name);
     if (existing) return existing;
@@ -734,15 +740,16 @@ export class OGMWithContext<
       : Record<string, unknown>,
     TModelMap[K] extends { Sort: infer So }
       ? So
-      : Record<string, 'ASC' | 'DESC'>
+      : Record<string, 'ASC' | 'DESC'>,
+    TModelMap[K] extends { Fulltext: infer F } ? F : FulltextInput
   >;
   model<T = Record<string, unknown>>(
     name: string,
-  ): Model<T, any, any, any, any, any, any, any, any, any, any>;
+  ): Model<T, any, any, any, any, any, any, any, any, any, any, any>;
   model(
     name: string,
   ):
-    | Model<any, any, any, any, any, any, any, any, any, any, any>
+    | Model<any, any, any, any, any, any, any, any, any, any, any, any>
     | InterfaceModel<any, any, any> {
     const cached = this.cache.get(name);
     if (cached) return cached;

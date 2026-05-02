@@ -66,7 +66,10 @@ export function emitModelMap(schema: SchemaMetadata): string {
   for (const typeName of sortedNodes) {
     const node = schema.nodes.get(typeName)!;
     const hasRels = node.relationships.size > 0;
-    entries.push(buildModelMapEntry(typeName, node.pluralName, hasRels));
+    const hasFulltext = nodeHasAnyFulltext(node, schema);
+    entries.push(
+      buildModelMapEntry(typeName, node.pluralName, hasRels, hasFulltext),
+    );
   }
 
   // Include interfaces so ogm.model('InterfaceName') gets autocomplete
@@ -149,6 +152,7 @@ function buildModelMapEntry(
   typeName: string,
   pluralName: string,
   hasRels: boolean,
+  hasFulltext: boolean,
 ): string {
   const connectType = hasRels
     ? `${typeName}ConnectInput`
@@ -159,7 +163,7 @@ function buildModelMapEntry(
   const deleteType = hasRels
     ? `${typeName}DeleteInput`
     : 'Record<string, never>';
-  return [
+  const lines = [
     `  ${typeName}: {`,
     `    Type: ${typeName};`,
     `    SelectFields: ${typeName}SelectFields;`,
@@ -172,8 +176,10 @@ function buildModelMapEntry(
     `    DeleteInput: ${deleteType};`,
     `    PluralKey: '${pluralName}';`,
     `    Sort: ${typeName}Sort;`,
-    `  };`,
-  ].join('\n');
+  ];
+  if (hasFulltext) lines.push(`    Fulltext: ${typeName}FulltextInput;`);
+  lines.push(`  };`);
+  return lines.join('\n');
 }
 
 function buildInterfaceAsModelMapEntry(ifaceName: string): string {

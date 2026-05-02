@@ -281,6 +281,36 @@ describe('emitModelMap', () => {
     expect(output).toContain('Sort: BookSort;');
   });
 
+  it('includes Fulltext in ModelMap entries when the node has a fulltext index', () => {
+    // Without the Fulltext key on the ModelMap entry, ogm.model<K>(name) cannot
+    // thread <Node>FulltextInput as the 12th generic on Model — and the user's
+    // typed find({ fulltext }) silently falls back to the loose FulltextInput.
+    // Regression for v1.7.0-beta.3.
+    const schema = makeSchema(
+      new Map([
+        [
+          'Drug',
+          makeNodeDef('Drug', 'drugs', {
+            fulltextIndexes: [{ name: 'DrugNameSearch', fields: ['name'] }],
+          }),
+        ],
+      ]),
+    );
+    const output = emitModelMap(schema);
+
+    expect(output).toContain('Fulltext: DrugFulltextInput;');
+  });
+
+  it('omits Fulltext from ModelMap entries when the node has no fulltext index', () => {
+    const schema = makeSchema(
+      new Map([['Book', makeNodeDef('Book', 'books')]]),
+    );
+    const output = emitModelMap(schema);
+
+    expect(output).not.toContain('BookFulltextInput');
+    expect(output).not.toContain('Fulltext:');
+  });
+
   it('should include Sort in ModelMap entries for interfaces', () => {
     const schema = makeSchema(
       new Map([['User', makeNodeDef('User', 'users')]]),
