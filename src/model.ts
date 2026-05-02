@@ -13,6 +13,7 @@ import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
+import { CypherFieldScope } from './utils/cypher-field-projection';
 import { compileSortClause } from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
@@ -399,14 +400,21 @@ export class Model<
         for (const label of params.labels)
           labelFilters.push(`n:${assertSafeLabel(label)}`);
 
-      // Compile WHERE
+      // Compile WHERE — preserve `score` because the fulltext CALL bound
+      // it and the WHERE itself may reference it via `score >= $ft_score`.
       const whereResult = this.whereCompiler.compile(
         params?.where,
         'n',
         this.nodeDef,
         paramCounter,
+        { preserveVars: ['score'] },
       );
       mergeParams(allParams, whereResult.params);
+
+      // Stitch any `@cypher` field preludes between the fulltext call and
+      // the WHERE so the projected aliases are in scope.
+      if (whereResult.preludes && whereResult.preludes.length > 0)
+        cypherParts.push(...whereResult.preludes);
 
       const whereParts = [labelFilters.join(' AND ')];
       if (ft.scoreThreshold !== undefined)
@@ -430,13 +438,25 @@ export class Model<
         this.nodeDef,
         paramCounter,
       );
+      if (whereResult.preludes && whereResult.preludes.length > 0)
+        cypherParts.push(...whereResult.preludes);
       if (whereResult.cypher) {
         cypherParts.push(`WHERE ${whereResult.cypher}`);
         mergeParams(allParams, whereResult.params);
-      }
+      } else if (whereResult.preludes && whereResult.preludes.length > 0)
+        // Even when the WHERE body is empty, still merge params (fulltext
+        // subscript path already does this above; keep the no-where branch
+        // consistent so future preludes that emit params don't drop them).
+        mergeParams(allParams, whereResult.params);
     }
 
-    // RETURN
+    // RETURN — the SELECT scope captures any `@cypher` field projections
+    // referenced at the top level of the selection. Its CALL preludes
+    // are stitched into the pipeline BEFORE the RETURN (and BEFORE the
+    // sort prelude so ORDER BY `__sort_*` aliases share the same WITH
+    // chain); the sort prelude carries the SELECT aliases forward via
+    // preserveVars below.
+    const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -445,15 +465,17 @@ export class Model<
       0,
       allParams,
       paramCounter,
+      selectScope,
     );
 
     // OPTIONS (sort, limit, offset) — `pre` holds CALL subqueries + WITH
     // projections for any `@cypher` sorts and must be inserted BEFORE the
     // RETURN; `post` is the trailing ORDER BY / SKIP / LIMIT.
     const opts = params?.options
-      ? this.compileOptions(params.options, allParams)
+      ? this.compileOptions(params.options, allParams, selectScope.carried())
       : { pre: '', post: '' };
 
+    if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (opts.pre) cypherParts.push(opts.pre);
     cypherParts.push(`RETURN ${returnClause}`);
     if (opts.post) cypherParts.push(opts.post);
@@ -676,8 +698,12 @@ export class Model<
         'n',
         this.nodeDef,
         paramCounter,
+        { preserveVars: ['score'] },
       );
       mergeParams(allParams, whereResult.params);
+
+      if (whereResult.preludes && whereResult.preludes.length > 0)
+        cypherParts.push(...whereResult.preludes);
 
       const whereParts = [labelFilters.join(' AND ')];
       if (ft.scoreThreshold !== undefined)
@@ -699,10 +725,13 @@ export class Model<
         this.nodeDef,
         paramCounter,
       );
+      if (whereResult.preludes && whereResult.preludes.length > 0)
+        cypherParts.push(...whereResult.preludes);
       if (whereResult.cypher) {
         cypherParts.push(`WHERE ${whereResult.cypher}`);
         mergeParams(allParams, whereResult.params);
-      }
+      } else if (whereResult.preludes && whereResult.preludes.length > 0)
+        mergeParams(allParams, whereResult.params);
     }
 
     // Build RETURN clause for aggregation
@@ -1142,11 +1171,15 @@ export class Model<
         labelFilters.push(`n:${assertSafeLabel(label)}`);
 
     // 4. Compile the user WHERE (optional) and AND it into the label filter.
+    //    The vector CALL binds `n` and `score` — any `@cypher` field preludes
+    //    must carry `score` forward in their WITH or the trailing RETURN
+    //    would lose it.
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
+      { preserveVars: ['score'] },
     );
     mergeParams(allParams, whereResult.params);
 
@@ -1154,6 +1187,11 @@ export class Model<
     if (whereResult.cypher) whereParts.push(whereResult.cypher);
 
     // 5. Compile the projection through the shared selection pipeline.
+    //    Same scope rules as find(): `@cypher` SELECT fields project here
+    //    and the prelude is stitched between the WHERE and the RETURN.
+    //    The vector pipeline binds `score` from the CALL — preserve it so
+    //    the trailing `RETURN ..., score` still has it in scope.
+    const selectScope = new CypherFieldScope('n', ['score'], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1162,13 +1200,17 @@ export class Model<
       0,
       allParams,
       paramCounter,
+      selectScope,
     );
 
-    const cypher = [
-      call.cypher,
-      `WHERE ${whereParts.join(' AND ')}`,
-      `RETURN ${returnClause}, score`,
-    ].join('\n');
+    const lines: string[] = [call.cypher];
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      lines.push(...whereResult.preludes);
+    lines.push(`WHERE ${whereParts.join(' AND ')}`);
+    if (selectScope.hasAny()) lines.push(...selectScope.emit());
+    lines.push(`RETURN ${returnClause}, score`);
+
+    const cypher = lines.join('\n');
 
     // 6. Execute and map each record into { node, score }.
     const result = await this.executor.execute(
@@ -1239,6 +1281,9 @@ export class Model<
   /**
    * Replace the plain "RETURN n" in mutation cypher with a projected RETURN
    * when a selectionSet is provided, enabling relationship traversals.
+   *
+   * If the projection references `@cypher` scalar fields, the corresponding
+   * CALL preludes are stitched immediately before the new RETURN.
    */
   private applySelectionSetToMutation(
     cypher: string,
@@ -1276,6 +1321,7 @@ export class Model<
       if (entityField) selection = entityField.children!;
     }
 
+    const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1284,9 +1330,13 @@ export class Model<
       0,
       params,
       paramCounter,
+      selectScope,
     );
 
-    return cypher.replace(/RETURN n\s*$/, `RETURN ${returnClause}`);
+    const replacement = selectScope.hasAny()
+      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
+      : `RETURN ${returnClause}`;
+    return cypher.replace(/RETURN n\s*$/, replacement);
   }
 
   /**
@@ -1306,6 +1356,7 @@ export class Model<
       entitySelect as Record<string, unknown>,
       this.nodeDef,
     );
+    const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1314,8 +1365,12 @@ export class Model<
       0,
       params,
       paramCounter,
+      selectScope,
     );
-    return cypher.replace(/RETURN n\s*$/, `RETURN ${returnClause}`);
+    const replacement = selectScope.hasAny()
+      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
+      : `RETURN ${returnClause}`;
+    return cypher.replace(/RETURN n\s*$/, replacement);
   }
 
   /**
@@ -1354,6 +1409,7 @@ export class Model<
 
     const selection = this.parseSelectionSetCached(selectionSet);
 
+    const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1362,9 +1418,13 @@ export class Model<
       0,
       params,
       paramCounter,
+      selectScope,
     );
 
-    return cypher.replace(/RETURN n\s*$/, `RETURN ${returnClause}`);
+    const replacement = selectScope.hasAny()
+      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
+      : `RETURN ${returnClause}`;
+    return cypher.replace(/RETURN n\s*$/, replacement);
   }
 
   /**
@@ -1377,6 +1437,7 @@ export class Model<
     paramCounter: { count: number },
   ): string {
     const selection = this.selectNormalizer.normalize(select, this.nodeDef);
+    const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -1385,13 +1446,24 @@ export class Model<
       0,
       params,
       paramCounter,
+      selectScope,
     );
-    return cypher.replace(/RETURN n\s*$/, `RETURN ${returnClause}`);
+    const replacement = selectScope.hasAny()
+      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
+      : `RETURN ${returnClause}`;
+    return cypher.replace(/RETURN n\s*$/, replacement);
   }
 
   private compileOptions(
     options: FindOptions<TSort>,
     params: Record<string, unknown>,
+    /**
+     * Variables already projected into scope by an earlier prelude (e.g.
+     * `__sel_*` aliases for `@cypher` SELECT fields). These must be carried
+     * forward by every `WITH` the sort prelude emits so that the trailing
+     * RETURN can still reference them.
+     */
+    preserveVars: ReadonlyArray<string> = [],
   ): { pre: string; post: string } {
     const postParts: string[] = [];
     let pre = '';
@@ -1401,6 +1473,7 @@ export class Model<
         sort: options.sort as ReadonlyArray<Record<string, unknown>>,
         nodeVar: 'n',
         propertyLookup: (field) => this.nodeDef.properties.get(field),
+        preserveVars,
       });
       pre = compiled.pre;
       if (compiled.orderBy) postParts.push(compiled.orderBy);

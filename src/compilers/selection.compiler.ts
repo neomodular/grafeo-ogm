@@ -10,6 +10,7 @@ import {
 import { OGMError } from '../errors';
 import type { NodeDefinition, SchemaMetadata } from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
+import { CypherFieldScope } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
   escapeIdentifier,
@@ -91,6 +92,15 @@ export class SelectionCompiler {
     currentDepth: number = 0,
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
+    /**
+     * Scope for `@cypher` scalar field projections at THIS pipeline level.
+     * When provided, `@cypher` scalar fields in `selection` are registered
+     * here so the caller can emit the CALL preludes before the RETURN.
+     * When `null` (or omitted), `@cypher` scalar fields in `selection`
+     * throw — this is the case inside nested relationship pattern
+     * comprehensions where CALL { ... } subqueries are not allowed.
+     */
+    cypherScope: CypherFieldScope | null = null,
   ): string {
     if (selection.length === 0) return `${nodeVar} { .id }`;
 
@@ -133,6 +143,24 @@ export class SelectionCompiler {
         }
 
         assertSafeIdentifier(node.fieldName, 'selection field');
+
+        // `@cypher` scalar fields require a CALL { ... } prelude, which
+        // can only be emitted at the top of the surrounding pipeline. If
+        // a scope is available, register the field there and project the
+        // resulting alias. Otherwise — we are inside a nested pattern
+        // comprehension where preludes cannot be stitched — reject it.
+        const propDef = nodeDef.properties.get(node.fieldName);
+        if (propDef?.isCypher && propDef.cypherStatement) {
+          if (!cypherScope)
+            throw new OGMError(
+              `Selecting @cypher field "${node.fieldName}" on a related node is not supported. ` +
+                `@cypher scalar fields are only resolvable at the top-level of a selection.`,
+            );
+          const alias = cypherScope.register(node.fieldName, propDef);
+          parts.push(`${escapeIdentifier(node.fieldName)}: ${alias}`);
+          continue;
+        }
+
         parts.push(`.${escapeIdentifier(node.fieldName)}`);
         continue;
       }
@@ -359,6 +387,14 @@ export class SelectionCompiler {
         targetDef,
         paramCounter,
       );
+      // Pattern comprehensions cannot host CALL { ... } subqueries, so we
+      // cannot stitch `@cypher` field preludes here. Reject with a clear
+      // error rather than silently dropping them.
+      if (whereResult.preludes && whereResult.preludes.length > 0)
+        throw new OGMError(
+          `Filtering nested-select relationship "${node.fieldName}" by an @cypher field is not supported. ` +
+            `@cypher fields can only appear in top-level WHERE filters, not inside select.where on relationships.`,
+        );
       if (whereResult.cypher) {
         mergeParams(params, whereResult.params);
         whereClause = ` WHERE ${whereResult.cypher}`;
@@ -566,6 +602,11 @@ export class SelectionCompiler {
           targetDef,
           paramCounter,
         );
+        if (whereResult.preludes && whereResult.preludes.length > 0)
+          throw new OGMError(
+            `Filtering connection "${node.fieldName}" by an @cypher field is not supported. ` +
+              `@cypher fields can only appear in top-level WHERE filters, not inside connection where.`,
+          );
         if (whereResult.cypher) {
           if (params) mergeParams(params, whereResult.params);
           whereClause = ` WHERE ${whereResult.cypher}`;

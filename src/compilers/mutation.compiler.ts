@@ -120,7 +120,11 @@ export class MutationCompiler {
     connect: Record<string, unknown> | undefined,
     disconnect: Record<string, unknown> | undefined,
     nodeDef: NodeDefinition,
-    whereResult: { cypher: string; params: Record<string, unknown> },
+    whereResult: {
+      cypher: string;
+      params: Record<string, unknown>;
+      preludes?: string[];
+    },
     labels?: string[],
     returnMode: 'node' | 'count' = 'node',
   ): MutationResult {
@@ -135,6 +139,11 @@ export class MutationCompiler {
       const extraLabels = labels.map((l) => assertSafeLabel(l)).join(':');
       lines.push(`MATCH (n:${labelStr}:${extraLabels})`);
     } else lines.push(`MATCH (n:${labelStr})`);
+
+    // CALL preludes for `@cypher` fields referenced in the WHERE — must be
+    // emitted between MATCH and WHERE so the projected aliases are in scope.
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      lines.push(...whereResult.preludes);
 
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
@@ -192,7 +201,11 @@ export class MutationCompiler {
    */
   compileDelete(
     nodeDef: NodeDefinition,
-    whereResult: { cypher: string; params: Record<string, unknown> },
+    whereResult: {
+      cypher: string;
+      params: Record<string, unknown>;
+      preludes?: string[];
+    },
     deleteInput?: Record<string, unknown>,
   ): MutationResult {
     const labelStr = this.getCachedLabelString(nodeDef);
@@ -201,6 +214,8 @@ export class MutationCompiler {
     const params: Record<string, unknown> = { ...whereResult.params };
 
     lines.push(`MATCH (n:${labelStr})`);
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      lines.push(...whereResult.preludes);
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
     if (deleteInput && Object.keys(deleteInput).length > 0) {
@@ -307,7 +322,11 @@ export class MutationCompiler {
    */
   compileSetLabels(
     nodeDef: NodeDefinition,
-    whereResult: { cypher: string; params: Record<string, unknown> },
+    whereResult: {
+      cypher: string;
+      params: Record<string, unknown>;
+      preludes?: string[];
+    },
     addLabels?: string[],
     removeLabels?: string[],
   ): MutationResult {
@@ -317,6 +336,8 @@ export class MutationCompiler {
     const params: Record<string, unknown> = { ...whereResult.params };
 
     lines.push(`MATCH (n:${labelStr})`);
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      lines.push(...whereResult.preludes);
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
     if (addLabels && addLabels.length > 0)

@@ -1,6 +1,7 @@
 import { OGMError } from '../errors';
 import {
   NodeDefinition,
+  PropertyDefinition,
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
@@ -9,6 +10,7 @@ import {
   getTargetLabelString,
   resolveTargetDef,
 } from '../schema/utils';
+import { CypherFieldScope } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
   assertSafeKey,
@@ -20,6 +22,18 @@ import {
 export interface WhereResult {
   cypher: string;
   params: Record<string, unknown>;
+  /**
+   * Pre-WHERE lines (`CALL { ... }` + `WITH ...` pairs) needed to resolve
+   * any `@cypher` scalar fields referenced at the TOP level of this where
+   * input. The caller MUST emit these between the MATCH and the WHERE
+   * clause; otherwise the compiled body references aliases that are not
+   * in scope and Neo4j will fail.
+   *
+   * Preludes for nested scopes (e.g. `r0` inside a `_SOME` quantifier)
+   * are stitched directly into the EXISTS body inside `cypher` — the
+   * caller never has to handle those.
+   */
+  preludes?: string[];
 }
 
 const MAX_DEPTH = 10;
@@ -101,11 +115,42 @@ export class WhereCompiler {
     nodeVar: string,
     nodeDef: NodeDefinition,
     paramCounter: { count: number } = { count: 0 },
+    options?: {
+      /**
+       * Vars already in the surrounding pipeline that every emitted `WITH`
+       * must carry forward (e.g. `score` for vector search, `__typename`
+       * for `InterfaceModel`). Without this, the WITH inside the prelude
+       * would drop those vars and downstream RETURN/ORDER BY breaks.
+       */
+      preserveVars?: ReadonlyArray<string>;
+    },
   ): WhereResult {
     if (where == null || Object.keys(where).length === 0)
       return { cypher: '', params: {} };
 
-    return this.compileConditions(where, nodeVar, nodeDef, paramCounter, 0);
+    // Top-level scope — preludes here are returned to the caller for stitching
+    // BEFORE the WHERE clause. Nested scopes (relationship quantifiers) build
+    // their own scopes and stitch their preludes into the EXISTS body inline.
+    const scope = new CypherFieldScope(
+      nodeVar,
+      options?.preserveVars ?? [],
+      '__where',
+    );
+    const inner = this.compileConditions(
+      where,
+      nodeVar,
+      nodeDef,
+      paramCounter,
+      0,
+      scope,
+    );
+
+    const result: WhereResult = {
+      cypher: inner.cypher,
+      params: inner.params,
+    };
+    if (scope.hasAny()) result.preludes = scope.emit();
+    return result;
   }
 
   private compileConditions(
@@ -114,6 +159,7 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     depth: number,
+    scope: CypherFieldScope,
   ): WhereResult {
     if (depth > MAX_DEPTH)
       throw new OGMError(
@@ -135,7 +181,14 @@ export class WhereCompiler {
       if (key === 'AND' || key === 'OR') {
         const items = value as Record<string, unknown>[];
         const subResults = items.map((item) =>
-          this.compileConditions(item, nodeVar, nodeDef, counter, depth + 1),
+          this.compileConditions(
+            item,
+            nodeVar,
+            nodeDef,
+            counter,
+            depth + 1,
+            scope,
+          ),
         );
         const subClauses = subResults.map((r) => r.cypher).filter(Boolean);
         if (subClauses.length > 0) {
@@ -159,6 +212,7 @@ export class WhereCompiler {
           nodeDef,
           counter,
           depth + 1,
+          scope,
         );
         if (sub.cypher) {
           clauses.push(`NOT (${sub.cypher})`);
@@ -185,9 +239,11 @@ export class WhereCompiler {
             clauses.push(`NOT EXISTS { MATCH ${pattern} }`);
           }
         } else {
-          // Scalar null means "property IS NULL"
+          // Scalar null means "property IS NULL". `@cypher` scalars need
+          // to project through the scope first (NULL check on the alias).
           assertSafeIdentifier(key, 'where clause');
-          clauses.push(`${nodeVar}.${escapeIdentifier(key)} IS NULL`);
+          const fieldRef = this.resolveFieldRef(key, nodeVar, nodeDef, scope);
+          clauses.push(`${fieldRef} IS NULL`);
         }
         continue;
       }
@@ -227,6 +283,8 @@ export class WhereCompiler {
         key,
         value,
         nodeVar,
+        nodeDef,
+        scope,
         counter,
         caseInsensitive,
       );
@@ -238,6 +296,25 @@ export class WhereCompiler {
       cypher: clauses.join(' AND '),
       params,
     };
+  }
+
+  /**
+   * Resolve the Cypher reference for a where-clause field. For stored
+   * properties this is `<nodeVar>.<field>`. For `@cypher` scalar fields,
+   * the field is registered in the scope (creating a CALL prelude on the
+   * first reference) and the alias is returned.
+   */
+  private resolveFieldRef(
+    fieldName: string,
+    nodeVar: string,
+    propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
+    scope: CypherFieldScope | null,
+  ): string {
+    const propDef = propsHolder?.properties.get(fieldName);
+    if (scope && propDef?.isCypher && propDef.cypherStatement)
+      return scope.register(fieldName, propDef);
+
+    return `${nodeVar}.${escapeIdentifier(fieldName)}`;
   }
 
   private tryCompileConnection(
@@ -285,6 +362,13 @@ export class WhereCompiler {
     const innerClauses: string[] = [];
     const innerParams: Record<string, unknown> = {};
 
+    // Inner scopes for any `@cypher` projections referenced inside the
+    // EXISTS body. Node-side and edge-side get separate scopes so their
+    // alias namespaces are distinct (and so that no edge variable carries
+    // node aliases or vice-versa).
+    const nodeScope = new CypherFieldScope(relVar, [], '__where');
+    const edgeScope = new CypherFieldScope(edgeVar, [], '__where');
+
     // node conditions
     if (value.node) {
       const nodeResult = this.compileConditions(
@@ -293,6 +377,7 @@ export class WhereCompiler {
         targetNodeDef,
         counter,
         depth + 1,
+        nodeScope,
       );
       if (nodeResult.cypher) {
         innerClauses.push(nodeResult.cypher);
@@ -306,10 +391,11 @@ export class WhereCompiler {
         relDef.properties,
       );
       if (propsDef) {
-        // Build a pseudo NodeDefinition for edge property compilation
         const edgeResult = this.compileEdgeConditions(
           value.edge as Record<string, unknown>,
           edgeVar,
+          propsDef,
+          edgeScope,
           counter,
         );
         if (edgeResult.cypher) {
@@ -319,6 +405,15 @@ export class WhereCompiler {
       }
     }
 
+    // Stitch the inner preludes (CALL { ... } + WITH ...) INSIDE the
+    // EXISTS body, between the MATCH pattern and the inner WHERE.
+    const innerPreludes: string[] = [];
+    if (nodeScope.hasAny()) innerPreludes.push(...nodeScope.emit());
+    if (edgeScope.hasAny()) innerPreludes.push(...edgeScope.emit());
+    const preludeFragment = innerPreludes.length
+      ? ` ${innerPreludes.join(' ')}`
+      : '';
+
     const whereClause =
       innerClauses.length > 0 ? ` WHERE ${innerClauses.join(' AND ')}` : '';
 
@@ -326,24 +421,30 @@ export class WhereCompiler {
       case 'Connection':
       case 'Connection_SOME':
         return {
-          cypher: `EXISTS { MATCH ${pattern}${whereClause} }`,
+          cypher: `EXISTS { MATCH ${pattern}${preludeFragment}${whereClause} }`,
           params: innerParams,
         };
       case 'Connection_NOT':
       case 'Connection_NONE':
         return {
-          cypher: `NOT EXISTS { MATCH ${pattern}${whereClause} }`,
+          cypher: `NOT EXISTS { MATCH ${pattern}${preludeFragment}${whereClause} }`,
           params: innerParams,
         };
       case 'Connection_ALL':
         if (innerClauses.length > 0)
           return {
-            cypher: `NOT EXISTS { MATCH ${pattern} WHERE NOT (${innerClauses.join(' AND ')}) }`,
+            cypher: `NOT EXISTS { MATCH ${pattern}${preludeFragment} WHERE NOT (${innerClauses.join(' AND ')}) }`,
             params: innerParams,
           };
 
         return { cypher: '', params: {} };
       case 'Connection_SINGLE':
+        if (innerPreludes.length > 0)
+          throw new OGMError(
+            `Connection_SINGLE filters do not support @cypher fields. ` +
+              `Refactor to Connection_SOME + Connection_NONE, or remove the @cypher reference.`,
+          );
+
         return {
           cypher: `size([(${pattern}${whereClause} | 1)]) = 1`,
           params: innerParams,
@@ -416,13 +517,21 @@ export class WhereCompiler {
       targetLabel: 'auto',
     });
 
+    // Inner scope for any `@cypher` fields referenced inside the inner
+    // WHERE — preludes are stitched into the EXISTS body.
+    const innerScope = new CypherFieldScope(relVar, [], '__where');
     const innerResult = this.compileConditions(
       value,
       relVar,
       targetNodeDef,
       counter,
       depth + 1,
+      innerScope,
     );
+
+    const innerPreludeFragment = innerScope.hasAny()
+      ? ` ${innerScope.emit().join(' ')}`
+      : '';
 
     const whereClause = innerResult.cypher
       ? ` WHERE ${innerResult.cypher}`
@@ -431,25 +540,32 @@ export class WhereCompiler {
     switch (suffix) {
       case '_SOME':
         return {
-          cypher: `EXISTS { MATCH ${pattern}${whereClause} }`,
+          cypher: `EXISTS { MATCH ${pattern}${innerPreludeFragment}${whereClause} }`,
           params: innerResult.params,
         };
       case '_NONE':
         return {
-          cypher: `NOT EXISTS { MATCH ${pattern}${whereClause} }`,
+          cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment}${whereClause} }`,
           params: innerResult.params,
         };
       case '_ALL':
         // All matching rels must satisfy: NOT EXISTS { MATCH pattern WHERE NOT (inner) }
         if (innerResult.cypher)
           return {
-            cypher: `NOT EXISTS { MATCH ${pattern} WHERE NOT (${innerResult.cypher}) }`,
+            cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment} WHERE NOT (${innerResult.cypher}) }`,
             params: innerResult.params,
           };
 
         return { cypher: '', params: {} };
       case '_SINGLE': {
-        // Exactly one relationship satisfies
+        // Exactly one relationship satisfies. Pattern comprehensions cannot
+        // contain CALL { ... } subqueries, so reject `@cypher` fields here.
+        if (innerScope.hasAny())
+          throw new OGMError(
+            `_SINGLE quantifiers do not support filtering by @cypher fields. ` +
+              `Refactor the predicate to use _SOME + _NONE, or remove the @cypher reference.`,
+          );
+
         counter.count++;
         return {
           cypher: `size([${relVar} IN [(${pattern}${whereClause} | ${relVar})] | ${relVar}]) = 1`,
@@ -502,21 +618,28 @@ export class WhereCompiler {
       // Compile inner WHERE conditions for this member (if any properties specified)
       const memberWhere = memberValue as Record<string, unknown> | null;
       let whereClause = '';
+      let preludeFragment = '';
       if (memberWhere && Object.keys(memberWhere).length > 0) {
+        const innerScope = new CypherFieldScope(relVar, [], '__where');
         const innerResult = this.compileConditions(
           memberWhere,
           relVar,
           memberDef,
           counter,
           depth + 1,
+          innerScope,
         );
         if (innerResult.cypher) {
           whereClause = ` WHERE ${innerResult.cypher}`;
           mergeParams(allParams, innerResult.params);
         }
+        if (innerScope.hasAny())
+          preludeFragment = ` ${innerScope.emit().join(' ')}`;
       }
 
-      memberClauses.push(`EXISTS { MATCH ${pattern}${whereClause} }`);
+      memberClauses.push(
+        `EXISTS { MATCH ${pattern}${preludeFragment}${whereClause} }`,
+      );
     }
 
     if (memberClauses.length === 0) return { cypher: '', params: {} };
@@ -549,6 +672,8 @@ export class WhereCompiler {
   private compileEdgeConditions(
     edgeWhere: Record<string, unknown>,
     edgeVar: string,
+    propsDef: { properties: Map<string, PropertyDefinition> } | undefined,
+    edgeScope: CypherFieldScope,
     counter: { count: number },
   ): WhereResult {
     const clauses: string[] = [];
@@ -556,7 +681,14 @@ export class WhereCompiler {
 
     for (const [key, value] of Object.entries(edgeWhere)) {
       assertSafeKey(key, 'edge where input');
-      const result = this.compileScalarCondition(key, value, edgeVar, counter);
+      const result = this.compileScalarCondition(
+        key,
+        value,
+        edgeVar,
+        propsDef,
+        edgeScope,
+        counter,
+      );
       clauses.push(result.cypher);
       mergeParams(params, result.params);
     }
@@ -567,10 +699,19 @@ export class WhereCompiler {
     };
   }
 
+  /**
+   * Compile a scalar where-condition. If `fieldName` resolves to a
+   * `@cypher` scalar property and `scope` is provided, the field is
+   * registered in the scope (producing a CALL prelude on first use) and
+   * the alias is used in the predicate. Otherwise the predicate is
+   * compiled against `<nodeVar>.<field>` as before.
+   */
   private compileScalarCondition(
     key: string,
     value: unknown,
     nodeVar: string,
+    propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
+    scope: CypherFieldScope | null,
     counter: { count: number },
     caseInsensitive = false,
   ): WhereResult {
@@ -595,7 +736,12 @@ export class WhereCompiler {
     const paramName = `param${counter.count}`;
     counter.count++;
 
-    const rawFieldRef = `${nodeVar}.${escapeIdentifier(fieldName)}`;
+    const rawFieldRef = this.resolveFieldRef(
+      fieldName,
+      nodeVar,
+      propsHolder,
+      scope,
+    );
     const rawParamRef = `$${paramName}`;
 
     if (operator === null) {

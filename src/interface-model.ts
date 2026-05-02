@@ -17,6 +17,7 @@ import {
   SchemaMetadata,
   WhereInput,
 } from './schema/types';
+import { CypherFieldScope } from './utils/cypher-field-projection';
 import { compileSortClause } from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
@@ -159,10 +160,13 @@ export class InterfaceModel<
       syntheticNodeDef,
       paramCounter,
     );
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      cypherParts.push(...whereResult.preludes);
     if (whereResult.cypher) {
       cypherParts.push(`WHERE ${whereResult.cypher}`);
       mergeParams(allParams, whereResult.params);
-    }
+    } else if (whereResult.preludes && whereResult.preludes.length > 0)
+      mergeParams(allParams, whereResult.params);
 
     // __typename resolution via CASE
     const caseLines = this.interfaceDef.implementedBy.map(
@@ -182,6 +186,11 @@ export class InterfaceModel<
     } else selection = this.defaultInterfaceSelection();
 
     // Use SelectionCompiler for proper pattern comprehension (relationship support)
+    // The select scope captures any `@cypher` SELECT fields. Its preludes
+    // are stitched between the `WITH n, ... AS __typename` and the
+    // sort prelude / RETURN. `__typename` must be preserved because it's
+    // already in scope and the RETURN re-projects it.
+    const selectScope = new CypherFieldScope('n', ['__typename'], '__sel');
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -190,6 +199,7 @@ export class InterfaceModel<
       0,
       allParams,
       paramCounter,
+      selectScope,
     );
     // Inject __typename into the projection: "n { .id, .name }" → "n { .id, .name, __typename: __typename }"
     const injected = returnClause.replace(/\}$/, ', __typename: __typename }');
@@ -197,7 +207,8 @@ export class InterfaceModel<
     // OPTIONS — sort `pre` (CALL subqueries + WITH for `@cypher` sorts) is
     // injected BEFORE the RETURN so the projected aliases are in scope; the
     // WITH must preserve `__typename` (already in scope from the typename
-    // resolution step above).
+    // resolution step above) AND any `__sel_*` aliases that the select
+    // prelude has already projected.
     let sortPre = '';
     let sortOrderBy = '';
     if (params?.options?.sort?.length) {
@@ -205,12 +216,13 @@ export class InterfaceModel<
         sort: params.options.sort as ReadonlyArray<Record<string, unknown>>,
         nodeVar: 'n',
         propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
-        preserveVars: ['__typename'],
+        preserveVars: ['__typename', ...selectScope.carried()],
       });
       sortPre = compiled.pre;
       sortOrderBy = compiled.orderBy;
     }
 
+    if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (sortPre) cypherParts.push(sortPre);
     cypherParts.push(`RETURN ${injected}`);
     if (sortOrderBy) cypherParts.push(sortOrderBy);
@@ -261,10 +273,13 @@ export class InterfaceModel<
       syntheticNodeDef,
       paramCounter,
     );
+    if (whereResult.preludes && whereResult.preludes.length > 0)
+      cypherParts.push(...whereResult.preludes);
     if (whereResult.cypher) {
       cypherParts.push(`WHERE ${whereResult.cypher}`);
       mergeParams(allParams, whereResult.params);
-    }
+    } else if (whereResult.preludes && whereResult.preludes.length > 0)
+      mergeParams(allParams, whereResult.params);
 
     const returnParts: string[] = [];
     if (params.aggregate.count) returnParts.push('count(n) AS count');

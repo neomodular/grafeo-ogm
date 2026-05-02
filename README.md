@@ -250,7 +250,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `@relationshipProperties` | Type | Marks a type as relationship properties (edge data) |
 | `@id` | Field | Auto-generates a UUID on create |
 | `@unique` | Field | Creates a uniqueness constraint in Neo4j |
-| `@cypher` | Field | Computed field resolved via a custom Cypher statement |
+| `@cypher` | Field | Computed field resolved via a custom Cypher statement. Scalar return types are resolved at runtime in `select` / `selectionSet`, `where`, and `options.sort` (see [Computed Fields with @cypher](#computed-fields-with-cypher)); node/interface return types remain projection-only |
 | `@default` | Field | Sets a default value on create |
 | `@fulltext` | Type | Defines fulltext search indexes with `name` and `fields` |
 | `@vector` | Type | Registers one or more Neo4j vector indexes on a node (see [Vector Search](#vector-search)) |
@@ -814,6 +814,110 @@ const deleteResult = await deleteSubgraph(
 );
 ```
 
+### Computed Fields with @cypher
+
+The `@cypher` directive declares a field whose value is produced by a custom Cypher statement at query time. As of v1.6.0, scalar `@cypher` fields are resolved in three scopes — `select` / `selectionSet`, `where`, and `options.sort` — so you can project, filter, and order by them just like stored properties. Pre-1.6.0, references in `select` and `where` silently returned `NULL`.
+
+#### Declaration
+
+```graphql
+type Book @node {
+  id: ID! @id
+  title: String!
+  published: DateTime
+
+  # Computed: lowercased title for case-insensitive sort/filter
+  insensitiveTitle: String @cypher(
+    statement: "RETURN toLower(this.title) AS result"
+    columnName: "result"
+  )
+
+  # Computed: count of related reviews
+  reviewCount: Int @cypher(
+    statement: "MATCH (this)-[:HAS_REVIEW]->(r) RETURN count(r) AS count"
+    columnName: "count"
+  )
+
+  # Computed: average review rating (aggregating relationship-property data)
+  averageRating: Float @cypher(
+    statement: "MATCH (this)-[:HAS_REVIEW]->(r) RETURN avg(r.rating) AS avg"
+    columnName: "avg"
+  )
+}
+```
+
+`statement` is the Cypher body — `this` is bound to the matched node. `columnName` is the alias the OGM reads from the `RETURN` clause; if omitted it defaults to the field name.
+
+#### Using @cypher in SELECT
+
+```typescript
+const books = await Book.find({
+  select: {
+    id: true,
+    title: true,
+    insensitiveTitle: true,
+    reviewCount: true,
+    averageRating: true,
+  },
+});
+
+// Or via the legacy selectionSet API:
+const books = await Book.find({
+  selectionSet: '{ id title insensitiveTitle reviewCount averageRating }',
+});
+```
+
+#### Using @cypher in WHERE
+
+```typescript
+// Case-insensitive prefix match
+await Book.find({
+  where: { insensitiveTitle_STARTS_WITH: 'the' },
+});
+
+// Combined with stored fields under AND/OR
+await Book.find({
+  where: {
+    AND: [
+      { insensitiveTitle_CONTAINS: 'graph' },
+      { reviewCount_GT: 5 },
+    ],
+  },
+});
+
+// Nested inside a relationship quantifier
+// Find authors who have at least one book with more than 5 reviews
+await Author.find({
+  where: { books_SOME: { reviewCount_GT: 5 } },
+});
+```
+
+All standard operator suffixes are supported (`_EQ`, `_NOT`, `_IN`, `_NOT_IN`, `_LT`, `_LTE`, `_GT`, `_GTE`, `_CONTAINS`, `_NOT_CONTAINS`, `_STARTS_WITH`, `_ENDS_WITH`, `_MATCHES`).
+
+#### Using @cypher in ORDER BY
+
+```typescript
+await Book.find({
+  where: { insensitiveTitle_STARTS_WITH: 'g' },
+  options: { sort: [{ insensitiveTitle: 'ASC' }] },
+  select: { id: true, title: true, reviewCount: true },
+});
+```
+
+#### Limitations
+
+The following positions throw `OGMError` at compile time with a clear hint, rather than silently misbehaving:
+
+- **Connection `where` and `select.where`**: Prisma-style relationship filtering with `@cypher` is unsupported. Workaround: filter on the parent type, or query the related node directly via its own model.
+- **`_SINGLE` / `Connection_SINGLE` quantifiers**: unsupported. Workaround: combine `_SOME` and `_NONE` to express "exactly one match."
+- **Nested-relationship SELECT projection**: `select: { rel: { select: { cypherField: true } } }` is unsupported. Workaround: query the related node directly via its own model and join in application code.
+
+These are not OGM bugs — they are Cypher-language constraints. Pattern comprehensions (`[(n)-[:R]->(m) | m { ... }]`) cannot host `CALL` subqueries, so resolving an `@cypher` field inside a projection or relationship-scoped predicate is impossible at the language level.
+
+#### Performance
+
+Each scope (`where`, `select`, sort) emits its own `CALL { WITH n; WITH n AS this; <statement> }` block per `@cypher` field reference. A query that references the same `@cypher` field in all three scopes emits three `CALL` blocks. This is functionally correct and parameter-isolated, but worth knowing if your statement is expensive (multi-hop traversals, aggregations over large fan-outs). For frequently-accessed computed values, consider materializing as a stored property updated on write instead.
+
 ### Raw Cypher
 
 ```typescript
@@ -1299,7 +1403,7 @@ Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragme
 
 ### Is grafeo-ogm production-ready?
 
-Yes. The library has 892 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
+Yes. The library has 1,093 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Does grafeo-ogm work with Neo4j Aura?
 
