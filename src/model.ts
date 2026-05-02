@@ -12,6 +12,16 @@ import { WhereCompiler } from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
+import { PolicyDeniedError } from './policy/errors';
+import { hashCtx } from './policy/resolver';
+import { isWriteRestrictive } from './policy/types';
+import type {
+  Operation,
+  PolicyContext,
+  PolicyContextBundle,
+  PolicyDefaults,
+  ResolvedPolicies,
+} from './policy/types';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
 import { CypherFieldScope } from './utils/cypher-field-projection';
 import { compileSortClause } from './utils/cypher-sort-projection';
@@ -21,6 +31,35 @@ import {
   escapeIdentifier,
   mergeParams,
 } from './utils/validation';
+
+/**
+ * Internal binding handed to `Model` by `OGM.withContext(ctx)`. Carries
+ * the per-request ctx, a resolver function, defaults, and a logger
+ * reference for `unsafe` bypass logging.
+ *
+ * NOT exported — created and consumed inside the OGM.
+ */
+export interface ModelPolicyBinding {
+  ctx: PolicyContext;
+  resolve: (
+    typeName: string,
+    op: Operation,
+    ctx: PolicyContext,
+  ) => ResolvedPolicies | null;
+  defaults: PolicyDefaults;
+  logger?: OGMLogger;
+  /** Set when this binding belongs to a `unsafe.bypassPolicies()` OGM. */
+  globalBypass?: boolean;
+  /** Stable version string for audit metadata. */
+  policySetVersion: string;
+}
+
+/**
+ * Optional per-call escape hatch on every Model method's params bag.
+ */
+export interface UnsafeOptions {
+  bypassPolicies?: boolean;
+}
 
 interface FindOptions<TSort = Record<string, 'ASC' | 'DESC'>> {
   limit?: number;
@@ -117,6 +156,7 @@ export interface ModelInterface<
     options?: FindOptions<TSort>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T[]>;
   create(params: {
     input: TCreateInput[];
@@ -124,6 +164,7 @@ export interface ModelInterface<
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>>;
   update(params: {
     where?: TWhere;
@@ -134,11 +175,13 @@ export interface ModelInterface<
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>>;
   delete(params: {
     where?: TWhere;
     delete?: TDeleteInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ nodesDeleted: number; relationshipsDeleted: number }>;
   aggregate(params: {
     where?: TWhere;
@@ -146,6 +189,7 @@ export interface ModelInterface<
     labels?: string[];
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }>;
   findFirst?(params?: {
     where?: TWhere;
@@ -155,6 +199,7 @@ export interface ModelInterface<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T | null>;
   findUnique?(params: {
     where: TWhere;
@@ -162,6 +207,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T | null>;
   findFirstOrThrow?(params?: {
     where?: TWhere;
@@ -171,6 +217,7 @@ export interface ModelInterface<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T>;
   findUniqueOrThrow?(params: {
     where: TWhere;
@@ -178,12 +225,14 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T>;
   count?(params?: {
     where?: TWhere;
     labels?: string[];
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<number>;
   upsert?(params: {
     where: TWhere;
@@ -193,22 +242,26 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T>;
   createMany?(params: {
     data: TCreateInput[];
     skipDuplicates?: boolean;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }>;
   updateMany?(params: {
     where?: TWhere;
     data: TUpdateInput;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }>;
   deleteMany?(params: {
     where?: TWhere;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }>;
   searchByVector?(params: {
     indexName: string;
@@ -219,6 +272,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>>;
   searchByPhrase?(params: {
     indexName: string;
@@ -230,6 +284,7 @@ export interface ModelInterface<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>>;
 }
 
@@ -319,6 +374,8 @@ export class Model<
   private fulltextCompiler: FulltextCompiler;
   private vectorCompiler: VectorCompiler;
   private executor: Executor;
+  private policyBinding: ModelPolicyBinding | undefined;
+  private logger: OGMLogger | undefined;
 
   constructor(
     private nodeDef: NodeDefinition,
@@ -326,6 +383,7 @@ export class Model<
     driver: Driver,
     compilers?: ModelCompilers,
     logger?: OGMLogger,
+    policyBinding?: ModelPolicyBinding,
   ) {
     this.whereCompiler = compilers?.where ?? new WhereCompiler(schema);
     this.selectionCompiler =
@@ -336,6 +394,110 @@ export class Model<
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
     this.vectorCompiler = compilers?.vector ?? new VectorCompiler();
     this.executor = new Executor(driver, logger);
+    this.policyBinding = policyBinding;
+    this.logger = logger;
+  }
+
+  /**
+   * Build a `PolicyContextBundle` for a single operation. Returns
+   * `null` when no policies are bound (v1.6.0 path) or when the call
+   * site requested `unsafe.bypassPolicies`. The latter case logs a
+   * warning via the configured logger so the bypass is auditable.
+   *
+   * For default-deny `'throw'` mode, callers must throw BEFORE compile
+   * — checked here and propagated by `assertNotDeniedAtCompile`.
+   */
+  private resolvePolicyContext(
+    op: Operation,
+    unsafe?: UnsafeOptions,
+  ): PolicyContextBundle | null {
+    const binding = this.policyBinding;
+    if (!binding) return null;
+
+    if (binding.globalBypass) {
+      if (this.logger?.warn)
+        this.logger.warn(
+          '[OGM] policies bypassed via unsafe.bypassPolicies on type "%s" op "%s"',
+          this.nodeDef.typeName,
+          op,
+        );
+      return null;
+    }
+
+    if (unsafe?.bypassPolicies) {
+      if (this.logger?.warn)
+        this.logger.warn(
+          '[OGM] per-call unsafe.bypassPolicies on type "%s" op "%s"',
+          this.nodeDef.typeName,
+          op,
+        );
+      return null;
+    }
+
+    const resolved = binding.resolve(this.nodeDef.typeName, op, binding.ctx);
+    if (!resolved) return null;
+
+    return {
+      ctx: binding.ctx,
+      operation: op,
+      resolved,
+      defaults: binding.defaults,
+      resolveForType: (typeName, targetOp) =>
+        binding.resolve(typeName, targetOp, binding.ctx),
+    };
+  }
+
+  /**
+   * Throw `PolicyDeniedError` when default-deny is set to `'throw'` AND
+   * the resolved policy set has no permissive that could match. This
+   * path runs BEFORE compile so calls fail at the call site.
+   */
+  private assertNotDeniedAtCompile(
+    bundle: PolicyContextBundle | null,
+    operation: Operation,
+  ): void {
+    if (!bundle) return;
+    if (bundle.resolved.overridden) return;
+    if (bundle.defaults.onDeny !== 'throw') return;
+    if (bundle.resolved.permissives.length === 0)
+      throw new PolicyDeniedError({
+        typeName: this.nodeDef.typeName,
+        operation,
+        reason: 'no-permissive-matched',
+      });
+  }
+
+  /**
+   * Build `ExecutionContext` with audit metadata when policies are
+   * configured. Preserves the user's transaction/session selection.
+   */
+  private withAuditMetadata(
+    context: ExecutionContext | undefined,
+    bundle: PolicyContextBundle | null,
+    operation: Operation,
+    bypassed: boolean,
+  ): ExecutionContext | undefined {
+    if (!this.policyBinding) return context;
+    if (
+      this.policyBinding.defaults.auditMetadata === false &&
+      !this.policyBinding.globalBypass
+    )
+      return context;
+
+    const evaluated = bundle?.resolved.evaluated ?? [];
+    const metadata: Record<string, unknown> = {
+      ogmPolicySetVersion: this.policyBinding.policySetVersion,
+      ctxFingerprint: hashCtx(this.policyBinding.ctx),
+      modelType: this.nodeDef.typeName,
+      operation,
+      policiesEvaluated: [...evaluated],
+      bypassed,
+    };
+
+    if (context?.metadata)
+      return { ...context, metadata: { ...context.metadata, ...metadata } };
+    if (context) return { ...context, metadata };
+    return { metadata };
   }
 
   /** Override the default RETURN clause -- legacy escape hatch */
@@ -368,11 +530,15 @@ export class Model<
     options?: FindOptions<TSort>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T[]> {
     if (params?.select && params?.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
+
+    const policyContext = this.resolvePolicyContext('read', params?.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'read');
 
     const cypherParts: string[] = [];
     const allParams: Record<string, unknown> = {};
@@ -407,7 +573,7 @@ export class Model<
         'n',
         this.nodeDef,
         paramCounter,
-        { preserveVars: ['score'] },
+        { preserveVars: ['score'], policyContext: policyContext ?? undefined },
       );
       mergeParams(allParams, whereResult.params);
 
@@ -437,6 +603,7 @@ export class Model<
         'n',
         this.nodeDef,
         paramCounter,
+        policyContext ? { policyContext } : undefined,
       );
       if (whereResult.preludes && whereResult.preludes.length > 0)
         cypherParts.push(...whereResult.preludes);
@@ -466,6 +633,7 @@ export class Model<
       allParams,
       paramCounter,
       selectScope,
+      policyContext,
     );
 
     // OPTIONS (sort, limit, offset) — `pre` holds CALL subqueries + WITH
@@ -484,7 +652,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       allParams,
-      params?.context,
+      this.withAuditMetadata(
+        params?.context,
+        policyContext,
+        'read',
+        Boolean(params?.unsafe?.bypassPolicies),
+      ),
     );
     return ResultMapper.mapRecords(result.records, 'n') as T[];
   }
@@ -497,11 +670,15 @@ export class Model<
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>> {
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
+
+    const policyContext = this.resolvePolicyContext('create', params.unsafe);
+    this.evaluateCreatePolicies(policyContext, params.input);
 
     const { cypher, params: mutParams } = this.mutationCompiler.compileCreate(
       params.input,
@@ -512,6 +689,7 @@ export class Model<
     // Shared counter so the selection's connection-where params don't collide
     // with anything the mutation compiler already emitted into mutParams.
     const paramCounter = { count: 0 };
+    const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
     let finalCypher: string;
     if (params.select)
       finalCypher = this.applySelectToMutation(
@@ -519,6 +697,7 @@ export class Model<
         params.select,
         mutParams,
         paramCounter,
+        readPolicyContext,
       );
     else
       finalCypher = this.applySelectionSetToMutation(
@@ -526,12 +705,18 @@ export class Model<
         params.selectionSet ?? this._selectionSet,
         mutParams,
         paramCounter,
+        readPolicyContext,
       );
 
     const result = await this.executor.execute(
       finalCypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'create',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const summary = result.summary;
     const counters = summary.counters.updates();
@@ -566,11 +751,20 @@ export class Model<
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>> {
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
+
+    const policyContext = this.resolvePolicyContext('update', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'update');
+    this.evaluateWriteRestrictives(
+      policyContext,
+      'update',
+      params.update as Record<string, unknown> | undefined,
+    );
 
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
@@ -578,6 +772,7 @@ export class Model<
       'n',
       this.nodeDef,
       paramCounter,
+      policyContext ? { policyContext } : undefined,
     );
 
     const { cypher, params: mutParams } = this.mutationCompiler.compileUpdate(
@@ -590,6 +785,7 @@ export class Model<
       params.labels,
     );
 
+    const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
     let finalCypher: string;
     if (params.select)
       finalCypher = this.applySelectToMutation(
@@ -597,6 +793,7 @@ export class Model<
         params.select,
         mutParams,
         paramCounter,
+        readPolicyContext,
       );
     else
       finalCypher = this.applySelectionSetToMutation(
@@ -604,12 +801,18 @@ export class Model<
         params.selectionSet ?? this._selectionSet,
         mutParams,
         paramCounter,
+        readPolicyContext,
       );
 
     const result = await this.executor.execute(
       finalCypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'update',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const summary = result.summary;
     const counters = summary.counters.updates();
@@ -639,13 +842,21 @@ export class Model<
     where?: TWhere;
     delete?: TDeleteInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ nodesDeleted: number; relationshipsDeleted: number }> {
+    const policyContext = this.resolvePolicyContext('delete', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'delete');
+    // Note: WriteRestrictives do not target 'delete' (deletes have no
+    // input bag to validate). Row filtering for delete is enforced via
+    // ReadRestrictives in the WHERE clause below.
+
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
+      policyContext ? { policyContext } : undefined,
     );
 
     const { cypher, params: mutParams } = this.mutationCompiler.compileDelete(
@@ -657,7 +868,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'delete',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const counters = result.summary.counters.updates();
     return {
@@ -674,7 +890,16 @@ export class Model<
     labels?: string[];
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }> {
+    // aggregate prefers 'aggregate' policies but falls back to 'read'
+    // per design decision #7. The fallback only applies when no
+    // 'aggregate'-specific policy is registered for this type.
+    let policyContext = this.resolvePolicyContext('aggregate', params.unsafe);
+    if (!policyContext)
+      policyContext = this.resolvePolicyContext('read', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'aggregate');
+
     const cypherParts: string[] = [];
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
@@ -698,7 +923,7 @@ export class Model<
         'n',
         this.nodeDef,
         paramCounter,
-        { preserveVars: ['score'] },
+        { preserveVars: ['score'], policyContext: policyContext ?? undefined },
       );
       mergeParams(allParams, whereResult.params);
 
@@ -724,6 +949,7 @@ export class Model<
         'n',
         this.nodeDef,
         paramCounter,
+        policyContext ? { policyContext } : undefined,
       );
       if (whereResult.preludes && whereResult.preludes.length > 0)
         cypherParts.push(...whereResult.preludes);
@@ -752,7 +978,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       allParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'aggregate',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
 
     if (result.records.length === 0)
@@ -785,13 +1016,18 @@ export class Model<
     addLabels?: string[];
     removeLabels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<void> {
+    const policyContext = this.resolvePolicyContext('update', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'update');
+
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
+      policyContext ? { policyContext } : undefined,
     );
 
     const { cypher, params: mutParams } =
@@ -802,7 +1038,16 @@ export class Model<
         params.removeLabels,
       );
 
-    await this.executor.execute(cypher, mutParams, params.context);
+    await this.executor.execute(
+      cypher,
+      mutParams,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'update',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
+    );
   }
 
   // --- findFirst / findUnique ------------------------------------------------
@@ -815,6 +1060,7 @@ export class Model<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T | null> {
     const results = await this.find({
       ...params,
@@ -829,6 +1075,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T | null> {
     return this.findFirst(params);
   }
@@ -841,6 +1088,7 @@ export class Model<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T> {
     const result = await this.findFirst(params);
     if (result === null)
@@ -857,6 +1105,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T> {
     const result = await this.findUnique(params);
     if (result === null)
@@ -874,6 +1123,7 @@ export class Model<
     labels?: string[];
     fulltext?: FulltextInput;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<number> {
     const result = await this.aggregate({
       where: params?.where,
@@ -881,6 +1131,7 @@ export class Model<
       labels: params?.labels,
       fulltext: params?.fulltext,
       context: params?.context,
+      unsafe: params?.unsafe,
     });
     return (result.count as number) ?? 0;
   }
@@ -895,11 +1146,39 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T> {
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
+
+    // MERGE has no WHERE we can stitch into so we evaluate restrictives
+    // against both `create` and `update` inputs at the application layer.
+    // Permissive default-deny applies — see PolicyDeniedError.
+    const updatePolicy = this.resolvePolicyContext('update', params.unsafe);
+    const createPolicy = this.resolvePolicyContext('create', params.unsafe);
+    this.assertNotDeniedAtCompile(updatePolicy, 'update');
+    if (
+      createPolicy &&
+      !createPolicy.resolved.overridden &&
+      createPolicy.resolved.permissives.length === 0
+    )
+      throw new PolicyDeniedError({
+        typeName: this.nodeDef.typeName,
+        operation: 'create',
+        reason: 'no-permissive-matched',
+      });
+    this.evaluateWriteRestrictives(
+      updatePolicy,
+      'update',
+      params.update as Record<string, unknown> | undefined,
+    );
+    this.evaluateWriteRestrictives(
+      createPolicy,
+      'create',
+      params.create as Record<string, unknown> | undefined,
+    );
 
     const { cypher, params: mergeParams } = this.mutationCompiler.compileMerge(
       params.where as Record<string, unknown>,
@@ -912,6 +1191,7 @@ export class Model<
     // Shared counter so the selection's connection-where params don't collide
     // with anything already in mergeParams.
     const paramCounter = { count: 0 };
+    const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
     let finalCypher: string;
     if (params.select)
       finalCypher = this.applySelectToUpsert(
@@ -919,6 +1199,7 @@ export class Model<
         params.select,
         mergeParams,
         paramCounter,
+        readPolicyContext,
       );
     else
       finalCypher = this.applySelectionSetToUpsert(
@@ -926,12 +1207,18 @@ export class Model<
         params.selectionSet ?? this._selectionSet,
         mergeParams,
         paramCounter,
+        readPolicyContext,
       );
 
     const result = await this.executor.execute(
       finalCypher,
       mergeParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        updatePolicy ?? createPolicy,
+        'update',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const mapped = ResultMapper.mapRecords(result.records, 'n') as T[];
     return mapped[0] ?? (null as unknown as T);
@@ -944,7 +1231,14 @@ export class Model<
     skipDuplicates?: boolean;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    const policyContext = this.resolvePolicyContext('create', params.unsafe);
+    this.evaluateCreatePolicies(
+      policyContext,
+      params.data as unknown as TCreateInput[],
+    );
+
     const { cypher, params: mutParams } =
       this.mutationCompiler.compileCreateMany(
         params.data as Record<string, unknown>[],
@@ -956,7 +1250,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'create',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const record = result.records[0];
     const count = record
@@ -972,13 +1271,23 @@ export class Model<
     data: TUpdateInput;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    const policyContext = this.resolvePolicyContext('update', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'update');
+    this.evaluateWriteRestrictives(
+      policyContext,
+      'update',
+      params.data as Record<string, unknown> | undefined,
+    );
+
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
+      policyContext ? { policyContext } : undefined,
     );
 
     const { cypher, params: mutParams } = this.mutationCompiler.compileUpdate(
@@ -995,7 +1304,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'update',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const record = result.records[0];
     const count = record
@@ -1009,13 +1323,20 @@ export class Model<
   async deleteMany(params: {
     where?: TWhere;
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    const policyContext = this.resolvePolicyContext('delete', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'delete');
+    // Note: WriteRestrictives do not target 'delete'. ReadRestrictives
+    // on the WHERE clause provide the row filter below.
+
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
+      policyContext ? { policyContext } : undefined,
     );
 
     const { cypher, params: mutParams } = this.mutationCompiler.compileDelete(
@@ -1027,7 +1348,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       mutParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'delete',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     const counters = result.summary.counters.updates();
     return { count: counters.nodesDeleted };
@@ -1066,6 +1392,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>> {
     return this.runVectorSearch({
       params,
@@ -1110,6 +1437,7 @@ export class Model<
     select?: TSelect;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>> {
     return this.runVectorSearch({
       params,
@@ -1138,6 +1466,7 @@ export class Model<
       select?: TSelect;
       labels?: string[];
       context?: ExecutionContext;
+      unsafe?: UnsafeOptions;
     };
     compile: (paramCounter: { count: number }) => {
       cypher: string;
@@ -1150,6 +1479,9 @@ export class Model<
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
+
+    const policyContext = this.resolvePolicyContext('read', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'read');
 
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
@@ -1179,7 +1511,7 @@ export class Model<
       'n',
       this.nodeDef,
       paramCounter,
-      { preserveVars: ['score'] },
+      { preserveVars: ['score'], policyContext: policyContext ?? undefined },
     );
     mergeParams(allParams, whereResult.params);
 
@@ -1201,6 +1533,7 @@ export class Model<
       allParams,
       paramCounter,
       selectScope,
+      policyContext,
     );
 
     const lines: string[] = [call.cypher];
@@ -1216,7 +1549,12 @@ export class Model<
     const result = await this.executor.execute(
       cypher,
       allParams,
-      params.context,
+      this.withAuditMetadata(
+        params.context,
+        policyContext,
+        'read',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
     return result.records.map((record) => ({
       node: ResultMapper.convertNeo4jTypes(record.get('n')) as T,
@@ -1262,6 +1600,109 @@ export class Model<
 
   // --- Private helpers ------------------------------------------------------
 
+  /**
+   * Evaluate `'create'` policies in JS BEFORE the mutation runs.
+   *
+   * - Override → all input is allowed.
+   * - Permissive → at least one (whose `appliesWhen` matches) must
+   *   accept each input via `when(ctx)` returning a non-empty partial.
+   * - Restrictive → must hold for every input. Restrictives whose
+   *   `when(ctx, input)` returns false trigger `PolicyDeniedError`.
+   *
+   * Note: the where-predicate from a permissive `when(ctx)` is treated
+   * as a SHAPE check — it only documents which fields the user is
+   * allowed to set; we do NOT compile-and-run the partial against the
+   * input. (Validating shape against a where-partial is out of scope
+   * for v1.7.0.) Restrictive `when(ctx, input)` is the canonical
+   * "WITH CHECK" hook.
+   */
+  private evaluateCreatePolicies(
+    bundle: PolicyContextBundle | null,
+    inputs: TCreateInput[],
+  ): void {
+    if (!bundle || bundle.resolved.overridden) return;
+
+    if (
+      bundle.resolved.permissives.length === 0 &&
+      bundle.defaults.onDeny === 'throw'
+    )
+      throw new PolicyDeniedError({
+        typeName: this.nodeDef.typeName,
+        operation: 'create',
+        reason: 'no-permissive-matched',
+      });
+    if (
+      bundle.resolved.permissives.length === 0 &&
+      bundle.defaults.onDeny !== 'throw'
+    )
+      throw new PolicyDeniedError({
+        typeName: this.nodeDef.typeName,
+        operation: 'create',
+        reason: 'no-permissive-matched',
+        detail:
+          'create operations cannot rely on default-deny silent-empty; at least one permissive must apply.',
+      });
+
+    for (const input of inputs)
+      for (const r of bundle.resolved.restrictives) {
+        // Only WriteRestrictives participate at the application layer.
+        // ReadRestrictives bound to 'create' are nonsensical (no row to
+        // filter) and the constructor would have flagged a mixed
+        // operations array; this guard is defense in depth.
+        if (!isWriteRestrictive(r)) continue;
+        if (r.appliesWhen && !r.appliesWhen(bundle.ctx)) continue;
+        const verdict = r.when(
+          bundle.ctx,
+          input as unknown as Record<string, unknown>,
+        );
+        if (verdict === false)
+          throw new PolicyDeniedError({
+            typeName: this.nodeDef.typeName,
+            operation: 'create',
+            reason: 'restrictive-rejected-input',
+            policyName: r.name,
+          });
+      }
+  }
+
+  /**
+   * Evaluate WRITE-side restrictive policies (create/update) at the
+   * application layer. Each `WriteRestrictive` is invoked exactly once
+   * with `(ctx, input)`; returning `false` rejects the operation with
+   * `PolicyDeniedError`.
+   *
+   * ReadRestrictives are NOT consumed here — they enforce row-filter
+   * semantics via the compiled WHERE clause (see `WhereCompiler`). Only
+   * write-side restrictives have "WITH CHECK" semantics that need
+   * application-layer evaluation.
+   *
+   * For `delete`, there is no input to validate; deletes are filtered
+   * solely via ReadRestrictives on the WHERE clause. Calling this with
+   * `operation: 'delete'` is a no-op (no WriteRestrictives target
+   * delete).
+   */
+  private evaluateWriteRestrictives(
+    bundle: PolicyContextBundle | null,
+    operation: Operation,
+    input: Record<string, unknown> | undefined,
+  ): void {
+    if (!bundle || bundle.resolved.overridden) return;
+    for (const r of bundle.resolved.restrictives) {
+      if (!isWriteRestrictive(r)) continue;
+      // Compile-time gate: appliesWhen returning false drops the
+      // policy entirely for this operation.
+      if (r.appliesWhen && !r.appliesWhen(bundle.ctx)) continue;
+      const verdict = r.when(bundle.ctx, input ?? {});
+      if (verdict === false)
+        throw new PolicyDeniedError({
+          typeName: this.nodeDef.typeName,
+          operation,
+          reason: 'restrictive-rejected-input',
+          policyName: r.name,
+        });
+    }
+  }
+
   private defaultSelection(): SelectionNode[] {
     if (this._defaultSelection) return this._defaultSelection;
     const nodes: SelectionNode[] = [];
@@ -1290,6 +1731,7 @@ export class Model<
     selectionSet: string | DocumentNode | undefined,
     params: Record<string, unknown>,
     paramCounter: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     if (!selectionSet) return cypher;
 
@@ -1331,6 +1773,7 @@ export class Model<
       params,
       paramCounter,
       selectScope,
+      policyContext,
     );
 
     const replacement = selectScope.hasAny()
@@ -1348,6 +1791,7 @@ export class Model<
     select: Record<string, unknown>,
     params: Record<string, unknown>,
     paramCounter: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     const entitySelect = select[this.nodeDef.pluralName];
     if (!entitySelect || typeof entitySelect !== 'object') return cypher;
@@ -1366,6 +1810,7 @@ export class Model<
       params,
       paramCounter,
       selectScope,
+      policyContext,
     );
     const replacement = selectScope.hasAny()
       ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
@@ -1404,6 +1849,7 @@ export class Model<
     selectionSet: string | DocumentNode | undefined,
     params: Record<string, unknown>,
     paramCounter: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     if (!selectionSet) return cypher;
 
@@ -1419,6 +1865,7 @@ export class Model<
       params,
       paramCounter,
       selectScope,
+      policyContext,
     );
 
     const replacement = selectScope.hasAny()
@@ -1435,6 +1882,7 @@ export class Model<
     select: Record<string, unknown>,
     params: Record<string, unknown>,
     paramCounter: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     const selection = this.selectNormalizer.normalize(select, this.nodeDef);
     const selectScope = new CypherFieldScope('n', [], '__sel');
@@ -1447,6 +1895,7 @@ export class Model<
       params,
       paramCounter,
       selectScope,
+      policyContext,
     );
     const replacement = selectScope.hasAny()
       ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`

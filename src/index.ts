@@ -1,5 +1,5 @@
 // Main classes
-export { OGM } from './ogm';
+export { OGM, OGMWithContext } from './ogm';
 export type { OGMConfig } from './ogm';
 /** @deprecated Use OGM instead */
 export { OGM as SafedoseOGM } from './ogm';
@@ -12,6 +12,7 @@ export type {
   FulltextRelationshipEntry,
   FulltextLeaf,
   FulltextInput,
+  UnsafeOptions,
 } from './model';
 export { InterfaceModel } from './interface-model';
 export type { InterfaceModelInterface } from './interface-model';
@@ -22,6 +23,33 @@ export {
   RecordNotFoundError,
   SubgraphOperationError,
 } from './errors';
+export { PolicyDeniedError } from './policy/errors';
+
+// Policies (Node-Level Security)
+export {
+  override,
+  permissive,
+  restrictive,
+  isReadRestrictive,
+  isWriteRestrictive,
+} from './policy/types';
+export type {
+  Policy,
+  OverridePolicy,
+  PermissivePolicy,
+  RestrictivePolicy,
+  ReadRestrictivePolicy,
+  WriteRestrictivePolicy,
+  PolicyContext,
+  PolicyContextBundle,
+  Operation,
+  OperationOrWildcard,
+  ReadOperation,
+  WriteOperation,
+  PoliciesByModel,
+  PolicyDefaults,
+  ResolvedPolicies,
+} from './policy/types';
 
 // Schema types
 export type {

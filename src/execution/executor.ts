@@ -8,13 +8,18 @@ import {
 
 /**
  * Minimal logger interface. Compatible with NestJS Logger, console, pino, etc.
+ *
+ * `warn` is optional so existing logger implementations remain compatible.
+ * The OGM uses it for security-sensitive events (policy bypass, raw cypher
+ * execution); when not provided it silently no-ops.
  */
 export interface OGMLogger {
   debug(message: string, ...args: unknown[]): void;
+  warn?(message: string, ...args: unknown[]): void;
 }
 
 /** No-op logger used when no logger is provided and debug is off. */
-const NOOP_LOGGER: OGMLogger = { debug: () => {} };
+const NOOP_LOGGER: OGMLogger = { debug: () => {}, warn: () => {} };
 
 /**
  * Execution context for running queries within an existing transaction or session.
@@ -29,6 +34,15 @@ export interface ExecutionContext {
   transaction?: Transaction | ManagedTransaction;
   /** Explicit session to use (auto-committed). */
   session?: Session;
+  /**
+   * Optional metadata to attach to the underlying transaction. Forwarded
+   * via `tx.setMetaData(...)` (or session config for auto-commit). Used
+   * by the OGM's policy layer to surface audit fields
+   * (`ogmPolicySetVersion`, `ctxFingerprint`, `modelType`, `operation`,
+   * `policiesEvaluated`, `bypassed`). Failures to set metadata are
+   * logged at `debug` and do not block query execution.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -64,15 +78,23 @@ export class Executor {
 
     // Legacy backward compatibility
     const tx = context?.executionContext ?? context?.transaction;
-    if (tx) return tx.run(cypher, params);
+    if (tx) {
+      this.attachMetadata(tx, context?.metadata);
+      return tx.run(cypher, params);
+    }
 
     // Explicit session
-    if (context?.session) return context.session.run(cypher, params);
+    if (context?.session)
+      return context.metadata
+        ? context.session.run(cypher, params, { metadata: context.metadata })
+        : context.session.run(cypher, params);
 
     // Auto-commit session
     const session = this.driver.session();
     try {
-      const result = await session.run(cypher, params);
+      const result = context?.metadata
+        ? await session.run(cypher, params, { metadata: context.metadata })
+        : await session.run(cypher, params);
       if (Executor.debug) {
         this.logger.debug('[OGM] Records returned: %d', result.records.length);
         if (result.records.length > 0 && result.records.length <= 5)
@@ -84,6 +106,30 @@ export class Executor {
       return result;
     } finally {
       await session.close();
+    }
+  }
+
+  /**
+   * Attach OGM-managed metadata to an existing transaction. Failures
+   * (older drivers without `setMetaData`, or already-finished tx) are
+   * swallowed at debug — auditing must never block a query.
+   */
+  private attachMetadata(
+    tx: Transaction | ManagedTransaction,
+    metadata: Record<string, unknown> | undefined,
+  ): void {
+    if (!metadata) return;
+    const setter = (
+      tx as unknown as { setMetaData?: (m: Record<string, unknown>) => void }
+    ).setMetaData;
+    if (typeof setter !== 'function') return;
+    try {
+      setter.call(tx, metadata);
+    } catch (err) {
+      this.logger.debug(
+        '[OGM] Failed to set tx metadata: %s',
+        (err as Error).message,
+      );
     }
   }
 }

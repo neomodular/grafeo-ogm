@@ -1,4 +1,6 @@
 import { OGMError } from '../errors';
+import { isReadRestrictive } from '../policy/types';
+import type { PolicyContextBundle } from '../policy/types';
 import {
   NodeDefinition,
   PropertyDefinition,
@@ -123,10 +125,26 @@ export class WhereCompiler {
        * would drop those vars and downstream RETURN/ORDER BY breaks.
        */
       preserveVars?: ReadonlyArray<string>;
+      /**
+       * Policy context for this query. When present, the resolved
+       * permissive/restrictive set is AND-stitched into the compiled
+       * body sharing the same `paramCounter` and prelude scope.
+       *
+       * If `resolved.overridden` is true, this is a no-op (byte-
+       * identical to no-policy emission). When `resolved` is empty
+       * AND `defaults.onDeny === 'empty'`, the policy clause becomes
+       * `false` (default-deny). When `'throw'`, the call site is
+       * responsible for rejecting BEFORE compile — see `Model`.
+       */
+      policyContext?: PolicyContextBundle;
     },
   ): WhereResult {
-    if (where == null || Object.keys(where).length === 0)
-      return { cypher: '', params: {} };
+    const hasUserWhere = where != null && Object.keys(where).length > 0;
+    const policyContext = options?.policyContext;
+    const policyActive =
+      policyContext !== undefined && !policyContext.resolved.overridden;
+
+    if (!hasUserWhere && !policyActive) return { cypher: '', params: {} };
 
     // Top-level scope — preludes here are returned to the caller for stitching
     // BEFORE the WHERE clause. Nested scopes (relationship quantifiers) build
@@ -136,21 +154,191 @@ export class WhereCompiler {
       options?.preserveVars ?? [],
       '__where',
     );
-    const inner = this.compileConditions(
-      where,
-      nodeVar,
-      nodeDef,
-      paramCounter,
-      0,
-      scope,
-    );
+    const userBody = hasUserWhere
+      ? this.compileConditions(where, nodeVar, nodeDef, paramCounter, 0, scope)
+      : { cypher: '', params: {} as Record<string, unknown> };
+
+    let cypher = userBody.cypher;
+    const params = { ...userBody.params };
+
+    if (policyActive) {
+      const policyClause = this.compilePolicyClause(
+        policyContext!,
+        nodeVar,
+        nodeDef,
+        paramCounter,
+        scope,
+        params,
+      );
+      cypher = stitchUserAndPolicy(cypher, policyClause);
+    }
 
     const result: WhereResult = {
-      cypher: inner.cypher,
-      params: inner.params,
+      cypher,
+      params,
     };
     if (scope.hasAny()) result.preludes = scope.emit();
     return result;
+  }
+
+  /**
+   * Compile the policy clause for a single (typeName, op) frame. AND-
+   * stitches into the user's body via `stitchUserAndPolicy`. Shares the
+   * same `paramCounter` and `scope` as the user where so that nothing
+   * collides downstream.
+   *
+   * Permissive `cypher.params` keys are namespaced with `policy_p<n>_`
+   * to guarantee no collision with `param0..N`.
+   */
+  private compilePolicyClause(
+    bundle: PolicyContextBundle,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    paramCounter: { count: number },
+    scope: CypherFieldScope,
+    paramsTarget: Record<string, unknown>,
+  ): string {
+    const { ctx, resolved, defaults, operation } = bundle;
+
+    const permFrags: string[] = [];
+    let policyParamIdx = 0;
+
+    for (const p of resolved.permissives) {
+      // `when` returns a where-partial — compile it through the same
+      // pipeline so every existing operator/quantifier just works.
+      if (p.when) {
+        const partial = p.when(ctx);
+        if (partial && Object.keys(partial).length > 0) {
+          const compiled = this.compileConditions(
+            partial,
+            nodeVar,
+            nodeDef,
+            paramCounter,
+            0,
+            scope,
+          );
+          if (compiled.cypher) {
+            permFrags.push(`(${compiled.cypher})`);
+            mergeParams(paramsTarget, compiled.params);
+          }
+        } else if (partial && Object.keys(partial).length === 0)
+          // Empty partial means "match everything" — equivalent to true.
+          permFrags.push('true');
+      }
+
+      // `cypher` escape hatch — raw fragment + parameterized params
+      // namespaced with `policy_p<idx>_`.
+      if (p.cypher) {
+        const fragment = p.cypher.fragment(ctx, { node: nodeVar });
+        if (typeof fragment !== 'string')
+          throw new OGMError(
+            `permissive cypher.fragment must return a string (policy "${p.name ?? 'permissive'}").`,
+          );
+        if (fragment.length > 0) {
+          const rawParams = p.cypher.params(ctx) ?? {};
+          const namespaced = namespacePolicyParams(
+            rawParams,
+            `policy_p${policyParamIdx++}_`,
+          );
+          mergeParams(paramsTarget, namespaced.values);
+          permFrags.push(
+            `(${rewritePolicyFragment(fragment, namespaced.map)})`,
+          );
+        }
+      }
+    }
+
+    const restFrags: string[] = [];
+    for (const p of resolved.restrictives) {
+      // Only ReadRestrictive policies participate in the WHERE clause.
+      // WriteRestrictive policies (create/update) are evaluated at the
+      // application layer in Model.* — calling their `(ctx, input)`
+      // `when` here with no input would silently mis-evaluate.
+      if (!isReadRestrictive(p)) continue;
+      // Compile-time gate. If `appliesWhen(ctx)` is false, the policy
+      // contributes nothing to this query — same semantics as a
+      // dropped permissive.
+      if (p.appliesWhen && !p.appliesWhen(ctx)) continue;
+
+      if (p.when) {
+        // ReadRestrictive `when` may return a where-partial OR boolean.
+        const partial = p.when(ctx);
+        if (partial === false)
+          // Hard deny — compiles to `false` and short-circuits the
+          // restrictive AND chain.
+          restFrags.push('false');
+        else if (partial && typeof partial === 'object') {
+          const obj = partial as Record<string, unknown>;
+          if (Object.keys(obj).length > 0) {
+            const compiled = this.compileConditions(
+              obj,
+              nodeVar,
+              nodeDef,
+              paramCounter,
+              0,
+              scope,
+            );
+            if (compiled.cypher) {
+              restFrags.push(`(${compiled.cypher})`);
+              mergeParams(paramsTarget, compiled.params);
+            }
+          }
+        }
+      }
+      if (p.cypher) {
+        const fragment = p.cypher.fragment(ctx, { node: nodeVar });
+        if (typeof fragment !== 'string')
+          throw new OGMError(
+            `restrictive cypher.fragment must return a string (policy "${p.name ?? 'restrictive'}").`,
+          );
+        if (fragment.length > 0) {
+          const rawParams = p.cypher.params(ctx) ?? {};
+          const namespaced = namespacePolicyParams(
+            rawParams,
+            `policy_p${policyParamIdx++}_`,
+          );
+          mergeParams(paramsTarget, namespaced.values);
+          restFrags.push(
+            `(${rewritePolicyFragment(fragment, namespaced.map)})`,
+          );
+        }
+      }
+    }
+
+    // Default-deny: no permissives matched. The Model call site is
+    // responsible for raising `PolicyDeniedError` BEFORE compile when
+    // `defaults.onDeny === 'throw'`. At compile time we always fall
+    // back to `false` so the query is safe even if the call-site
+    // throw is bypassed (defense in depth, not the primary path).
+    if (resolved.permissives.length === 0) {
+      void defaults;
+      void operation;
+      return 'false';
+    }
+
+    // At least one permissive matched. Compose `(perm) AND (rest)`.
+    const permClause =
+      permFrags.length === 0
+        ? // Permissives existed but every one returned an empty partial.
+          // Each empty partial is "match anything" — `true`.
+          'true'
+        : permFrags.length === 1
+          ? permFrags[0]
+          : `(${permFrags.join(' OR ')})`;
+
+    const restClause =
+      restFrags.length === 0
+        ? 'true'
+        : restFrags.length === 1
+          ? restFrags[0]
+          : restFrags.join(' AND ');
+
+    // Avoid the trivial `(... AND true)` formulation when there are no
+    // restrictives — keeps emitted Cypher tighter and the byte-
+    // identical regression cleaner.
+    return restClause === 'true'
+      ? permClause
+      : `(${permClause} AND ${restClause})`;
   }
 
   private compileConditions(
@@ -773,4 +961,51 @@ export class WhereCompiler {
 
     return { cypher, params: { [paramName]: value } };
   }
+}
+
+/**
+ * Stitch a user where-body and a policy clause into a single Cypher
+ * fragment. Both come from `compileConditions` so each is already a
+ * valid boolean expression. Empty user bodies skip the AND wrap.
+ */
+function stitchUserAndPolicy(userBody: string, policyClause: string): string {
+  if (!userBody) return policyClause;
+  if (!policyClause) return userBody;
+  return `(${userBody}) AND ${policyClause}`;
+}
+
+/**
+ * Namespace raw `cypher.params` keys with the given prefix and produce a
+ * lookup map old-name → new-name. The fragment text is rewritten with
+ * the new names so users of the escape hatch never have to coordinate.
+ */
+function namespacePolicyParams(
+  rawParams: Record<string, unknown>,
+  prefix: string,
+): { values: Record<string, unknown>; map: Map<string, string> } {
+  const values: Record<string, unknown> = {};
+  const map = new Map<string, string>();
+  for (const [key, value] of Object.entries(rawParams)) {
+    assertSafeKey(key, 'policy cypher params key');
+    assertSafeIdentifier(key, 'policy cypher params key');
+    const next = `${prefix}${key}`;
+    values[next] = value;
+    map.set(key, next);
+  }
+  return { values, map };
+}
+
+/**
+ * Rewrite `$<name>` placeholders in a raw policy fragment to point at
+ * the namespaced versions. Anything not in the rename map is left alone
+ * — users may reference Neo4j-builtin params that we don't own.
+ */
+function rewritePolicyFragment(
+  fragment: string,
+  rename: Map<string, string>,
+): string {
+  return fragment.replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (match, name) => {
+    const renamed = rename.get(name);
+    return renamed ? `$${renamed}` : match;
+  });
 }

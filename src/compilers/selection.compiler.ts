@@ -8,6 +8,7 @@ import {
 } from 'graphql';
 
 import { OGMError } from '../errors';
+import type { PolicyContextBundle } from '../policy/types';
 import type { NodeDefinition, SchemaMetadata } from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
 import { CypherFieldScope } from '../utils/cypher-field-projection';
@@ -101,6 +102,14 @@ export class SelectionCompiler {
      * comprehensions where CALL { ... } subqueries are not allowed.
      */
     cypherScope: CypherFieldScope | null = null,
+    /**
+     * Policy context for nested-selection enforcement. When set, every
+     * relationship pattern comprehension, connection edge, and union
+     * branch resolves the target type's `'read'` policy via
+     * `policyContext.resolveForType` and AND-stitches it into the inner
+     * WHERE clause. Without this, traversals would bypass policies.
+     */
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     if (selection.length === 0) return `${nodeVar} { .id }`;
 
@@ -174,6 +183,7 @@ export class SelectionCompiler {
           currentDepth,
           params,
           paramCounter,
+          policyContext,
         );
         if (connectionCypher)
           parts.push(`${node.fieldName}: ${connectionCypher}`);
@@ -193,6 +203,7 @@ export class SelectionCompiler {
             currentDepth,
             params,
             paramCounter,
+            policyContext,
           );
           if (caseCypher) parts.push(`${node.fieldName}: ${caseCypher}`);
           continue;
@@ -206,6 +217,7 @@ export class SelectionCompiler {
           currentDepth,
           params,
           paramCounter,
+          policyContext,
         );
         if (relCypher) parts.push(`${node.fieldName}: ${relCypher}`);
 
@@ -343,6 +355,7 @@ export class SelectionCompiler {
     currentDepth: number,
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string | null {
     if (currentDepth >= maxDepth) return null;
 
@@ -370,36 +383,22 @@ export class SelectionCompiler {
       currentDepth + 1,
       params,
       paramCounter,
+      null,
+      policyContext,
     );
 
-    // Compile WHERE clause for relationship filtering (Prisma-like select)
-    let whereClause = '';
-    if (
-      node.relationshipWhere &&
-      Object.keys(node.relationshipWhere).length > 0 &&
-      this.whereCompiler &&
-      params &&
-      paramCounter
-    ) {
-      const whereResult = this.whereCompiler.compile(
-        node.relationshipWhere,
-        childVar,
-        targetDef,
-        paramCounter,
-      );
-      // Pattern comprehensions cannot host CALL { ... } subqueries, so we
-      // cannot stitch `@cypher` field preludes here. Reject with a clear
-      // error rather than silently dropping them.
-      if (whereResult.preludes && whereResult.preludes.length > 0)
-        throw new OGMError(
-          `Filtering nested-select relationship "${node.fieldName}" by an @cypher field is not supported. ` +
-            `@cypher fields can only appear in top-level WHERE filters, not inside select.where on relationships.`,
-        );
-      if (whereResult.cypher) {
-        mergeParams(params, whereResult.params);
-        whereClause = ` WHERE ${whereResult.cypher}`;
-      }
-    }
+    // Compile WHERE clause for relationship filtering (Prisma-like select).
+    // Combines user `select.where` with the target type's `'read'` policy.
+    const whereClause = this.compileNestedWhere({
+      node,
+      childVar,
+      targetDef,
+      params,
+      paramCounter,
+      policyContext,
+      contextLabel: `relationship "${node.fieldName}"`,
+      userWhere: node.relationshipWhere,
+    });
 
     const comprehension = `[${pattern}${whereClause} | ${innerProjection}]`;
 
@@ -445,6 +444,7 @@ export class SelectionCompiler {
     currentDepth: number,
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string | null {
     if (currentDepth >= maxDepth) return null;
 
@@ -474,6 +474,8 @@ export class SelectionCompiler {
         currentDepth + 1,
         params,
         paramCounter,
+        null,
+        policyContext,
       );
 
       const pattern = buildRelPattern({
@@ -484,10 +486,24 @@ export class SelectionCompiler {
         schema: this.schema,
       });
 
+      // Inject the union member's `'read'` policy into the comprehension WHERE.
+      const memberPolicyWhere = this.compileNestedWhere({
+        node,
+        childVar,
+        targetDef,
+        params,
+        paramCounter,
+        policyContext,
+        contextLabel: `union member "${memberName}" of "${node.fieldName}"`,
+        // Union branches don't have a user select.where in the
+        // SelectionNode model — only policies contribute here.
+        userWhere: undefined,
+      });
+
       // Wrap singular relationships with head() to return object instead of array
       const comprehension = isSingular
-        ? `head([${pattern} | ${innerProjection}])`
-        : `[${pattern} | ${innerProjection}]`;
+        ? `head([${pattern}${memberPolicyWhere} | ${innerProjection}])`
+        : `[${pattern}${memberPolicyWhere} | ${innerProjection}]`;
       const memberLabel = escapeIdentifier(memberName);
       branches.push(`WHEN ${nodeVar}:${memberLabel} THEN ${comprehension}`);
     }
@@ -509,6 +525,7 @@ export class SelectionCompiler {
     currentDepth: number,
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string | null {
     if (currentDepth >= maxDepth) return null;
 
@@ -544,6 +561,8 @@ export class SelectionCompiler {
         currentDepth + 1,
         params,
         paramCounter,
+        null,
+        policyContext,
       );
       mapParts.push(`node: ${nodeProjection}`);
       projectionKeys.push('node');
@@ -579,7 +598,8 @@ export class SelectionCompiler {
 
     const innerMap = `{ ${mapParts.join(', ')} }`;
 
-    // Add WHERE clause if connectionWhere is present
+    // Add WHERE clause if connectionWhere is present, AND-combined with the
+    // target type's `'read'` policy.
     let whereClause = '';
     if (node.connectionWhere && Object.keys(node.connectionWhere).length > 0) {
       // Reject unsupported edge WHERE filters with a descriptive error
@@ -595,23 +615,18 @@ export class SelectionCompiler {
         : node.connectionWhere;
 
       // If we have a full WhereCompiler, delegate to it for complete operator support
-      if (this.whereCompiler && targetDef) {
-        const whereResult = this.whereCompiler.compile(
-          nodeWhere,
+      if (this.whereCompiler && targetDef)
+        whereClause = this.compileNestedWhere({
+          node,
           childVar,
           targetDef,
+          params,
           paramCounter,
-        );
-        if (whereResult.preludes && whereResult.preludes.length > 0)
-          throw new OGMError(
-            `Filtering connection "${node.fieldName}" by an @cypher field is not supported. ` +
-              `@cypher fields can only appear in top-level WHERE filters, not inside connection where.`,
-          );
-        if (whereResult.cypher) {
-          if (params) mergeParams(params, whereResult.params);
-          whereClause = ` WHERE ${whereResult.cypher}`;
-        }
-      } else {
+          policyContext,
+          contextLabel: `connection "${node.fieldName}"`,
+          userWhere: nodeWhere as Record<string, unknown>,
+        });
+      else {
         const simpleWhere = this.compileSimpleWhere(
           node.connectionWhere,
           childVar,
@@ -620,7 +635,18 @@ export class SelectionCompiler {
         );
         if (simpleWhere) whereClause = ` WHERE ${simpleWhere}`;
       }
-    }
+    } else if (this.whereCompiler && targetDef)
+      // No user where but we still need the policy injected if active.
+      whereClause = this.compileNestedWhere({
+        node,
+        childVar,
+        targetDef,
+        params,
+        paramCounter,
+        policyContext,
+        contextLabel: `connection "${node.fieldName}"`,
+        userWhere: undefined,
+      });
 
     if (sortKeyTokens.length === 0)
       return `{ edges: [${pattern}${whereClause} | ${innerMap}] }`;
@@ -634,6 +660,107 @@ export class SelectionCompiler {
     return `{ edges: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
       ', ',
     )}]) | ${outerProjection}] }`;
+  }
+
+  /**
+   * AND-combine an optional user where (`select.where` / `connectionWhere`)
+   * with the target type's `'read'` policy and emit a `WHERE …` fragment
+   * (with leading space). Returns `''` when nothing applies.
+   *
+   * The returned where lives inside a pattern comprehension so any
+   * `@cypher` field used by the policy MUST throw — the comprehension
+   * cannot host CALL { ... } subqueries. The error message points to the
+   * documented limitation.
+   */
+  private compileNestedWhere(args: {
+    node: SelectionNode;
+    childVar: string;
+    targetDef: NodeDefinition;
+    params: Record<string, unknown> | undefined;
+    paramCounter: { count: number } | undefined;
+    policyContext: PolicyContextBundle | null;
+    contextLabel: string;
+    userWhere: Record<string, unknown> | undefined;
+  }): string {
+    const {
+      node,
+      childVar,
+      targetDef,
+      params,
+      paramCounter,
+      policyContext,
+      contextLabel,
+      userWhere,
+    } = args;
+    if (!this.whereCompiler || !params || !paramCounter) {
+      // Without these, the policy can't be compiled — fall back to user-only
+      // (matches v1.6.0 behavior when WhereCompiler isn't wired).
+      if (userWhere && Object.keys(userWhere).length > 0)
+        // We can't compile via whereCompiler without paramCounter; let
+        // the fallback simple where path handle it.
+        return '';
+
+      return '';
+    }
+
+    // Resolve the target type's read policy (if any).
+    const targetPolicy = policyContext
+      ? policyContext.resolveForType(targetDef.typeName, 'read')
+      : null;
+
+    const targetBundle: PolicyContextBundle | undefined = targetPolicy
+      ? {
+          ctx: policyContext!.ctx,
+          operation: 'read',
+          resolved: targetPolicy,
+          resolveForType: policyContext!.resolveForType,
+          defaults: policyContext!.defaults,
+        }
+      : undefined;
+
+    // Compile combined user where + policy in one pass.
+    const compiled = this.whereCompiler.compile(
+      userWhere,
+      childVar,
+      targetDef,
+      paramCounter,
+      targetBundle ? { policyContext: targetBundle } : undefined,
+    );
+
+    // Pattern comprehensions cannot host CALL { ... } subqueries.
+    if (compiled.preludes && compiled.preludes.length > 0) {
+      // Two distinct cases:
+      //  - user where references @cypher → original v1.6.0 error path
+      //  - policy references @cypher inside nested selection → new path
+      const policyHasCypher =
+        targetBundle &&
+        compiled.cypher.length > 0 &&
+        // Heuristic: if the user where alone produces no cypher refs but
+        // adding policy did, then policy is the source. We use a clearer
+        // policy-targeted error since both paths are equivalent for the
+        // user.
+        true;
+      if (policyHasCypher && targetBundle)
+        throw new OGMError(
+          `Policy on "${targetDef.typeName}" requires @cypher field projection, ` +
+            `which is not supported inside nested-selection enforcement (${contextLabel}). ` +
+            `Refactor the policy to use stored properties or a relationship traversal.`,
+        );
+      throw new OGMError(
+        `Filtering ${contextLabel} by an @cypher field is not supported. ` +
+          `@cypher fields can only appear in top-level WHERE filters, not inside select.where on relationships.`,
+      );
+    }
+
+    if (compiled.cypher) {
+      mergeParams(params, compiled.params);
+      return ` WHERE ${compiled.cypher}`;
+    }
+    // Compile produced no clause but may still have merged params.
+    if (compiled.params && Object.keys(compiled.params).length > 0)
+      mergeParams(params, compiled.params);
+    void node;
+    return '';
   }
 
   /**

@@ -213,6 +213,24 @@ await ogm.$transaction(async (ctx) => {
 
 ---
 
+## Beta features
+
+The current beta release exposes one new feature behind opt-in config:
+
+- **Node-Level Security (NLS)** — a Postgres-RLS-style filter layer that compiles into the existing WHERE pipeline. See **[Advanced Features → Node-Level Security (Beta)](#node-level-security-beta)**.
+
+The beta is purely additive: an OGM constructed without the new `policies` option emits **byte-identical Cypher** to v1.6.0. Install with:
+
+```bash
+npm install grafeo-ogm@beta
+# or
+pnpm add grafeo-ogm@beta
+```
+
+The shape of the public API is settled, but the beta window is for collecting integration feedback. Minor adjustments may land before `1.7.0` final.
+
+---
+
 ## Features Overview
 
 | Feature | Description |
@@ -917,6 +935,171 @@ These are not OGM bugs — they are Cypher-language constraints. Pattern compreh
 #### Performance
 
 Each scope (`where`, `select`, sort) emits its own `CALL { WITH n; WITH n AS this; <statement> }` block per `@cypher` field reference. A query that references the same `@cypher` field in all three scopes emits three `CALL` blocks. This is functionally correct and parameter-isolated, but worth knowing if your statement is expensive (multi-hop traversals, aggregations over large fan-outs). For frequently-accessed computed values, consider materializing as a stored property updated on write instead.
+
+### Node-Level Security (Beta)
+
+> **Beta — install with `npm install grafeo-ogm@beta`.**
+
+Node-Level Security (NLS) is a per-request filter layer that compiles into the existing WHERE pipeline. Policies return `<Node>Where` partials, so every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available inside policies — no new DSL.
+
+#### Declaration
+
+```typescript
+import { OGM, override, permissive, restrictive } from 'grafeo-ogm';
+
+interface RequestCtx {
+  userId: string;
+  capabilities: string[];
+  tierIds: string[];
+}
+
+const ogm = new OGM<ModelMap>({
+  typeDefs,
+  driver,
+  policies: {
+    Book: [
+      // Compile-time short-circuit. When `when(ctx)` returns true, ALL
+      // other policies for `Book.read` are dropped — query is byte-
+      // identical to a no-policy query. Zero runtime cost for admins.
+      override({
+        operations: ['*'],
+        when: (c: RequestCtx) => c.capabilities.includes('admin'),
+        name: 'admin-bypass',
+      }),
+
+      // OR-grant. Multiple permissives compose with OR — any match grants.
+      permissive({
+        operations: ['read'],
+        when: (c: RequestCtx) => ({ ownerId: c.userId }),
+        name: 'owner-can-read',
+      }),
+
+      // Read-side restrictive — AND-row predicate. Compiles into the
+      // WHERE clause and applies to read|delete|aggregate|count.
+      // `when` receives only `ctx` and returns a where-partial (or
+      // `false` for a hard deny).
+      restrictive({
+        operations: ['read'],
+        when: (c: RequestCtx) => ({ tierIds_IN: c.tierIds }),
+        name: 'tier-isolation',
+      }),
+
+      // Write-side restrictive — Postgres `WITH CHECK` semantics. Runs
+      // at the application layer for create|update only; receives both
+      // `ctx` and the user-submitted `input`. MUST return a boolean.
+      // The OGM rejects mixed read+write `operations` arrays — split a
+      // single restrictive into two if you need both read- and write-
+      // side coverage.
+      restrictive({
+        operations: ['create', 'update'],
+        when: (c, input) =>
+          (input as { ownerId?: string }).ownerId === c.userId,
+        name: 'cannot-set-other-owner',
+      }),
+    ],
+  },
+  policyDefaults: {
+    onDeny: 'empty', // Or 'throw' — raises PolicyDeniedError pre-compile.
+    auditMetadata: true,
+  },
+});
+
+// Per request:
+const Books = ogm.withContext({ userId, capabilities, tierIds }).model('Book');
+const visible = await Books.find({ where: { published_GT: '2024-01-01' } });
+```
+
+The Cypher emitted for the call above is roughly:
+
+```cypher
+MATCH (n:`Book`)
+WHERE (n.`published` > $param0) AND ((n.`ownerId` = $param1) AND n.`tierIds` IN $param2)
+RETURN n { .id, .title, .ownerId, .tierIds, ... }
+```
+
+#### Hierarchical ACL example
+
+Combine permissives to express "owner OR member of an allowed tier":
+
+```typescript
+policies: {
+  Book: [
+    permissive({
+      operations: ['read'],
+      when: (c) => ({ ownerId: c.userId }),
+      name: 'owner-can-read',
+    }),
+    permissive({
+      operations: ['read'],
+      // Returns a where-partial that uses the existing _SOME quantifier.
+      when: (c) => ({ tiers_SOME: { id_IN: c.tierIds } }),
+      name: 'tier-can-read',
+    }),
+  ],
+}
+```
+
+Both permissives OR together — a row passes if either branch matches.
+
+#### Interface inheritance
+
+Policies on an interface AND with policies on every implementing concrete type. Concrete types can only narrow restrictives, never broaden — predictable. `OR` composition for permissives lets concrete types add allow paths their interface didn't anticipate.
+
+```typescript
+policies: {
+  Resource: [
+    // Tenant isolation applies to every type that implements Resource.
+    restrictive({ operations: ['read'], when: (c) => ({ tenantId: c.tenantId }) }),
+  ],
+  Book: [
+    // Additional grant only for Book — composed via OR with any
+    // Resource-level permissives.
+    permissive({ operations: ['read'], when: (c) => ({ authorId: c.userId }) }),
+  ],
+}
+```
+
+#### Enforcement boundary
+
+> **The OGM enforces policies at the compiler.** Policies do NOT apply to `ogm.$queryRaw`, `ogm.$executeRaw`, or to `@cypher` directive bodies that traverse from a stored field. If you need raw-Cypher enforcement, write the predicate into your raw Cypher manually or layer a Neo4j role/RBAC at the database.
+
+#### Escape hatches
+
+```typescript
+// Disable policies for a single call. Logged via logger.warn.
+await Books.find({ where: { id: 'b1' }, unsafe: { bypassPolicies: true } });
+
+// Disable policies for a derived OGM (data migrations, admin scripts).
+const adminOgm = ogm.unsafe.bypassPolicies();
+```
+
+Both paths emit byte-identical Cypher to a no-policy OGM.
+
+#### Audit metadata
+
+When `policies` is configured, every OGM-emitted query attaches transaction metadata:
+
+```typescript
+{
+  ogmPolicySetVersion: '1.7.0-beta.0',
+  ctxFingerprint: '<sha256 of sorted ctx KEYS — never values>',
+  modelType: 'Book',
+  operation: 'read',
+  policiesEvaluated: ['owner-can-read', 'tier-isolation'],
+  bypassed: false,
+}
+```
+
+Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is intentionally key-only — no ctx values are leaked.
+
+#### Beta limits
+
+- **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal.
+- **`upsert`** evaluates create- and update-side policies at the application layer (MERGE has no WHERE). Documented limit; full MERGE-aware enforcement is deferred to v1.7.1.
+- **Restrictives are split into read-side and write-side flavors.** A restrictive's `operations` array determines which `when` signature applies. Read-side ops (`read|delete|aggregate|count`) → `when(ctx)` returns a where-partial or boolean. Write-side ops (`create|update`) → `when(ctx, input)` returns a boolean only. Mixed arrays (e.g. `['read', 'create']`) are rejected at construction time — split into two restrictives. Each flavor is invoked exactly once per query (read-side at compile, write-side at the application layer); the dual-invocation contract bug from earlier beta iterations is fixed. Use `isReadRestrictive` / `isWriteRestrictive` if you need to inspect a policy at runtime.
+- **InterfaceModel CASE-per-label fallback.** Implementers without a registered policy fall back to interface-level enforcement on their branch. The OGM emits a `logger.warn` at construction time when an interface has policies and one of its implementers does not — silence the warning by registering an explicit policy on each implementer.
+- **AsyncLocalStorage** opt-in is deferred to v1.7.1. Beta is explicit `withContext()` only — create one wrapper per request, discard after.
+- **Live Neo4j integration tests are not part of the beta.** Mock-driver coverage is extensive but a real-DB suite is a `1.7.0` final blocker.
 
 ### Raw Cypher
 

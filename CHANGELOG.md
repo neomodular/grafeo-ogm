@@ -1,5 +1,76 @@
 # Changelog
 
+## [1.7.0-beta.0] (2026-05-02)
+
+> **BETA — API may change before 1.7.0 final.** Install with `npm install grafeo-ogm@beta` (after the package is published to the `beta` dist-tag). The shape of the public API is settled, but feedback during the beta window may cause minor adjustments.
+
+### Features
+
+- **Node-Level Security (NLS).** New optional `policies` config on `OGMConfig` plus `OGM.withContext(ctx)` give you a Postgres-RLS-style filter layer that compiles into the existing WHERE pipeline. Policies return `<Node>Where` partials — every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available. Three policy kinds: `override` (compile-time short-circuit; admin path is byte-identical to no-policy), `permissive` (OR'd grants with optional `appliesWhen` compile-time gate), `restrictive` (split into read-side and write-side flavors — see "Contract change" below). Vocabulary-neutral — no hardcoded role strings, you compose your own.
+- **Nested-selection enforcement.** `SelectionCompiler` injects every target type's `'read'` policy into pattern comprehensions, connection edges, and union branches. Policies cannot be bypassed by traversal.
+- **Default-deny baseline.** `policyDefaults.onDeny: 'empty'` (default) emits `WHERE false` when no permissive matches; `'throw'` raises `PolicyDeniedError` before the query runs.
+- **Audit metadata.** Every OGM-emitted query when policies are configured attaches `tx.setMetaData({ ogmPolicySetVersion, ctxFingerprint, modelType, operation, policiesEvaluated, bypassed })`. `ctxFingerprint` is a SHA-256 of the SORTED ctx KEYS only — never values, never anything sensitive.
+- **Escape hatches.** `ogm.unsafe.bypassPolicies()` returns a non-policy-aware OGM (logged via `logger.warn`); per-method `unsafe: { bypassPolicies: true }` skips policies for a single call (also logged).
+- **Interface-aware enforcement.** `InterfaceModel.find()` / `aggregate()` emit a CASE-per-label WHERE that AND-combines each implementer's `'read'` policy with the interface-level policy. Concrete-type policies are NOT bypassed when querying through the interface.
+- **`PolicyDeniedError`** — new public error class extending `OGMError`. Carries `typeName`, `operation`, `reason` (`'no-permissive-matched' | 'restrictive-rejected-input' | 'override-failed-validation'`), and optional `policyName`.
+
+### Contract change during beta — read/write restrictive split
+
+The pre-fix beta invoked `RestrictivePolicy.when` twice on every write path: once at the application layer with `(ctx, input)` (WITH CHECK semantics) and once at WHERE-compile with `(ctx)` only (row predicate). Side-effecting callbacks fired inconsistently and any predicate that legitimately depended on `input` returned `false` at compile time → `WHERE false` → reads silently blocked.
+
+**Fix:** `RestrictivePolicy` is now a discriminated union over `operations`.
+
+- **`ReadRestrictivePolicy`** — `operations` includes only `read|delete|aggregate|count`. `when(ctx)` returns a `<Node>Where` partial OR `false`. Compiles into the WHERE clause via `WhereCompiler`. Invoked exactly once per read-side query.
+- **`WriteRestrictivePolicy`** — `operations` includes only `create|update`. `when(ctx, input)` returns a boolean (where-partial returns are no longer accepted; if you need a row filter on `update`, register a `ReadRestrictive` on `read`/`delete`). Runs at the application layer ("WITH CHECK"). Invoked exactly once per write op. The `cypher` escape hatch is not supported on write restrictives.
+- **Mixed-operation arrays are rejected** at construction time with `OGMError`. Split a single `restrictive({ operations: ['read', 'create'], … })` into two restrictives — one per kind.
+
+The `restrictive()` constructor uses TypeScript overloads so authoring code gets the correct `when` signature inferred from the literal `operations` tuple. New runtime helpers `isReadRestrictive` / `isWriteRestrictive` are exported for users who need to inspect a policy at runtime.
+
+This is a contract change inside the beta window — the API has shifted before `1.7.0` final, which is exactly what the beta dist-tag exists for. No public types were removed; `RestrictivePolicy` remains a public type and resolves to the union of the two new flavors.
+
+### Public API additions (additive only)
+
+- New exports: `override`, `permissive`, `restrictive`, `isReadRestrictive`, `isWriteRestrictive`, `OGMWithContext`, `PolicyDeniedError`.
+- New types: `Policy`, `OverridePolicy`, `PermissivePolicy`, `RestrictivePolicy`, `ReadRestrictivePolicy`, `WriteRestrictivePolicy`, `PolicyContext`, `PolicyContextBundle`, `Operation`, `OperationOrWildcard`, `ReadOperation`, `WriteOperation`, `PoliciesByModel`, `PolicyDefaults`, `ResolvedPolicies`, `UnsafeOptions`.
+- `OGMConfig` gains optional `policies?` and `policyDefaults?`.
+- `OGM` gains `withContext<C>(ctx: C)` and `unsafe.bypassPolicies()`.
+- Every Model / InterfaceModel method's params bag gains optional `unsafe?: { bypassPolicies?: boolean }`.
+- All existing call signatures remain valid. Calling code that doesn't pass policies must compile and run identically — byte-identical Cypher for non-policy calls.
+
+### Install command (beta)
+
+```bash
+npm install grafeo-ogm@beta
+# or
+pnpm add grafeo-ogm@beta
+```
+
+### Known limits in this beta
+
+- **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal. (Top-level WHERE on the root model still supports `@cypher` filters.)
+- **`upsert` evaluates create- and update-side policies at the application layer.** MERGE has no WHERE we can stitch into; the WHERE-side enforcement only covers the matching path. Documented limit; full MERGE-aware enforcement is deferred to v1.7.1.
+- **Restrictive read/write split — fixed in this iteration.** The dual-invocation contract bug present in earlier beta builds is resolved. `ReadRestrictivePolicy` (`when(ctx)`) is invoked exactly once at WHERE-compile; `WriteRestrictivePolicy` (`when(ctx, input)`) is invoked exactly once at the application layer. See the "Contract change during beta" section above for the new shape and migration notes.
+- **InterfaceModel CASE-per-label fallback.** When an interface has policies registered but a concrete implementer does not, the implementer's branch falls back to interface-level enforcement only (rather than default-denying the unlisted implementer). The OGM emits a `logger.warn` at construction time when this configuration is detected so it never passes silently. Strict per-implementer default-deny is being evaluated for `1.7.0` final.
+- **AsyncLocalStorage opt-in is deferred to v1.7.1.** Beta is explicit `withContext()` only — create one wrapper per request and discard it.
+- **Index requirement declaration deferred to v1.8.0.** No `requires.indexes` config in this beta.
+- **EXPLAIN-in-test mode deferred to v1.8.0.** No dev hook in beta.
+- **No live Neo4j integration test in this beta.** Mock-driver coverage is extensive (1317 specs incl. byte-identical regression of every v1.6.0 emission and the C1 read/write contract proofs), but a live `pnpm run test:integration` against a real Neo4j is a `1.7.0` final blocker.
+
+### Unaffected paths (byte-identical to v1.6.0)
+
+- An OGM constructed without `policies` emits identical Cypher to v1.6.0 for every covered operation. Verified in `tests/policy/byte-identical.spec.ts`.
+- An OGM with `policies` but invoked via the bare `OGM.model()` path (no `withContext`) emits identical Cypher to v1.6.0.
+- An override match emits identical Cypher to a no-policy query.
+- `ogm.unsafe.bypassPolicies()` and per-call `unsafe: { bypassPolicies: true }` both emit identical Cypher to v1.6.0.
+
+### Generated types
+
+- Existing `<Node>Where`, `<Node>CreateInput`, `<Node>UpdateInput` are sufficient for typing policy callbacks. The generator's `ModelMap` already exposed `Where`, `CreateInput`, and `UpdateInput` keys per model so `PoliciesByModel<M, C>` can index into them. **No regeneration required when upgrading from v1.6.0 → v1.7.0-beta.0.**
+
+### Migration
+
+- v1.6.0 → v1.7.0-beta.0 is purely additive — no changes required unless you opt into NLS.
+
 ## 1.6.0 (2026-05-01)
 
 ### Features

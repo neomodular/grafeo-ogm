@@ -11,6 +11,14 @@ import { WhereCompiler } from './compilers/where.compiler';
 import { RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
+import { PolicyDeniedError } from './policy/errors';
+import { hashCtx } from './policy/resolver';
+import type {
+  Operation,
+  PolicyContextBundle,
+  ResolvedPolicies,
+} from './policy/types';
+import type { ModelPolicyBinding, UnsafeOptions } from './model';
 import {
   InterfaceDefinition,
   NodeDefinition,
@@ -55,6 +63,7 @@ export interface InterfaceModelInterface<
     options?: FindOptions<TSort>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string })[]>;
 
   aggregate(params: {
@@ -62,6 +71,7 @@ export interface InterfaceModelInterface<
     aggregate: { count?: boolean; [field: string]: boolean | undefined };
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Record<string, unknown>>;
 
   findFirst?(params?: {
@@ -70,6 +80,7 @@ export interface InterfaceModelInterface<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null>;
 
   findUnique?(params: {
@@ -77,6 +88,7 @@ export interface InterfaceModelInterface<
     selectionSet?: string | DocumentNode;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null>;
 
   findFirstOrThrow?(params?: {
@@ -85,6 +97,7 @@ export interface InterfaceModelInterface<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }>;
 
   findUniqueOrThrow?(params: {
@@ -92,12 +105,14 @@ export interface InterfaceModelInterface<
     selectionSet?: string | DocumentNode;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }>;
 
   count?(params?: {
     where?: TWhere;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<number>;
 }
 
@@ -115,18 +130,228 @@ export class InterfaceModel<
   private maxDepth: number = 12;
   private _selectionSetStr: string | undefined;
 
+  private policyBinding: ModelPolicyBinding | undefined;
+  private logger: import('./execution/executor').OGMLogger | undefined;
+
   constructor(
     private interfaceDef: InterfaceDefinition,
     private schema: SchemaMetadata,
     driver: Driver,
     compilers?: InterfaceModelCompilers,
+    policyBinding?: ModelPolicyBinding,
   ) {
     this.whereCompiler = compilers?.where ?? new WhereCompiler(schema);
     this.selectionCompiler =
       compilers?.selection ?? new SelectionCompiler(schema, this.whereCompiler);
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
-    this.executor = new Executor(driver);
+    this.executor = new Executor(driver, policyBinding?.logger);
     this.syntheticNodeDef = this.buildSyntheticNodeDef();
+    this.policyBinding = policyBinding;
+    this.logger = policyBinding?.logger;
+  }
+
+  /**
+   * Resolve the policy bundle for the interface itself. Per design
+   * decision #1, the InterfaceModel uses a CASE-per-label expression
+   * that AND's each implementer's `'read'` policy with the interface's
+   * own — implemented in `compileInterfacePolicyClause`.
+   */
+  private resolveInterfacePolicy(
+    op: Operation,
+    unsafe?: UnsafeOptions,
+  ): PolicyContextBundle | null {
+    const binding = this.policyBinding;
+    if (!binding) return null;
+
+    if (binding.globalBypass) {
+      if (this.logger?.warn)
+        this.logger.warn(
+          '[OGM] policies bypassed via unsafe.bypassPolicies on interface "%s" op "%s"',
+          this.interfaceDef.name,
+          op,
+        );
+      return null;
+    }
+
+    if (unsafe?.bypassPolicies) {
+      if (this.logger?.warn)
+        this.logger.warn(
+          '[OGM] per-call unsafe.bypassPolicies on interface "%s" op "%s"',
+          this.interfaceDef.name,
+          op,
+        );
+      return null;
+    }
+
+    const resolved = binding.resolve(this.interfaceDef.name, op, binding.ctx);
+
+    return {
+      ctx: binding.ctx,
+      operation: op,
+      resolved: resolved ?? {
+        overridden: false,
+        permissives: [],
+        restrictives: [],
+        evaluated: [],
+      },
+      defaults: binding.defaults,
+      resolveForType: (typeName, targetOp) =>
+        binding.resolve(typeName, targetOp, binding.ctx),
+    };
+  }
+
+  private withInterfaceAuditMetadata(
+    context: ExecutionContext | undefined,
+    bundle: PolicyContextBundle | null,
+    operation: Operation,
+    bypassed: boolean,
+  ): ExecutionContext | undefined {
+    if (!this.policyBinding) return context;
+    if (this.policyBinding.defaults.auditMetadata === false) return context;
+
+    const evaluated = bundle?.resolved.evaluated ?? [];
+    const metadata: Record<string, unknown> = {
+      ogmPolicySetVersion: this.policyBinding.policySetVersion,
+      ctxFingerprint: hashCtx(this.policyBinding.ctx),
+      modelType: this.interfaceDef.name,
+      operation,
+      policiesEvaluated: [...evaluated],
+      bypassed,
+    };
+    if (context?.metadata)
+      return { ...context, metadata: { ...context.metadata, ...metadata } };
+    if (context) return { ...context, metadata };
+    return { metadata };
+  }
+
+  /**
+   * Build a CASE-per-label policy clause. For each implementer with
+   * registered `'read'` policies, emit a branch that AND-combines the
+   * interface-level policy with the implementer's. Implementers without
+   * a registered policy fall back to the interface-level only. Branches
+   * with empty permissives evaluate to `false`.
+   *
+   * Returns a Cypher fragment safe to AND into the WHERE clause; the
+   * fragment shares `paramCounter` with the calling pipeline so params
+   * don't collide.
+   */
+  private compileInterfacePolicyClause(
+    bundle: PolicyContextBundle | null,
+    nodeVar: string,
+    paramCounter: { count: number },
+    paramsTarget: Record<string, unknown>,
+  ): { cypher: string; preludes: string[] } {
+    if (!bundle) return { cypher: '', preludes: [] };
+    if (bundle.resolved.overridden) return { cypher: '', preludes: [] };
+
+    const branches: string[] = [];
+    let allPreludes: string[] = [];
+    let anyImplementerHasPolicy = false;
+    for (const memberName of this.interfaceDef.implementedBy) {
+      const memberDef = this.schema.nodes.get(memberName);
+      if (!memberDef) continue;
+      const memberPolicy = bundle.resolveForType(memberName, 'read');
+      if (memberPolicy) anyImplementerHasPolicy = true;
+      // Compose: interface-level + implementer-level. Use the where
+      // compiler with a synthesized bundle; the syntheticNodeDef stands
+      // in for the interface but properties are looked up on the
+      // implementer when AND-stitching.
+      const composedResolved: ResolvedPolicies = {
+        overridden: false,
+        permissives: [
+          ...(bundle.resolved?.permissives ?? []),
+          ...(memberPolicy?.permissives ?? []),
+        ],
+        restrictives: [
+          ...(bundle.resolved?.restrictives ?? []),
+          ...(memberPolicy?.restrictives ?? []),
+        ],
+        evaluated: [
+          ...(bundle.resolved?.evaluated ?? []),
+          ...(memberPolicy?.evaluated ?? []),
+        ],
+      };
+      // If neither interface nor implementer have permissives → branch
+      // is `false` (default-deny).
+      if (
+        composedResolved.permissives.length === 0 &&
+        composedResolved.restrictives.length === 0
+      ) {
+        // No policies in this branch → fall through (no constraint).
+        // We emit `true` so the CASE doesn't match and exclude this
+        // implementer; visibility is the union of explicit branches.
+        // But callers expect "no policy → no constraint" so we use
+        // `true` here to match the no-policy case.
+        branches.push(
+          `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN true`,
+        );
+        continue;
+      }
+      const branchBundle: PolicyContextBundle = {
+        ctx: bundle.ctx,
+        operation: 'read',
+        resolved: composedResolved,
+        defaults: bundle.defaults,
+        resolveForType: bundle.resolveForType,
+      };
+      const result = this.whereCompiler.compile(
+        undefined,
+        nodeVar,
+        memberDef,
+        paramCounter,
+        { policyContext: branchBundle },
+      );
+      mergeParams(paramsTarget, result.params);
+      if (result.preludes && result.preludes.length > 0)
+        allPreludes = [...allPreludes, ...result.preludes];
+      const branchClause = result.cypher.length > 0 ? result.cypher : 'true';
+      branches.push(
+        `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN ${branchClause}`,
+      );
+    }
+
+    // No implementer has any policy → no clause; fall back to the
+    // interface-level alone (handled via WhereCompiler in the caller).
+    if (!anyImplementerHasPolicy && bundle.resolved.permissives.length === 0)
+      return { cypher: '', preludes: [] };
+
+    if (branches.length === 0) return { cypher: '', preludes: [] };
+
+    // ELSE false guards the case where a labeled member appears that we
+    // didn't enumerate (defense in depth).
+    return {
+      cypher: `(CASE ${branches.join(' ')} ELSE false END)`,
+      preludes: allPreludes,
+    };
+  }
+
+  /**
+   * Throw `PolicyDeniedError` early when default-deny is `'throw'` and
+   * no implementer has a permissive that matches.
+   */
+  private assertNotDeniedAtCompile(
+    bundle: PolicyContextBundle | null,
+    operation: Operation,
+  ): void {
+    if (!bundle) return;
+    if (bundle.resolved.overridden) return;
+    if (bundle.defaults.onDeny !== 'throw') return;
+    if (bundle.resolved.permissives.length > 0) return;
+    // Check implementer permissives — at least one should exist.
+    let anyPerm = false;
+    for (const member of this.interfaceDef.implementedBy) {
+      const m = bundle.resolveForType(member, 'read');
+      if (m && m.permissives.length > 0) {
+        anyPerm = true;
+        break;
+      }
+    }
+    if (!anyPerm)
+      throw new PolicyDeniedError({
+        typeName: this.interfaceDef.name,
+        operation,
+        reason: 'no-permissive-matched',
+      });
   }
 
   async find(params?: {
@@ -135,7 +360,11 @@ export class InterfaceModel<
     options?: FindOptions<TSort>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string })[]> {
+    const policyContext = this.resolveInterfacePolicy('read', params?.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'read');
+
     const cypherParts: string[] = [];
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
@@ -153,7 +382,9 @@ export class InterfaceModel<
     // Use cached synthetic NodeDefinition for WHERE compilation
     const syntheticNodeDef = this.syntheticNodeDef;
 
-    // WHERE
+    // WHERE — user where compiled against the interface's synthetic
+    // NodeDefinition (interface props only). Policy is composed via
+    // the CASE-per-label clause that AND's interface + implementer.
     const whereResult = this.whereCompiler.compile(
       params?.where as WhereInput | undefined,
       'n',
@@ -162,8 +393,23 @@ export class InterfaceModel<
     );
     if (whereResult.preludes && whereResult.preludes.length > 0)
       cypherParts.push(...whereResult.preludes);
-    if (whereResult.cypher) {
-      cypherParts.push(`WHERE ${whereResult.cypher}`);
+
+    const policyClause = this.compileInterfacePolicyClause(
+      policyContext,
+      'n',
+      paramCounter,
+      allParams,
+    );
+    if (policyClause.preludes.length > 0)
+      cypherParts.push(...policyClause.preludes);
+
+    const combinedWhere = combineWhereWithPolicy(
+      whereResult.cypher,
+      policyClause.cypher,
+    );
+
+    if (combinedWhere) {
+      cypherParts.push(`WHERE ${combinedWhere}`);
       mergeParams(allParams, whereResult.params);
     } else if (whereResult.preludes && whereResult.preludes.length > 0)
       mergeParams(allParams, whereResult.params);
@@ -240,7 +486,12 @@ export class InterfaceModel<
     const result = await this.executor.execute(
       cypher,
       allParams,
-      params?.context,
+      this.withInterfaceAuditMetadata(
+        params?.context,
+        policyContext,
+        'read',
+        Boolean(params?.unsafe?.bypassPolicies),
+      ),
     );
     return ResultMapper.mapRecords(result.records, 'n') as (T & {
       __typename: string;
@@ -252,7 +503,13 @@ export class InterfaceModel<
     aggregate: { count?: boolean; [field: string]: boolean | undefined };
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<Record<string, unknown>> {
+    let policyContext = this.resolveInterfacePolicy('aggregate', params.unsafe);
+    if (!policyContext)
+      policyContext = this.resolveInterfacePolicy('read', params.unsafe);
+    this.assertNotDeniedAtCompile(policyContext, 'aggregate');
+
     const cypherParts: string[] = [];
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
@@ -275,8 +532,23 @@ export class InterfaceModel<
     );
     if (whereResult.preludes && whereResult.preludes.length > 0)
       cypherParts.push(...whereResult.preludes);
-    if (whereResult.cypher) {
-      cypherParts.push(`WHERE ${whereResult.cypher}`);
+
+    const policyClause = this.compileInterfacePolicyClause(
+      policyContext,
+      'n',
+      paramCounter,
+      allParams,
+    );
+    if (policyClause.preludes.length > 0)
+      cypherParts.push(...policyClause.preludes);
+
+    const combinedWhere = combineWhereWithPolicy(
+      whereResult.cypher,
+      policyClause.cypher,
+    );
+
+    if (combinedWhere) {
+      cypherParts.push(`WHERE ${combinedWhere}`);
       mergeParams(allParams, whereResult.params);
     } else if (whereResult.preludes && whereResult.preludes.length > 0)
       mergeParams(allParams, whereResult.params);
@@ -298,7 +570,12 @@ export class InterfaceModel<
     const result = await this.executor.execute(
       cypher,
       allParams,
-      params.context,
+      this.withInterfaceAuditMetadata(
+        params.context,
+        policyContext,
+        'aggregate',
+        Boolean(params.unsafe?.bypassPolicies),
+      ),
     );
 
     if (result.records.length === 0)
@@ -331,6 +608,7 @@ export class InterfaceModel<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null> {
     const results = await this.find({
       ...params,
@@ -344,6 +622,7 @@ export class InterfaceModel<
     selectionSet?: string | DocumentNode;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null> {
     return this.findFirst(params);
   }
@@ -354,6 +633,7 @@ export class InterfaceModel<
     options?: Omit<FindOptions<TSort>, 'limit'>;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }> {
     const result = await this.findFirst(params);
     if (result === null)
@@ -369,6 +649,7 @@ export class InterfaceModel<
     selectionSet?: string | DocumentNode;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }> {
     const result = await this.findUnique(params);
     if (result === null)
@@ -385,12 +666,14 @@ export class InterfaceModel<
     where?: TWhere;
     labels?: string[];
     context?: ExecutionContext;
+    unsafe?: UnsafeOptions;
   }): Promise<number> {
     const result = await this.aggregate({
       where: params?.where,
       aggregate: { count: true },
       labels: params?.labels,
       context: params?.context,
+      unsafe: params?.unsafe,
     });
     return (result.count as number) ?? 0;
   }
@@ -429,4 +712,19 @@ export class InterfaceModel<
     this._defaultSelection = nodes;
     return nodes;
   }
+}
+
+/**
+ * Combine the user-supplied where body and the interface-level policy
+ * clause. Mirror of the WhereCompiler stitching but lives here because
+ * the interface model AND-stitches across two compile passes.
+ */
+function combineWhereWithPolicy(
+  userBody: string,
+  policyClause: string,
+): string {
+  if (!userBody && !policyClause) return '';
+  if (!userBody) return policyClause;
+  if (!policyClause) return userBody;
+  return `(${userBody}) AND ${policyClause}`;
 }
