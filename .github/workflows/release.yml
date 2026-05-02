@@ -37,4 +37,13 @@ jobs:
         run: pnpm run test
 
       - name: Publish
-        run: npm publish --access public
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "$VERSION" == *-* ]]; then
+            TAG="${VERSION#*-}"
+            TAG="${TAG%%.*}"
+          else
+            TAG="latest"
+          fi
+          echo "Publishing $VERSION under --tag $TAG"
+          npm publish --access public --tag "$TAG"

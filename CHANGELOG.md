@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.0-beta.1] (2026-05-02)
+
+> **BETA — republish of beta.0 with no code changes.** Install with `npm install grafeo-ogm@beta`.
+
+### Fixed
+
+- **CI publish workflow** now passes `--tag` to `npm publish`, derived from the version's pre-release suffix (`beta`, `alpha`, `rc`, etc.), defaulting to `latest` for stable releases. Required because npm refuses to publish prerelease versions without an explicit dist-tag. v1.7.0-beta.0 was tagged on GitHub but never reached npm because of this; v1.7.0-beta.1 is the first beta artifact actually available on the registry.
+
 ## [1.7.0-beta.0] (2026-05-02)
 
 > **BETA — API may change before 1.7.0 final.** Install with `npm install grafeo-ogm@beta` (after the package is published to the `beta` dist-tag). The shape of the public API is settled, but feedback during the beta window may cause minor adjustments.
