@@ -11,7 +11,10 @@ import { OGMError } from '../errors';
 import type { PolicyContextBundle } from '../policy/types';
 import type { NodeDefinition, SchemaMetadata } from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
-import { CypherFieldScope } from '../utils/cypher-field-projection';
+import {
+  CypherFieldScope,
+  buildInlineCypherFieldExpr,
+} from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
   escapeIdentifier,
@@ -96,10 +99,13 @@ export class SelectionCompiler {
     /**
      * Scope for `@cypher` scalar field projections at THIS pipeline level.
      * When provided, `@cypher` scalar fields in `selection` are registered
-     * here so the caller can emit the CALL preludes before the RETURN.
-     * When `null` (or omitted), `@cypher` scalar fields in `selection`
-     * throw — this is the case inside nested relationship pattern
-     * comprehensions where CALL { ... } subqueries are not allowed.
+     * here so the caller can emit the CALL preludes before the RETURN
+     * (preferred path: dedupes references and runs once per row binding).
+     * When `null` (or omitted), `@cypher` scalar fields fall back to an
+     * inline `head(COLLECT { WITH <var> AS this <stmt> })` projection —
+     * required inside nested relationship pattern comprehensions where
+     * CALL { ... } preludes have no anchor, and tolerated at the top level
+     * for ad-hoc compile() callers that don't supply a scope.
      */
     cypherScope: CypherFieldScope | null = null,
     /**
@@ -153,20 +159,25 @@ export class SelectionCompiler {
 
         assertSafeIdentifier(node.fieldName, 'selection field');
 
-        // `@cypher` scalar fields require a CALL { ... } prelude, which
-        // can only be emitted at the top of the surrounding pipeline. If
-        // a scope is available, register the field there and project the
-        // resulting alias. Otherwise — we are inside a nested pattern
-        // comprehension where preludes cannot be stitched — reject it.
+        // `@cypher` scalar fields normally project via a CALL { ... }
+        // prelude registered on the surrounding pipeline's `cypherScope`.
+        // Inside a nested relationship pattern comprehension preludes have
+        // no anchor — fall back to an inline `head(COLLECT { ... })`
+        // subquery expression, which Cypher 5.x evaluates per row of the
+        // outer comprehension.
         const propDef = nodeDef.properties.get(node.fieldName);
         if (propDef?.isCypher && propDef.cypherStatement) {
-          if (!cypherScope)
-            throw new OGMError(
-              `Selecting @cypher field "${node.fieldName}" on a related node is not supported. ` +
-                `@cypher scalar fields are only resolvable at the top-level of a selection.`,
+          if (cypherScope) {
+            const alias = cypherScope.register(node.fieldName, propDef);
+            parts.push(`${escapeIdentifier(node.fieldName)}: ${alias}`);
+          } else
+            parts.push(
+              `${escapeIdentifier(node.fieldName)}: ${buildInlineCypherFieldExpr(
+                propDef.cypherStatement,
+                nodeVar,
+              )}`,
             );
-          const alias = cypherScope.register(node.fieldName, propDef);
-          parts.push(`${escapeIdentifier(node.fieldName)}: ${alias}`);
+
           continue;
         }
 

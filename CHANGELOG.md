@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.7.0-beta.4] (2026-05-02)
+
+> **BETA — selection runtime fix.** Install with `npm install grafeo-ogm@beta`.
+
+### Fixed
+
+- **`@cypher` scalar fields now resolve when selected on a nested related node.** Pre-1.7.0-beta.4, selecting a `@cypher` scalar inside a relationship traversal threw `OGMError: Selecting @cypher field "<field>" on a related node is not supported. @cypher scalar fields are only resolvable at the top-level of a selection.` The compiler now falls back to an inline `head(COLLECT { WITH <var> AS this <statement> })` projection per row of the surrounding pattern comprehension, so `Drug.find({ select: { hasStatus: { select: { formName: true } } } })` (where `formName` is a `@cypher` field on `Status`) returns the resolved value.
+
+### How
+
+- Top-level `@cypher` selections continue to use the existing `CALL { ... } / WITH ... AS __sel_n_<field>` prelude pathway (one CALL per unique field, dedupes references).
+- Nested `@cypher` selections — where preludes have no anchor inside `[(n)-[:r]->(n0) | n0 { ... }]` — emit `<field>: head(COLLECT { WITH n0 AS this <statement> })` directly in the projection. `COLLECT { ... }` is a Cypher 5.x subquery expression; the OGM already requires `neo4j-driver ^5.0.0`, so this is safe.
+- `this` is rebound from the outer node variable inside the COLLECT (no text substitution), matching the convention used by the top-level CALL path.
+
+### Limits
+
+- The user's `@cypher` statement must return a single column. Cypher rejects multi-column `COLLECT { ... }` subqueries — if you used `columnName` to pick one of several returned columns at the top level, that pattern won't work in nested selections (rare; trim the statement to return only the column you need).
+- Where filters by `@cypher` fields on nested relations (e.g. `connectionWhere: { node: { statusLowerName_CONTAINS: 'act' } }`) still throw — that path uses a different list-comprehension structure and isn't covered by this fix.
+
+### Test coverage
+
+- `tests/selection.compiler.cypher-fields.spec.ts` — replaced the previous `rejects @cypher on a NESTED related node` assertion with one that asserts the inline `head(COLLECT { ... })` emission. Same for the top-level no-scope case (now a fallback rather than a throw).
+- `tests/model.cypher-fields.spec.ts` — replaced the equivalent `rejects @cypher field selection on a nested related node` end-to-end test with one that drives `Model.find()` and asserts the resulting Cypher contains the inline projection.
+
 ## [1.7.0-beta.3] (2026-05-02)
 
 > **BETA — type-safety hardening (continuation of beta.2).** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.

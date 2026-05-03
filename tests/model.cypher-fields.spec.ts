@@ -502,19 +502,28 @@ describe('Model — @cypher fields end-to-end', () => {
     });
   });
 
-  describe('rejections', () => {
-    it('rejects @cypher field selection on a nested related node', async () => {
-      // Cannot stitch CALL inside list comprehensions used for nested rels.
-      await expect(
-        model.find({
-          select: {
-            id: true,
-            hasStatus: { select: { id: true, statusLowerName: true } },
-          },
-        }),
-      ).rejects.toThrow(/@cypher field "statusLowerName" on a related node/);
-    });
+  describe('nested @cypher selection', () => {
+    it('emits an inline head(COLLECT { ... }) for @cypher on a nested related node', async () => {
+      // Pre-1.7.0-beta.4 this threw (`OGMError: ... only resolvable at the
+      // top-level of a selection.`). We now fall back to an inline
+      // head(COLLECT { WITH <var> AS this <stmt> }) projection per row of
+      // the surrounding pattern comprehension.
+      await model.find({
+        select: {
+          id: true,
+          hasStatus: { select: { id: true, statusLowerName: true } },
+        },
+      });
 
+      const cypher = getCypher(mockSession);
+      const flat = cypher.replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        '`statusLowerName`: head(COLLECT { WITH n0 AS this RETURN toLower(this.name) AS statusLowerName })',
+      );
+    });
+  });
+
+  describe('rejections', () => {
     it('rejects @cypher fields in connection where filters', async () => {
       // The hasStatusConnection path constructs a list comprehension which
       // cannot host CALL preludes.

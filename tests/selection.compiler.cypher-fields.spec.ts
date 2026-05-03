@@ -2,7 +2,6 @@ import {
   SelectionCompiler,
   type SelectionNode,
 } from '../src/compilers/selection.compiler';
-import { OGMError } from '../src/errors';
 import {
   NodeDefinition,
   PropertyDefinition,
@@ -283,9 +282,11 @@ describe('SelectionCompiler — @cypher field resolution', () => {
       );
     });
 
-    it('rejects a @cypher field on a NESTED related node (no scope available)', () => {
-      // Nested relationships use list comprehensions which cannot host CALL
-      // subqueries. The compiler must reject @cypher selections there.
+    it('emits an inline head(COLLECT { ... }) projection for @cypher on a NESTED related node', () => {
+      // Nested relationships compile to list comprehensions, which cannot
+      // host CALL preludes. The compiler must fall back to an inline
+      // head(COLLECT { WITH <var> AS this <stmt> }) expression so the
+      // @cypher field still resolves per row of the outer comprehension.
       const selection: SelectionNode[] = [
         {
           fieldName: 'id',
@@ -310,34 +311,33 @@ describe('SelectionCompiler — @cypher field resolution', () => {
       ];
 
       const scope = new CypherFieldScope('n', [], '__sel');
-      expect(() =>
-        compiler.compile(
-          selection,
-          'n',
-          drugNode,
-          5,
-          0,
-          undefined,
-          undefined,
-          scope,
-        ),
-      ).toThrow(OGMError);
-      expect(() =>
-        compiler.compile(
-          selection,
-          'n',
-          drugNode,
-          5,
-          0,
-          undefined,
-          undefined,
-          scope,
-        ),
-      ).toThrow(/@cypher field "statusLowerName" on a related node/);
+      const out = compiler.compile(
+        selection,
+        'n',
+        drugNode,
+        5,
+        0,
+        undefined,
+        undefined,
+        scope,
+      );
+
+      // No CALL prelude was registered for the nested @cypher (top-level
+      // scope only saw the outer relationship, not the child field).
+      expect(scope.hasAny()).toBe(false);
+
+      // The nested projection inlines the @cypher statement via COLLECT.
+      const flat = out.replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        '`statusLowerName`: head(COLLECT { WITH n0 AS this RETURN toLower(this.name) AS statusLowerName })',
+      );
     });
 
-    it('rejects a @cypher field at the top level when scope is null', () => {
-      // Defensive: callers MUST pass a scope when @cypher might appear.
+    it('falls back to inline head(COLLECT { ... }) when no scope is provided at the top level', () => {
+      // Direct compile() callers (no scope) get a correct projection via the
+      // inline COLLECT path. Model / InterfaceModel always pass a scope so
+      // this branch is rarely hit in practice — kept as a safety net for
+      // ad-hoc callers and uniformity with the nested case.
       const selection: SelectionNode[] = [
         {
           fieldName: 'insensitiveDrugName',
@@ -346,9 +346,20 @@ describe('SelectionCompiler — @cypher field resolution', () => {
           isConnection: false,
         },
       ];
-      expect(() =>
-        compiler.compile(selection, 'n', drugNode, 5, 0, undefined, undefined),
-      ).toThrow(OGMError);
+      const out = compiler.compile(
+        selection,
+        'n',
+        drugNode,
+        5,
+        0,
+        undefined,
+        undefined,
+      );
+
+      const flat = out.replace(/\s+/g, ' ');
+      expect(flat).toContain(
+        '`insensitiveDrugName`: head(COLLECT { WITH n AS this RETURN toLower(this.drugName) AS insensitiveDrugName })',
+      );
     });
   });
 

@@ -20,6 +20,28 @@ export function buildCypherFieldCall(
 }
 
 /**
+ * Builds an inline `head(COLLECT { ... })` subquery expression for a
+ * `@cypher` scalar field. Used inside contexts where a CALL prelude cannot
+ * be stitched — most importantly nested relationship pattern comprehensions
+ * (`[(n)-[:r]->(n0) | n0 { ... }]`), where preludes have no anchor.
+ *
+ * `COLLECT { ... }` is a Cypher 5.x subquery expression; the OGM already
+ * requires `neo4j-driver ^5.0.0` so this is safe. The user's statement
+ * must return exactly one column — Cypher rejects multi-column COLLECT
+ * subqueries. `this` is rebound from the outer node variable, no text
+ * substitution.
+ *
+ * `head(...)` extracts the first (and typically only) returned row; this
+ * matches the top-level CALL+WITH path which projects a single value.
+ */
+export function buildInlineCypherFieldExpr(
+  statement: string,
+  nodeVar: string,
+): string {
+  return `head(COLLECT { WITH ${nodeVar} AS this\n  ${statement}\n})`;
+}
+
+/**
  * Resolver for `@cypher` scalar fields referenced inside a single Cypher
  * "scope" — that is, the contiguous sequence of `WITH`-bound vars at one
  * pipeline level (e.g. the top-level WHERE for `n`, or the inner WHERE
