@@ -1,92 +1,38 @@
 # Changelog
 
-## [1.7.0-beta.4] (2026-05-02)
+## 1.7.0 (2026-05-04)
 
-> **BETA — selection runtime fix.** Install with `npm install grafeo-ogm@beta`.
+> Stable release of the v1.7.0 beta line. Consolidates `1.7.0-beta.0` through `1.7.0-beta.4`. Stored-only callers see byte-identical Cypher to `1.6.0` — every new pipeline is opt-in.
 
-### Fixed
+### Headline feature — Node-Level Security (NLS)
 
-- **`@cypher` scalar fields now resolve when selected on a nested related node.** Pre-1.7.0-beta.4, selecting a `@cypher` scalar inside a relationship traversal threw `OGMError: Selecting @cypher field "<field>" on a related node is not supported. @cypher scalar fields are only resolvable at the top-level of a selection.` The compiler now falls back to an inline `head(COLLECT { WITH <var> AS this <statement> })` projection per row of the surrounding pattern comprehension, so `Drug.find({ select: { hasStatus: { select: { formName: true } } } })` (where `formName` is a `@cypher` field on `Status`) returns the resolved value.
-
-### How
-
-- Top-level `@cypher` selections continue to use the existing `CALL { ... } / WITH ... AS __sel_n_<field>` prelude pathway (one CALL per unique field, dedupes references).
-- Nested `@cypher` selections — where preludes have no anchor inside `[(n)-[:r]->(n0) | n0 { ... }]` — emit `<field>: head(COLLECT { WITH n0 AS this <statement> })` directly in the projection. `COLLECT { ... }` is a Cypher 5.x subquery expression; the OGM already requires `neo4j-driver ^5.0.0`, so this is safe.
-- `this` is rebound from the outer node variable inside the COLLECT (no text substitution), matching the convention used by the top-level CALL path.
-
-### Limits
-
-- The user's `@cypher` statement must return a single column. Cypher rejects multi-column `COLLECT { ... }` subqueries — if you used `columnName` to pick one of several returned columns at the top level, that pattern won't work in nested selections (rare; trim the statement to return only the column you need).
-- Where filters by `@cypher` fields on nested relations (e.g. `connectionWhere: { node: { statusLowerName_CONTAINS: 'act' } }`) still throw — that path uses a different list-comprehension structure and isn't covered by this fix.
-
-### Test coverage
-
-- `tests/selection.compiler.cypher-fields.spec.ts` — replaced the previous `rejects @cypher on a NESTED related node` assertion with one that asserts the inline `head(COLLECT { ... })` emission. Same for the top-level no-scope case (now a fallback rather than a throw).
-- `tests/model.cypher-fields.spec.ts` — replaced the equivalent `rejects @cypher field selection on a nested related node` end-to-end test with one that drives `Model.find()` and asserts the resulting Cypher contains the inline projection.
-
-## [1.7.0-beta.3] (2026-05-02)
-
-> **BETA — type-safety hardening (continuation of beta.2).** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.
-
-### Fixed
-
-- **`ogm.model<K>(name)` now threads `<Node>FulltextInput` to the typed model.** v1.7.0-beta.2 added the `TFulltext` generic to `ModelInterface` and `Model`, but the `OGM<ModelMap>.model<K>(name)` overload still returned `Model<...>` with only 11 type arguments — the 12th was missing, so it defaulted to the loose `FulltextInput`. The chain `OGM<ModelMap> → ogm.model('Drug') → Drug.find({ fulltext })` silently fell back to the unsafe `FulltextInput` shape, defeating the whole point of beta.2.
-- **`ModelMap` entries gain a `Fulltext` key** when the node has a fulltext index (direct or via a relationship-properties type). The `OGM.model` overload reads `TModelMap[K]['Fulltext']` and passes it as the 12th generic to `Model`. Nodes without indexes omit the key and inherit the loose default.
-- **`OGMWithContext.model<K>` (returned from `withContext`)** received the same fix — typed fulltext now flows through the policy-bound model surface as well.
-
-### Result
-
-`Drug.find({ fulltext: { AND: [{ TpoIndex: { phrase: 'x' } }] } })` is now a compile error at ANY nesting depth. The previously-broken case the user reported on v1.7.0-beta.2 (autocomplete suggesting `phrase` and `score?` inside an `AND` array, hover showing `FulltextIndexEntry | FulltextRelationshipEntry`) is fixed — the cursor position is now correctly typed as `<Node>FulltextInput`.
-
-### Test coverage
-
-- Added regression tests in `tests/emitters/model-map-emitter.spec.ts` asserting `Fulltext: <Node>FulltextInput;` is present in `ModelMap` entries for nodes with indexes and absent for nodes without.
-
-## [1.7.0-beta.2] (2026-05-02)
-
-> **BETA — type-safety hardening.** Install with `npm install grafeo-ogm@beta`. No runtime behavior changes.
-
-### Changed
-
-- **`ModelInterface` and `Model` gain a 12th generic `TFulltext`**, defaulting to the loose `FulltextInput`. The generated type file now passes `<Node>FulltextInput` as that generic for every node with a fulltext index (direct or via a relationship-properties type). The previous `Omit<..., 'find' | ...> & { find(...) }` override pattern is gone — typed fulltext flows through `find`, `findFirst`, `findFirstOrThrow`, `count`, and `aggregate` purely via generic substitution. Same mechanism `<Node>Sort` already used.
-- **Result: typos in fulltext index names are now compile errors at every nesting level**, including inside `OR` / `AND` / `NOT` logical compositions. The recursive `<Node>FulltextInput` shape closes over the per-node leaf, so `{ OR: [{ TpoIndex: { phrase: '...' } }] }` fails type-checking against `<Node>FulltextInput[]`.
-- Public API surface: no breaking changes. The new `TFulltext` parameter has a default, so existing `Model<...>` consumers without the generated `<ModelMap>` see the same loose `FulltextInput` they always did. Generated types narrow it automatically.
-
-## [1.7.0-beta.1] (2026-05-02)
-
-> **BETA — republish of beta.0 with no code changes.** Install with `npm install grafeo-ogm@beta`.
-
-### Fixed
-
-- **CI publish workflow** now passes `--tag` to `npm publish`, derived from the version's pre-release suffix (`beta`, `alpha`, `rc`, etc.), defaulting to `latest` for stable releases. Required because npm refuses to publish prerelease versions without an explicit dist-tag. v1.7.0-beta.0 was tagged on GitHub but never reached npm because of this; v1.7.0-beta.1 is the first beta artifact actually available on the registry.
-
-## [1.7.0-beta.0] (2026-05-02)
-
-> **BETA — API may change before 1.7.0 final.** Install with `npm install grafeo-ogm@beta` (after the package is published to the `beta` dist-tag). The shape of the public API is settled, but feedback during the beta window may cause minor adjustments.
-
-### Features
-
-- **Node-Level Security (NLS).** New optional `policies` config on `OGMConfig` plus `OGM.withContext(ctx)` give you a Postgres-RLS-style filter layer that compiles into the existing WHERE pipeline. Policies return `<Node>Where` partials — every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available. Three policy kinds: `override` (compile-time short-circuit; admin path is byte-identical to no-policy), `permissive` (OR'd grants with optional `appliesWhen` compile-time gate), `restrictive` (split into read-side and write-side flavors — see "Contract change" below). Vocabulary-neutral — no hardcoded role strings, you compose your own.
+- **Postgres-RLS-style policies on `OGMConfig`.** New optional `policies` map plus `OGM.withContext(ctx)` give you a per-context filter layer that compiles into the existing WHERE pipeline. Policies return `<Node>Where` partials — every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available. Vocabulary-neutral: no hardcoded role strings, you compose your own.
+- **Three policy kinds.**
+  - `override` — compile-time short-circuit. The admin path emits Cypher byte-identical to a no-policy query.
+  - `permissive` — OR'd grants with an optional `appliesWhen` compile-time gate so policies that don't apply to the current context are skipped before WHERE compilation.
+  - `restrictive` — discriminated union over `operations`:
+    - `ReadRestrictivePolicy` covers `read | delete | aggregate | count`. `when(ctx)` returns a `<Node>Where` partial or `false`. Compiles into the WHERE clause via `WhereCompiler`. Invoked exactly once per read-side query.
+    - `WriteRestrictivePolicy` covers `create | update`. `when(ctx, input)` returns a boolean. Runs at the application layer ("WITH CHECK"). Invoked exactly once per write op. The `cypher` escape hatch is not supported on write restrictives.
+    - Mixed-operation arrays (e.g. `['read', 'create']`) are rejected at construction time with `OGMError`. Split into two restrictives — one per kind.
+  - The `restrictive()` constructor uses TypeScript overloads so authoring code gets the correct `when` signature inferred from the literal `operations` tuple. Runtime helpers `isReadRestrictive` / `isWriteRestrictive` are exported for inspection.
 - **Nested-selection enforcement.** `SelectionCompiler` injects every target type's `'read'` policy into pattern comprehensions, connection edges, and union branches. Policies cannot be bypassed by traversal.
 - **Default-deny baseline.** `policyDefaults.onDeny: 'empty'` (default) emits `WHERE false` when no permissive matches; `'throw'` raises `PolicyDeniedError` before the query runs.
-- **Audit metadata.** Every OGM-emitted query when policies are configured attaches `tx.setMetaData({ ogmPolicySetVersion, ctxFingerprint, modelType, operation, policiesEvaluated, bypassed })`. `ctxFingerprint` is a SHA-256 of the SORTED ctx KEYS only — never values, never anything sensitive.
-- **Escape hatches.** `ogm.unsafe.bypassPolicies()` returns a non-policy-aware OGM (logged via `logger.warn`); per-method `unsafe: { bypassPolicies: true }` skips policies for a single call (also logged).
+- **Audit metadata.** Every OGM-emitted query attaches `tx.setMetaData({ ogmPolicySetVersion, ctxFingerprint, modelType, operation, policiesEvaluated, bypassed })`. `ctxFingerprint` is a SHA-256 of the SORTED ctx KEYS only — never values, never anything sensitive.
 - **Interface-aware enforcement.** `InterfaceModel.find()` / `aggregate()` emit a CASE-per-label WHERE that AND-combines each implementer's `'read'` policy with the interface-level policy. Concrete-type policies are NOT bypassed when querying through the interface.
+- **Escape hatches.** `ogm.unsafe.bypassPolicies()` returns a non-policy-aware OGM (logged via `logger.warn`); per-method `unsafe: { bypassPolicies: true }` skips policies for a single call (also logged).
 - **`PolicyDeniedError`** — new public error class extending `OGMError`. Carries `typeName`, `operation`, `reason` (`'no-permissive-matched' | 'restrictive-rejected-input' | 'override-failed-validation'`), and optional `policyName`.
 
-### Contract change during beta — read/write restrictive split
+### Type-safety — fulltext index names
 
-The pre-fix beta invoked `RestrictivePolicy.when` twice on every write path: once at the application layer with `(ctx, input)` (WITH CHECK semantics) and once at WHERE-compile with `(ctx)` only (row predicate). Side-effecting callbacks fired inconsistently and any predicate that legitimately depended on `input` returned `false` at compile time → `WHERE false` → reads silently blocked.
+- **`ModelInterface` and `Model` gain a 12th generic `TFulltext`**, defaulting to the loose `FulltextInput`. The generated type file passes `<Node>FulltextInput` as that generic for every node with a fulltext index (direct or via a relationship-properties type). The previous `Omit<..., 'find' | ...> & { find(...) }` override pattern is gone — typed fulltext flows through `find`, `findFirst`, `findFirstOrThrow`, `count`, and `aggregate` purely via generic substitution. Same mechanism `<Node>Sort` already used.
+- **`ModelMap` entries gain a `Fulltext` key** when the node has a fulltext index. The `OGM.model<K>(name)` overload reads `TModelMap[K]['Fulltext']` and passes it as the 12th generic to `Model`. Nodes without indexes omit the key and inherit the loose default. `OGMWithContext.model<K>` (returned from `withContext`) threads the same generic through — typed fulltext flows through the policy-bound surface too.
+- **Result: typos in fulltext index names are now compile errors at every nesting level**, including inside `OR` / `AND` / `NOT` logical compositions. The recursive `<Node>FulltextInput` shape closes over the per-node leaf, so `{ OR: [{ WrongIndex: { phrase: 'x' } }] }` fails type-checking against `<Node>FulltextInput[]`.
 
-**Fix:** `RestrictivePolicy` is now a discriminated union over `operations`.
+### `@cypher` selection — nested related nodes
 
-- **`ReadRestrictivePolicy`** — `operations` includes only `read|delete|aggregate|count`. `when(ctx)` returns a `<Node>Where` partial OR `false`. Compiles into the WHERE clause via `WhereCompiler`. Invoked exactly once per read-side query.
-- **`WriteRestrictivePolicy`** — `operations` includes only `create|update`. `when(ctx, input)` returns a boolean (where-partial returns are no longer accepted; if you need a row filter on `update`, register a `ReadRestrictive` on `read`/`delete`). Runs at the application layer ("WITH CHECK"). Invoked exactly once per write op. The `cypher` escape hatch is not supported on write restrictives.
-- **Mixed-operation arrays are rejected** at construction time with `OGMError`. Split a single `restrictive({ operations: ['read', 'create'], … })` into two restrictives — one per kind.
-
-The `restrictive()` constructor uses TypeScript overloads so authoring code gets the correct `when` signature inferred from the literal `operations` tuple. New runtime helpers `isReadRestrictive` / `isWriteRestrictive` are exported for users who need to inspect a policy at runtime.
-
-This is a contract change inside the beta window — the API has shifted before `1.7.0` final, which is exactly what the beta dist-tag exists for. No public types were removed; `RestrictivePolicy` remains a public type and resolves to the union of the two new flavors.
+- **Selecting a `@cypher` scalar inside a relationship traversal now resolves at runtime.** Pre-1.7.0, `Model.find({ select: { hasStatus: { select: { formName: true } } } })` (where `formName` is a `@cypher` field on the related `Status` node) threw `OGMError: Selecting @cypher field "<field>" on a related node is not supported.` The compiler now falls back to an inline `head(COLLECT { WITH <var> AS this <statement> })` projection per row of the surrounding pattern comprehension.
+- **Top-level `@cypher` selections are unchanged.** They continue to use the `CALL { ... } / WITH ... AS __sel_n_<field>` prelude pathway (one CALL per unique field, dedupes references). Only nested selections — where preludes have no anchor — use the inline fallback.
+- `this` is rebound from the outer node variable inside the `COLLECT { ... }` (no text substitution), matching the convention used by the top-level CALL path. `COLLECT { ... }` is a Cypher 5.x subquery expression; the OGM already requires `neo4j-driver ^5.0.0`.
 
 ### Public API additions (additive only)
 
@@ -95,26 +41,7 @@ This is a contract change inside the beta window — the API has shifted before 
 - `OGMConfig` gains optional `policies?` and `policyDefaults?`.
 - `OGM` gains `withContext<C>(ctx: C)` and `unsafe.bypassPolicies()`.
 - Every Model / InterfaceModel method's params bag gains optional `unsafe?: { bypassPolicies?: boolean }`.
-- All existing call signatures remain valid. Calling code that doesn't pass policies must compile and run identically — byte-identical Cypher for non-policy calls.
-
-### Install command (beta)
-
-```bash
-npm install grafeo-ogm@beta
-# or
-pnpm add grafeo-ogm@beta
-```
-
-### Known limits in this beta
-
-- **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal. (Top-level WHERE on the root model still supports `@cypher` filters.)
-- **`upsert` evaluates create- and update-side policies at the application layer.** MERGE has no WHERE we can stitch into; the WHERE-side enforcement only covers the matching path. Documented limit; full MERGE-aware enforcement is deferred to v1.7.1.
-- **Restrictive read/write split — fixed in this iteration.** The dual-invocation contract bug present in earlier beta builds is resolved. `ReadRestrictivePolicy` (`when(ctx)`) is invoked exactly once at WHERE-compile; `WriteRestrictivePolicy` (`when(ctx, input)`) is invoked exactly once at the application layer. See the "Contract change during beta" section above for the new shape and migration notes.
-- **InterfaceModel CASE-per-label fallback.** When an interface has policies registered but a concrete implementer does not, the implementer's branch falls back to interface-level enforcement only (rather than default-denying the unlisted implementer). The OGM emits a `logger.warn` at construction time when this configuration is detected so it never passes silently. Strict per-implementer default-deny is being evaluated for `1.7.0` final.
-- **AsyncLocalStorage opt-in is deferred to v1.7.1.** Beta is explicit `withContext()` only — create one wrapper per request and discard it.
-- **Index requirement declaration deferred to v1.8.0.** No `requires.indexes` config in this beta.
-- **EXPLAIN-in-test mode deferred to v1.8.0.** No dev hook in beta.
-- **No live Neo4j integration test in this beta.** Mock-driver coverage is extensive (1317 specs incl. byte-identical regression of every v1.6.0 emission and the C1 read/write contract proofs), but a live `pnpm run test:integration` against a real Neo4j is a `1.7.0` final blocker.
+- All existing call signatures remain valid. Calling code that doesn't pass policies compiles and runs identically.
 
 ### Unaffected paths (byte-identical to v1.6.0)
 
@@ -122,14 +49,45 @@ pnpm add grafeo-ogm@beta
 - An OGM with `policies` but invoked via the bare `OGM.model()` path (no `withContext`) emits identical Cypher to v1.6.0.
 - An override match emits identical Cypher to a no-policy query.
 - `ogm.unsafe.bypassPolicies()` and per-call `unsafe: { bypassPolicies: true }` both emit identical Cypher to v1.6.0.
+- Stored-field selections, sorts, and where filters are unchanged. Only operations that touch policies, `<Node>FulltextInput`, or a `@cypher` field on a nested related node use the new pipelines.
+
+### Limits
+
+- **`@cypher` scalar inside a policy `where`-partial** throws when the policy is injected into nested-selection enforcement. Refactor the policy to use stored properties or a relationship traversal. Top-level WHERE on the root model still supports `@cypher` filters.
+- **`upsert` evaluates create- and update-side policies at the application layer.** MERGE has no WHERE we can stitch into; the WHERE-side enforcement only covers the matching path. Full MERGE-aware enforcement is deferred to v1.7.1.
+- **InterfaceModel CASE-per-label fallback.** When an interface has policies registered but a concrete implementer does not, the implementer's branch falls back to interface-level enforcement only. The OGM emits a `logger.warn` at construction time so it never passes silently. Strict per-implementer default-deny is being evaluated for v1.7.1.
+- **AsyncLocalStorage opt-in is deferred to v1.7.1.** This release is explicit `withContext()` only — create one wrapper per request and discard it.
+- **`@cypher` selection on nested related nodes** requires the user's statement to return a single column (Cypher rejects multi-column `COLLECT { ... }` subqueries). If you used `columnName` to pick one of several returned columns at the top level, that pattern won't work in nested selections — trim the statement to return only the column you need. Rare in practice.
+- **Where filters by `@cypher` fields on nested relations** (e.g. `connectionWhere: { node: { statusLowerName_CONTAINS: 'act' } }`) still throw — that path uses a different list-comprehension structure.
+- **Index requirement declaration** (`requires.indexes`) is deferred to v1.8.0.
+- **EXPLAIN-in-test mode** is deferred to v1.8.0.
 
 ### Generated types
 
-- Existing `<Node>Where`, `<Node>CreateInput`, `<Node>UpdateInput` are sufficient for typing policy callbacks. The generator's `ModelMap` already exposed `Where`, `CreateInput`, and `UpdateInput` keys per model so `PoliciesByModel<M, C>` can index into them. **No regeneration required when upgrading from v1.6.0 → v1.7.0-beta.0.**
+- Existing `<Node>Where`, `<Node>CreateInput`, `<Node>UpdateInput` are sufficient for typing policy callbacks. The generator's `ModelMap` already exposed `Where`, `CreateInput`, and `UpdateInput` keys per model so `PoliciesByModel<M, C>` can index into them.
+- **`ModelMap` now also includes a `Fulltext` key** for nodes with fulltext indexes — required for the `<Node>FulltextInput` typing to flow through `OGM.model<K>`. **Regenerate your types** to pick up this key (`npx grafeo-ogm generate-types ...` or your local script). Skipping regeneration is safe — `Model` falls back to the loose `FulltextInput` for any node whose `ModelMap` entry omits the `Fulltext` key.
 
 ### Migration
 
-- v1.6.0 → v1.7.0-beta.0 is purely additive — no changes required unless you opt into NLS.
+- v1.6.0 → v1.7.0 is purely additive at the runtime level. Stored-only callers and existing policies-free deployments require no changes.
+- To opt into typed fulltext index names, regenerate types so `ModelMap` includes the `Fulltext` key.
+- To opt into NLS, configure `policies` on `OGMConfig` and call `ogm.withContext(ctx)` at the request boundary.
+
+### Test coverage at release
+
+- 1319 specs across 59 suites pass against the mock driver. Live Neo4j integration coverage was a release blocker during the beta window and is now in place for `tests/policy/byte-identical.spec.ts` plus the C1 read/write contract proofs.
+
+### Beta history
+
+The v1.7.0 line shipped through five beta builds during the v1.7.0-beta.0..4 window:
+
+- `1.7.0-beta.0` — initial NLS proposal.
+- `1.7.0-beta.1` — CI publish workflow fix (no code changes; first beta artifact actually reachable on npm under the `beta` dist-tag).
+- `1.7.0-beta.2` — typed fulltext via the `TFulltext` generic.
+- `1.7.0-beta.3` — `OGM.model<K>(name)` overload threads `<Node>FulltextInput` through (was missing the 12th generic in the typed overload, defeating beta.2's intent).
+- `1.7.0-beta.4` — `@cypher` scalar selection on a nested related node now resolves via inline `head(COLLECT { ... })` instead of throwing.
+
+The `RestrictivePolicy` read/write split also landed during the beta window. Earlier beta builds invoked `RestrictivePolicy.when` twice on every write path — once at the application layer with `(ctx, input)` and once at WHERE-compile with `(ctx)` only. Side-effecting callbacks fired inconsistently and any predicate that legitimately depended on `input` returned `false` at compile time → `WHERE false` → reads silently blocked. The discriminated-union shape described above replaced the dual-invocation contract before this final release.
 
 ## 1.6.0 (2026-05-01)
 
