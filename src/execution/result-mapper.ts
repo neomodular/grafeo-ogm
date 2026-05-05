@@ -105,10 +105,24 @@ export class ResultMapper {
     if (value instanceof neo4j.types.Path)
       throw new OGMError('Path type conversion is not supported');
 
-    // Plain object → recurse on values (use Object.create(null) to prevent prototype pollution)
+    // Plain object → recurse on values. The `Object.create(null)` is a
+    // defensive measure against prototype pollution: even if a malicious
+    // input tried to set `__proto__`, the resulting object has no
+    // prototype chain to pollute. The defensive guard stays.
+    //
+    // The iteration shape changed in v1.8.0: pre-1.8.0 we used
+    // `Object.entries(value)` which allocates a fresh `[key, value][]`
+    // pair array PLUS the result object — two allocations per visit.
+    // For a result with 16 nested objects (a typical 10-row relationship
+    // result), that's 32 allocations per Cypher row. The `for...in` +
+    // `hasOwnProperty` form avoids the pair array allocation. We still
+    // use `hasOwnProperty.call(value, key)` rather than `value.hasOwnProperty(key)`
+    // because the latter would fail on `Object.create(null)` inputs.
     const result: Record<string, unknown> = Object.create(null);
-    for (const [key, val] of Object.entries(value as Record<string, unknown>))
-      result[key] = ResultMapper.convertNeo4jTypes(val, depth + 1);
+    const obj = value as Record<string, unknown>;
+    for (const key in obj)
+      if (Object.prototype.hasOwnProperty.call(obj, key))
+        result[key] = ResultMapper.convertNeo4jTypes(obj[key], depth + 1);
 
     return result;
   }
