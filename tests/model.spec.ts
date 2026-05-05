@@ -666,14 +666,80 @@ describe('Model', () => {
       expect(cypher).toContain('count(n) AS count');
       expect(cypher).toContain('min(n.`title`) AS title_min');
       expect(cypher).toContain('max(n.`title`) AS title_max');
-      expect(cypher).toContain('avg(n.`title`) AS title_avg');
+      // v1.7.4: `avg` / `sum` no longer emitted for non-numeric fields.
+      // Pre-1.7.4 we emitted `avg(n.\`title\`)` even though `title` is a
+      // String — Neo4j returned `null` and the OGM blindly forwarded it.
+      expect(cypher).not.toContain('avg(n.`title`)');
+      expect(cypher).not.toContain('sum(n.`title`)');
 
       expect(result.count).toBe(5);
       expect(result.title).toEqual({
         min: 'A',
         max: 'Z',
-        average: null,
       });
+      // No `average` / `sum` key on String aggregates as of v1.7.4.
+      expect((result.title as Record<string, unknown>).average).toBeUndefined();
+      expect((result.title as Record<string, unknown>).sum).toBeUndefined();
+    });
+
+    // v1.7.4 regression — numeric fields now get sum() in the RETURN
+    // and result.<field>.sum populated. Pre-1.7.4 the codegen claimed
+    // `IntAggregateSelection.sum` existed but the runtime never emitted
+    // it, so the key was always undefined.
+    it('emits sum() and average for Int fields and surfaces them in the result', async () => {
+      // Patch the field type via the underlying nodeDef so the type-aware
+      // emission detects "numeric". The fixture's `prop()` defaults to
+      // String; mutate the property directly for this regression-only
+      // assertion.
+      bookNode.properties.set('pageCount', {
+        name: 'pageCount',
+        type: 'Int',
+        required: false,
+        isArray: false,
+        isListItemRequired: false,
+        isGenerated: false,
+        isUnique: false,
+        isCypher: false,
+        directives: [],
+      });
+
+      mockSession.run.mockResolvedValueOnce({
+        records: [
+          {
+            get: (key: string) => {
+              const values: Record<string, unknown> = {
+                pageCount_min: 100,
+                pageCount_max: 500,
+                pageCount_avg: 300,
+                pageCount_sum: 1500,
+              };
+              return values[key] ?? null;
+            },
+            keys: [
+              'pageCount_min',
+              'pageCount_max',
+              'pageCount_avg',
+              'pageCount_sum',
+            ],
+            toObject: () => ({}),
+          },
+        ],
+        summary: { counters: { updates: () => ({}) } },
+      });
+
+      const r = await model.aggregate({ aggregate: { pageCount: true } });
+      const cypher = getCypher(mockSession);
+      expect(cypher).toContain('avg(n.`pageCount`) AS pageCount_avg');
+      expect(cypher).toContain('sum(n.`pageCount`) AS pageCount_sum');
+      expect(r.pageCount).toEqual({
+        min: 100,
+        max: 500,
+        average: 300,
+        sum: 1500,
+      });
+
+      // Restore for downstream tests.
+      bookNode.properties.delete('pageCount');
     });
 
     it('should return empty object when count is not requested and no records', async () => {

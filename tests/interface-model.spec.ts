@@ -223,6 +223,27 @@ describe('InterfaceModel', () => {
       expect((params.options_offset as any).toInt()).toBe(5);
       expect((params.options_limit as any).toInt()).toBe(20);
     });
+
+    // v1.7.4 regression — InterfaceModel was forwarding raw values to
+    // the driver. Now matches Model.compileOptions: rejects negative,
+    // non-finite, and caps at 10k.
+    it('rejects negative limit (v1.7.4)', async () => {
+      await expect(model.find({ options: { limit: -1 } })).rejects.toThrow(
+        /limit must be a non-negative integer/,
+      );
+    });
+
+    it('rejects negative offset (v1.7.4)', async () => {
+      await expect(model.find({ options: { offset: -5 } })).rejects.toThrow(
+        /offset must be a non-negative integer/,
+      );
+    });
+
+    it('caps oversized limit at 10000 (v1.7.4)', async () => {
+      await model.find({ options: { limit: 50000 } });
+      const params = getParams(mockSession);
+      expect((params.options_limit as any).toInt()).toBe(10000);
+    });
   });
 
   describe('aggregate()', () => {
@@ -320,10 +341,11 @@ describe('InterfaceModel', () => {
       const cypher = getCypher(mockSession);
       expect(cypher).toContain('min(n.`name`) AS name_min');
       expect(cypher).toContain('max(n.`name`) AS name_max');
-      expect(cypher).toContain('avg(n.`name`) AS name_avg');
+      // v1.7.4: `avg` no longer emitted for non-numeric fields.
+      expect(cypher).not.toContain('avg(n.`name`)');
 
       expect(result).toEqual({
-        name: { min: 'Alpha', max: 'Zeta', average: null },
+        name: { min: 'Alpha', max: 'Zeta' },
       });
     });
 
@@ -360,11 +382,12 @@ describe('InterfaceModel', () => {
       expect(cypher).toContain('count(n) AS count');
       expect(cypher).toContain('min(n.`name`) AS name_min');
       expect(cypher).toContain('max(n.`name`) AS name_max');
-      expect(cypher).toContain('avg(n.`name`) AS name_avg');
+      // v1.7.4: `avg` no longer emitted for non-numeric fields.
+      expect(cypher).not.toContain('avg(n.`name`)');
 
       expect(result).toEqual({
         count: 5,
-        name: { min: 'A', max: 'Z', average: null },
+        name: { min: 'A', max: 'Z' },
       });
     });
 

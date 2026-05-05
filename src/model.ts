@@ -963,16 +963,28 @@ export class Model<
         mergeParams(allParams, whereResult.params);
     }
 
-    // Build RETURN clause for aggregation
+    // Build RETURN clause for aggregation. Per-property emission: avg /
+    // sum are only emitted for numeric types (Int / Float). Pre-1.7.4
+    // we emitted them unconditionally, so `aggregate({ name: true })`
+    // on a String field came back with `average: null` from
+    // `avg(n.name)` (Neo4j returns null for non-numeric avg). Now we
+    // look up the schema type and skip aggregations that don't apply.
     const returnParts: string[] = [];
     if (params.aggregate.count) returnParts.push('count(n) AS count');
 
+    const fieldTypeCategories = new Map<string, FieldAggregateCategory>();
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
       assertSafeIdentifier(field, 'aggregate field');
-      returnParts.push(`min(n.${escapeIdentifier(field)}) AS ${field}_min`);
-      returnParts.push(`max(n.${escapeIdentifier(field)}) AS ${field}_max`);
-      returnParts.push(`avg(n.${escapeIdentifier(field)}) AS ${field}_avg`);
+      const category = resolveFieldAggregateCategory(field, this.nodeDef);
+      fieldTypeCategories.set(field, category);
+      const escaped = escapeIdentifier(field);
+      returnParts.push(`min(n.${escaped}) AS ${field}_min`);
+      returnParts.push(`max(n.${escaped}) AS ${field}_max`);
+      if (category === 'numeric') {
+        returnParts.push(`avg(n.${escaped}) AS ${field}_avg`);
+        returnParts.push(`sum(n.${escaped}) AS ${field}_sum`);
+      }
     }
 
     cypherParts.push(`RETURN ${returnParts.join(', ')}`);
@@ -1002,11 +1014,18 @@ export class Model<
 
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
-      aggregateResult[field] = {
+      const category = fieldTypeCategories.get(field) ?? 'other';
+      const entry: Record<string, unknown> = {
         min: ResultMapper.convertNeo4jTypes(record.get(`${field}_min`)),
         max: ResultMapper.convertNeo4jTypes(record.get(`${field}_max`)),
-        average: ResultMapper.convertNeo4jTypes(record.get(`${field}_avg`)),
       };
+      if (category === 'numeric') {
+        entry.average = ResultMapper.convertNeo4jTypes(
+          record.get(`${field}_avg`),
+        );
+        entry.sum = ResultMapper.convertNeo4jTypes(record.get(`${field}_sum`));
+      }
+      aggregateResult[field] = entry;
     }
 
     return aggregateResult;
@@ -1951,4 +1970,37 @@ export class Model<
 
     return { pre, post: postParts.join('\n') };
   }
+}
+
+/**
+ * Aggregate categories for type-aware emission. `numeric` covers
+ * `Int` / `Float` (where `avg` and `sum` are well-defined). `temporal`
+ * (`DateTime` / `Date` / `Time`) supports `min` / `max` only —
+ * Neo4j's `avg` is undefined on temporals. `other` (`String` / `ID` /
+ * `Boolean` / `Point` / etc.) supports `min` / `max` lexicographically.
+ *
+ * Note: `shortest` / `longest` (which the codegen exposes for `String`
+ * / `ID`) are not yet runtime-supported — they require a `reduce`
+ * over `collect()` that breaks the simple RETURN-aggregation pattern.
+ * Tracked for a future release; the codegen-emitted keys remain
+ * `undefined` at runtime until then.
+ */
+type FieldAggregateCategory = 'numeric' | 'temporal' | 'other';
+
+function resolveFieldAggregateCategory(
+  fieldName: string,
+  nodeDef: NodeDefinition,
+): FieldAggregateCategory {
+  const prop = nodeDef.properties.get(fieldName);
+  if (!prop) return 'other';
+  if (prop.type === 'Int' || prop.type === 'Float') return 'numeric';
+  if (
+    prop.type === 'DateTime' ||
+    prop.type === 'Date' ||
+    prop.type === 'Time' ||
+    prop.type === 'LocalDateTime' ||
+    prop.type === 'LocalTime'
+  )
+    return 'temporal';
+  return 'other';
 }

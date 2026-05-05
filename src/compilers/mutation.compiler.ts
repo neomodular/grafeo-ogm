@@ -262,6 +262,7 @@ export class MutationCompiler {
 
     // Build MERGE key properties from where clause (scalar only)
     const mergeProps: string[] = [];
+    const mergeKeyNames: string[] = [];
     for (const [key, value] of Object.entries(where)) {
       if (value === undefined || value === null) continue;
       // Skip relationship suffixes and operators
@@ -270,12 +271,39 @@ export class MutationCompiler {
       assertSafeIdentifier(key, 'merge key');
       const paramName = `merge_${key}`;
       mergeProps.push(`${escapeIdentifier(key)}: $${paramName}`);
+      mergeKeyNames.push(key);
       params[paramName] = value;
     }
 
     if (mergeProps.length === 0)
       throw new OGMError(
         'upsert requires at least one scalar property in "where" for MERGE key',
+      );
+
+    // Validate that the MERGE key set contains at least one `@unique` or
+    // `@id` property. Pre-1.7.4 we accepted any key set, so:
+    //   - A typo in `where` (e.g. `usernme`) became a phantom MERGE
+    //     property — Neo4j happily created a node with that mis-named
+    //     attribute on first use.
+    //   - A non-unique `where` (e.g. `where: { country: 'AR' }`) matched
+    //     multiple existing nodes; MERGE then fans out across all of
+    //     them, applying ON MATCH SET to every match. Almost always a
+    //     bug, never the developer's intent.
+    // Requiring at least one unique/id key forces MERGE to target at
+    // most one row.
+    const hasUniqueOrId = mergeKeyNames.some((name) => {
+      const prop = nodeDef.properties.get(name);
+      // `isGenerated` is the parser's flag for the `@id` directive;
+      // `isUnique` is the flag for `@unique`. Either is sufficient
+      // to guarantee the MERGE pattern targets at most one row.
+      return prop !== undefined && (prop.isUnique || prop.isGenerated);
+    });
+    if (!hasUniqueOrId)
+      throw new OGMError(
+        `upsert "where" must contain at least one property marked with @id or @unique. ` +
+          `Got [${mergeKeyNames.map((n) => `"${n}"`).join(', ')}] — none of these are unique on ${nodeDef.typeName}. ` +
+          `Without a unique key, MERGE can fan out across multiple existing nodes (applying ON MATCH SET to each) ` +
+          `or create phantom properties on typo. If you really want a non-unique merge, use create() + update().`,
       );
 
     lines.push(`MERGE (n:${labelStr} { ${mergeProps.join(', ')} })`);
@@ -339,6 +367,28 @@ export class MutationCompiler {
     if (whereResult.preludes && whereResult.preludes.length > 0)
       lines.push(...whereResult.preludes);
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
+
+    // Reject overlap between add and remove. Cypher executes
+    // `SET n:Foo` then `REMOVE n:Foo` left-to-right, so the final state
+    // is REMOVED — almost certainly not what the caller intended.
+    // Throwing here prevents silent state divergence.
+    if (
+      addLabels &&
+      addLabels.length > 0 &&
+      removeLabels &&
+      removeLabels.length > 0
+    ) {
+      const addSet = new Set(addLabels);
+      const overlap = removeLabels.filter((l) => addSet.has(l));
+      if (overlap.length > 0)
+        throw new OGMError(
+          `setLabels: addLabels and removeLabels overlap on [${overlap
+            .map((l) => `"${l}"`)
+            .join(', ')}]. ` +
+            `Cypher executes SET then REMOVE left-to-right so the final state would be REMOVED. ` +
+            `Pass each label in only one of the two arrays.`,
+        );
+    }
 
     if (addLabels && addLabels.length > 0)
       lines.push(`SET n:${addLabels.map((l) => assertSafeLabel(l)).join(':')}`);
@@ -852,8 +902,29 @@ export class MutationCompiler {
           lines.push(`UNWIND $${paramName} AS connItem`);
           lines.push(`MATCH (target:${targetLabelStr})`);
 
-          // Build WHERE from the first item's structure to determine the path
+          // Build WHERE from the first item's structure to determine the path.
+          // Pre-1.7.4 we silently used `firstItem`'s keys for ALL items —
+          // if `spec[1]` had different filter keys (e.g. an extra
+          // `tenantId`), those keys were silently dropped from the WHERE.
+          // Validate homogeneity now and throw if items diverge so the
+          // caller knows to split into separate calls or use the per-item
+          // CALL fallback.
           const firstItem = spec[0] as Record<string, unknown>;
+          const firstItemSig = computeConnectItemSignature(firstItem);
+          for (let idx = 1; idx < spec.length; idx++) {
+            const sig = computeConnectItemSignature(
+              spec[idx] as Record<string, unknown>,
+            );
+            if (sig !== firstItemSig)
+              throw new OGMError(
+                `connect array items have divergent shapes — item[0] has keys "${firstItemSig}" ` +
+                  `but item[${idx}] has keys "${sig}". The UNWIND fast path requires every item ` +
+                  `to share the same WHERE / edge key set; otherwise the additional keys are ` +
+                  `silently dropped. Split into separate connect calls, or normalise the items ` +
+                  `to share the same shape.`,
+              );
+          }
+
           const whereConditions = this.extractConnectWhereConditions(
             firstItem,
             'target',
@@ -1874,4 +1945,28 @@ export class MutationCompiler {
 
     return keys;
   }
+}
+
+/**
+ * Build a stable signature for a `connect` array item — the set of keys
+ * inside `where.node` (or `where` directly for the legacy bare-object
+ * shape) PLUS the set of keys inside `edge`. Used by the UNWIND fast
+ * path to validate that every item shares the same shape; mismatched
+ * shapes silently drop keys from the compiled WHERE / SET.
+ */
+function computeConnectItemSignature(item: Record<string, unknown>): string {
+  const where = item.where as Record<string, unknown> | undefined;
+  const nodeWhere = (where?.node ?? where ?? {}) as Record<string, unknown>;
+  const edge = (item.edge ?? {}) as Record<string, unknown>;
+
+  const nodeKeys = Object.keys(nodeWhere)
+    .filter((k) => nodeWhere[k] !== undefined)
+    .sort()
+    .join(',');
+  const edgeKeys = Object.keys(edge)
+    .filter((k) => edge[k] !== undefined)
+    .sort()
+    .join(',');
+
+  return `node:[${nodeKeys}]|edge:[${edgeKeys}]`;
 }

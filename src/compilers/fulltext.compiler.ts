@@ -310,10 +310,20 @@ export class FulltextCompiler {
     const paramName = `ft_phrase_${paramCounter.count++}`;
     const params: Record<string, unknown> = { [paramName]: input.phrase };
 
+    // Bind `nodeVar` to the relationship endpoint that corresponds to
+    // the *parent* node — i.e. the one this fulltext search is
+    // anchored on. For an OUT relationship `(parent)-[rel]->(target)`,
+    // that's `startNode(rel)`. For an IN relationship
+    // `(parent)<-[rel]-(target)`, the arrow points INTO parent so the
+    // parent is the END of the rel and we need `endNode(rel)`. Pre-
+    // 1.7.4 this was hardcoded `startNode(rel)`, producing wrong /
+    // empty results for IN-direction relationship fulltext queries.
+    const endpointFn = relDef.direction === 'IN' ? 'endNode' : 'startNode';
+
     const cypher = [
       `CALL db.index.fulltext.queryRelationships('${indexName}', $${paramName})`,
       `YIELD relationship AS rel, score`,
-      `WITH startNode(rel) AS ${nodeVar}, score`,
+      `WITH ${endpointFn}(rel) AS ${nodeVar}, score`,
     ].join('\n');
 
     const result: FulltextResult = { cypher, params };

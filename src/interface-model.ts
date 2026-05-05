@@ -8,7 +8,7 @@ import {
   SelectionNode,
 } from './compilers/selection.compiler';
 import { WhereCompiler } from './compilers/where.compiler';
-import { RecordNotFoundError } from './errors';
+import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
@@ -473,12 +473,23 @@ export class InterfaceModel<
     cypherParts.push(`RETURN ${injected}`);
     if (sortOrderBy) cypherParts.push(sortOrderBy);
 
+    // Validate offset/limit BEFORE forwarding to the driver — pre-1.7.4
+    // we forwarded raw values, so a negative `limit` either errored
+    // out at the driver layer or triggered an unbounded scan depending
+    // on driver version. Mirror the validation in `Model.compileOptions`.
     if (params?.options?.offset !== undefined) {
-      allParams.options_offset = neo4jInt(params.options.offset);
+      const offset = Math.trunc(Number(params.options.offset));
+      if (!Number.isFinite(offset) || offset < 0)
+        throw new OGMError('offset must be a non-negative integer');
+      allParams.options_offset = neo4jInt(offset);
       cypherParts.push(`SKIP $options_offset`);
     }
     if (params?.options?.limit !== undefined) {
-      allParams.options_limit = neo4jInt(params.options.limit);
+      const limit = Math.trunc(Number(params.options.limit));
+      if (!Number.isFinite(limit) || limit < 0)
+        throw new OGMError('limit must be a non-negative integer');
+      const MAX_LIMIT = 10_000;
+      allParams.options_limit = neo4jInt(Math.min(limit, MAX_LIMIT));
       cypherParts.push(`LIMIT $options_limit`);
     }
 
@@ -556,12 +567,29 @@ export class InterfaceModel<
     const returnParts: string[] = [];
     if (params.aggregate.count) returnParts.push('count(n) AS count');
 
+    // Type-aware emission: skip `avg` / `sum` for non-numeric fields so
+    // result entries don't carry meaningless `null` averages. Pre-1.7.4
+    // we emitted the full set unconditionally. The interface variant
+    // resolves the type from the `interfaceDef` (interfaces declare
+    // their own properties); if the field isn't on the interface, we
+    // fall back to `other` so only `min` / `max` are emitted.
+    const fieldTypeCategories = new Map<
+      string,
+      'numeric' | 'temporal' | 'other'
+    >();
+    const ifaceProps = this.interfaceDef.properties;
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
       assertSafeIdentifier(field, 'aggregate field');
-      returnParts.push(`min(n.${escapeIdentifier(field)}) AS ${field}_min`);
-      returnParts.push(`max(n.${escapeIdentifier(field)}) AS ${field}_max`);
-      returnParts.push(`avg(n.${escapeIdentifier(field)}) AS ${field}_avg`);
+      const category = resolveInterfaceFieldCategory(field, ifaceProps);
+      fieldTypeCategories.set(field, category);
+      const escaped = escapeIdentifier(field);
+      returnParts.push(`min(n.${escaped}) AS ${field}_min`);
+      returnParts.push(`max(n.${escaped}) AS ${field}_max`);
+      if (category === 'numeric') {
+        returnParts.push(`avg(n.${escaped}) AS ${field}_avg`);
+        returnParts.push(`sum(n.${escaped}) AS ${field}_sum`);
+      }
     }
 
     cypherParts.push(`RETURN ${returnParts.join(', ')}`);
@@ -590,11 +618,18 @@ export class InterfaceModel<
 
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
-      aggregateResult[field] = {
+      const category = fieldTypeCategories.get(field) ?? 'other';
+      const entry: Record<string, unknown> = {
         min: ResultMapper.convertNeo4jTypes(record.get(`${field}_min`)),
         max: ResultMapper.convertNeo4jTypes(record.get(`${field}_max`)),
-        average: ResultMapper.convertNeo4jTypes(record.get(`${field}_avg`)),
       };
+      if (category === 'numeric') {
+        entry.average = ResultMapper.convertNeo4jTypes(
+          record.get(`${field}_avg`),
+        );
+        entry.sum = ResultMapper.convertNeo4jTypes(record.get(`${field}_sum`));
+      }
+      aggregateResult[field] = entry;
     }
 
     return aggregateResult;
@@ -727,4 +762,29 @@ function combineWhereWithPolicy(
   if (!userBody) return policyClause;
   if (!policyClause) return userBody;
   return `(${userBody}) AND ${policyClause}`;
+}
+
+/**
+ * Mirror of `resolveFieldAggregateCategory` (in `model.ts`) for
+ * interface-level properties. The interface declares its own
+ * properties (the implementer types may add their own, but only
+ * interface-level fields are aggregatable through the interface
+ * model), so we resolve the category from the interface property map.
+ */
+function resolveInterfaceFieldCategory(
+  fieldName: string,
+  ifaceProps: Map<string, { type: string }>,
+): 'numeric' | 'temporal' | 'other' {
+  const prop = ifaceProps.get(fieldName);
+  if (!prop) return 'other';
+  if (prop.type === 'Int' || prop.type === 'Float') return 'numeric';
+  if (
+    prop.type === 'DateTime' ||
+    prop.type === 'Date' ||
+    prop.type === 'Time' ||
+    prop.type === 'LocalDateTime' ||
+    prop.type === 'LocalTime'
+  )
+    return 'temporal';
+  return 'other';
 }

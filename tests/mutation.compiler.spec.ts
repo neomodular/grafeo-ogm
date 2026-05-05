@@ -1230,6 +1230,20 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain('SET n:\`Active\`');
       expect(result.cypher).toContain('REMOVE n:\`Draft\`');
     });
+
+    // v1.7.4 regression — addLabels ∩ removeLabels was silently
+    // executed left-to-right (SET then REMOVE), leaving the label
+    // REMOVED. Now throws so the developer notices the contradiction.
+    it('throws on addLabels and removeLabels overlap (v1.7.4)', () => {
+      expect(() =>
+        compiler.compileSetLabels(
+          bookNode,
+          baseWhereResult,
+          ['Active', 'Premium'],
+          ['Draft', 'Active'],
+        ),
+      ).toThrow(/addLabels and removeLabels overlap on \["Active"\]/);
+    });
   });
 
   // ─── Relationship filter tests (_SOME, _NONE, _ALL) ──────────
@@ -1395,6 +1409,32 @@ describe('MutationCompiler', () => {
       // Should use UNWIND since id is a scalar property
       expect(result.cypher).toContain('UNWIND');
       expect(result.cypher).not.toContain('CALL {');
+    });
+
+    // v1.7.4 regression — heterogeneous array items used to silently
+    // drop the diverging keys (only firstItem's keys made it into the
+    // WHERE). Now throws to surface the bug at compile time.
+    it('throws on heterogeneous connect array shapes (v1.7.4)', () => {
+      const whereResult = {
+        cypher: 'n.id = $where_id',
+        params: { where_id: 'cat-1' },
+      };
+      expect(() =>
+        compiler.compileUpdate(
+          { id: 'cat-1' },
+          undefined,
+          {
+            contentResources: [
+              { where: { node: { id: 'res-1' } } },
+              // Extra `tenantId` key — pre-1.7.4 silently dropped from WHERE
+              { where: { node: { id: 'res-2', tenantId: 'X' } } },
+            ],
+          },
+          undefined,
+          bookCategoryNode,
+          whereResult,
+        ),
+      ).toThrow(/divergent shapes.*item\[0\].*item\[1\]/);
     });
 
     it('should handle disconnect with relationship NOT filter before connect', () => {

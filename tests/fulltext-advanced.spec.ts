@@ -433,6 +433,62 @@ describe('FulltextCompiler - relationship index via compile()', () => {
     expect(result.cypher).toContain('startNode(rel)');
   });
 
+  // v1.7.4 regression — IN-direction relationship fulltext used to
+  // hardcode `startNode(rel)`, binding the WRONG endpoint to nodeVar.
+  // For `(parent)<-[rel]-(target)`, the parent is `endNode(rel)`.
+  it('uses endNode(rel) for IN-direction relationship fulltext (v1.7.4)', () => {
+    const relDef: RelationshipDefinition = {
+      fieldName: 'comments',
+      type: 'HAS_COMMENT',
+      direction: 'IN',
+      target: 'Comment',
+      isArray: true,
+      isRequired: false,
+      properties: 'CommentEdgeProps',
+    };
+
+    const nodeDef = createMockNodeDef({
+      relationships: new Map([['comments', relDef]]),
+    });
+
+    const relPropsMap = new Map([
+      [
+        'CommentEdgeProps',
+        {
+          typeName: 'CommentEdgeProps',
+          properties: new Map([
+            [
+              'text',
+              {
+                name: 'text',
+                type: 'String',
+                required: true,
+                isArray: false,
+                isListItemRequired: false,
+                isGenerated: false,
+                isUnique: false,
+                isCypher: false,
+                directives: [],
+              },
+            ],
+          ]),
+          fulltextIndexes: [{ name: 'CommentTextSearch', fields: ['text'] }],
+        },
+      ],
+    ]);
+
+    const schema = createMockSchema(nodeDef, relPropsMap);
+    const compiler = new FulltextCompiler(schema);
+
+    const result = compiler.compile(
+      { comments: { CommentTextSearch: { phrase: 'great post' } } },
+      nodeDef,
+    );
+
+    expect(result.cypher).toContain('endNode(rel)');
+    expect(result.cypher).not.toContain('startNode(rel)');
+  });
+
   it('should throw for unknown relationship field', () => {
     const nodeDef = createMockNodeDef();
     const schema = createMockSchema(nodeDef);

@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.7.4 (2026-05-05)
+
+> Tier 3 contract violations from the audit. Six fixes across mutations,
+> aggregates, fulltext, and the InterfaceModel. Three are behaviour-
+> changing where the previous behaviour was silently wrong; the others
+> tighten validation that should have been there from the start.
+
+### Fixed
+
+- **`setLabels` rejects overlap between `addLabels` and `removeLabels`.** Pre-1.7.4 the same label appearing in both arrays produced `SET n:Foo REMOVE n:Foo`, which Cypher executes left-to-right so the final state is REMOVED — almost certainly never the developer's intent. Now throws `OGMError` with the conflicting labels listed.
+- **`upsert` requires at least one `@unique` or `@id` key in the `where` clause.** Pre-1.7.4 `compileMerge` accepted any scalar key, so a typo (`usernme: 'a'`) became a phantom MERGE property — Neo4j happily created a node carrying that misspelt attribute. Worse, a non-unique `where: { country: 'AR' }` would MERGE-fan-out across every existing matching node, applying `ON MATCH SET` to all of them. The new guard requires the MERGE pattern to target at most one row.
+- **`update.<rel>.connect: [...]` rejects heterogeneous array shapes.** The UNWIND fast path used `firstItem`'s key set to build the `WHERE` clause for ALL items — if `spec[1]` had additional filter keys, those keys were silently dropped. Now compares signature (`node:[a,b]|edge:[c]`) per item and throws on divergence with a clear message.
+- **`InterfaceModel.find` validates `limit` and `offset` like `Model`.** Pre-1.7.4 raw values were forwarded to the driver — negative `limit` either errored at the driver layer or triggered an unbounded scan (driver-version-dependent). Now mirrors `Model.compileOptions`: rejects non-finite or negative values; caps `limit` at 10,000.
+- **Relationship fulltext uses `endNode(rel)` for IN-direction relationships.** Pre-1.7.4 the compiler hardcoded `startNode(rel)`, binding the wrong endpoint to `nodeVar` for `(parent)<-[rel]-(target)` definitions. Result: empty / wrong rows for IN-direction relationship fulltext queries. Now branches on `relDef.direction`.
+- **Aggregate runtime emits type-aware Cypher.** Pre-1.7.4 the runtime called `min` / `max` / `avg` for every requested field regardless of property type, so `aggregate({ name: true })` on a `String` field came back with `average: null` (Neo4j returns null for non-numeric `avg`). Now resolves the property type from the schema and emits only operations that apply: numeric (`Int` / `Float`) gets `min` / `max` / `avg` / `sum` (the `sum` aggregation is new — pre-1.7.4 the codegen claimed it existed but the runtime never emitted it); temporal (`DateTime` / `Date` / `Time` / `LocalDateTime` / `LocalTime`) gets `min` / `max`; everything else gets `min` / `max` only. Same fix in `InterfaceModel.aggregate`.
+
+### Test coverage
+
+- `tests/mutation.compiler.spec.ts` — regressions for setLabels overlap, heterogeneous connect array.
+- `tests/model.spec.ts` — regression for type-aware aggregate (numeric Int field gets `sum` + `average`).
+- `tests/interface-model.spec.ts` — regressions for limit/offset validation (negative reject, 10k cap) and aggregate type-aware emission for non-numeric fields.
+- `tests/fulltext-advanced.spec.ts` — regression for IN-direction relationship fulltext using `endNode(rel)`.
+- 1343 → 1350 tests, all passing.
+
+### Behaviour changes
+
+- `aggregate({ stringField: true })` no longer returns an `average: null` key. The result entry is `{ min, max }` only — code reading `result.stringField.average` will see `undefined` instead of `null`. Both indicate "this aggregation doesn't apply", but `undefined` is the correct signal.
+- `aggregate({ intField: true })` now returns `{ min, max, average, sum }` — `sum` is new. Existing code that did not access `.sum` is unaffected.
+- `upsert({ where: { nonUniqueField: ... }, ... })` now throws. Code that relied on non-unique upsert as a "create + bulk-update" was silently buggy and must split into separate `create` + `update` calls.
+- `update({ ..., rel: { connect: [{ where: shape1 }, { where: shape2 }] } })` with divergent shapes now throws. Pre-1.7.4 it silently dropped the divergent keys. Caller must normalise shapes or split into separate `update` calls.
+
+### Out of scope (deferred)
+
+- `shortest` / `longest` aggregate operations (codegen claims they exist on `String` / `ID`). Implementing them requires a `reduce` over `collect()` which breaks the simple RETURN-aggregation pattern. Tracked for a future release; the codegen-emitted keys remain `undefined` at runtime until then.
+- Tier 4 hot-path performance work (selection-cache dedup, where-frame allocation, result-mapper allocation). Needs a benchmark harness before changes are accepted.
+
 ## 1.7.3 (2026-05-05)
 
 > Security hardening release. Four defensive fixes surfaced by the same
