@@ -381,17 +381,30 @@ export class WhereCompiler {
     counter: { count: number },
     depth: number,
     scope: CypherFieldScope,
+    /**
+     * Optional shared params accumulator. When provided, every leaf
+     * write goes directly into this object instead of allocating a
+     * fresh `{}` per recursion frame and merging via `Object.assign`.
+     * Pre-1.8.0 every AND/OR/NOT branch allocated its own params Map,
+     * we then `mergeParams`'d it into the parent — for a 5-frame deep
+     * recursion that's 5 fresh objects + 5 Object.assign walks. Now
+     * deep recursions write into a single owner object. Public callers
+     * keep the old contract (no arg → fresh Map allocated locally).
+     */
+    paramsTarget?: Record<string, unknown>,
   ): WhereResult {
     if (depth > MAX_DEPTH)
       throw new OGMError(
         `WHERE clause nesting depth exceeds maximum (${MAX_DEPTH})`,
       );
-    if (where == null) return { cypher: '', params: {} };
+    if (where == null) return { cypher: '', params: paramsTarget ?? {} };
 
     const caseInsensitive = where.mode === 'insensitive';
 
     const clauses: string[] = [];
-    const params: Record<string, unknown> = {};
+    // Reuse the caller's params accumulator when provided. Otherwise
+    // own a fresh Map (the top-level entry point case).
+    const params: Record<string, unknown> = paramsTarget ?? {};
 
     for (const [key, value] of Object.entries(where)) {
       if (value === undefined) continue;
@@ -407,21 +420,26 @@ export class WhereCompiler {
               `Restructure the predicate (e.g. use _IN for value lists, or split the query) instead of ` +
               `passing a large logical array.`,
           );
-        const subResults = items.map((item) =>
-          this.compileConditions(
+        // Pass `params` as the shared target so leaf writes go straight
+        // into our accumulator. The mergeParams call below becomes a
+        // no-op because every sub.params IS our params, but we keep
+        // the loop for legacy callers that might one day call this
+        // method with paramsTarget undefined at intermediate levels.
+        const subClauses: string[] = [];
+        for (const item of items) {
+          const sub = this.compileConditions(
             item,
             nodeVar,
             nodeDef,
             counter,
             depth + 1,
             scope,
-          ),
-        );
-        const subClauses = subResults.map((r) => r.cypher).filter(Boolean);
-        if (subClauses.length > 0) {
-          clauses.push(`(${subClauses.join(` ${key} `)})`);
-          for (const r of subResults) mergeParams(params, r.params);
+            params,
+          );
+          if (sub.cypher) subClauses.push(sub.cypher);
         }
+        if (subClauses.length > 0)
+          clauses.push(`(${subClauses.join(` ${key} `)})`);
         continue;
       }
 
@@ -440,11 +458,9 @@ export class WhereCompiler {
           counter,
           depth + 1,
           scope,
+          params,
         );
-        if (sub.cypher) {
-          clauses.push(`NOT (${sub.cypher})`);
-          mergeParams(params, sub.params);
-        }
+        if (sub.cypher) clauses.push(`NOT (${sub.cypher})`);
         continue;
       }
 
