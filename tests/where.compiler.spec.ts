@@ -950,6 +950,12 @@ describe('WhereCompiler', () => {
   });
 
   describe('interface target resolution', () => {
+    // For interface targets (and union targets), the OGM emits a
+    // labelless target node so the relationship type is authoritative.
+    // Emitting `(r0:`Entity`)` would target a literal `Entity` label that
+    // no concrete implementer carries by default, making EXISTS never
+    // match. Pre-1.7.2 the literal label was emitted, producing silent
+    // wrong results (NOT EXISTS was true for every row).
     it('resolves interface target for _SOME relationship filter', () => {
       const result = compiler.compile(
         { entities_SOME: { name: 'Test' } },
@@ -957,7 +963,7 @@ describe('WhereCompiler', () => {
         containerNode,
       );
       expect(result.cypher).toBe(
-        'EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0:`Entity`) WHERE r0.`name` = $param1 }',
+        'EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0) WHERE r0.`name` = $param1 }',
       );
       expect(result.params).toEqual({ param1: 'Test' });
     });
@@ -969,7 +975,7 @@ describe('WhereCompiler', () => {
         containerNode,
       );
       expect(result.cypher).toBe(
-        'EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0:`Entity`) WHERE r0.`id` = $param1 }',
+        'EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0) WHERE r0.`id` = $param1 }',
       );
       expect(result.params).toEqual({ param1: '123' });
     });
@@ -981,9 +987,124 @@ describe('WhereCompiler', () => {
         containerNode,
       );
       expect(result.cypher).toBe(
-        'NOT EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0:`Entity`) WHERE r0.`name` = $param1 }',
+        'NOT EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0) WHERE r0.`name` = $param1 }',
       );
       expect(result.params).toEqual({ param1: 'Hidden' });
+    });
+
+    // Regression for v1.7.2 BLOCKER: pre-1.7.2 a `null` filter on an
+    // abstract-target relationship emitted the literal interface/union
+    // label, which never matched, so NOT EXISTS was true for every row.
+    it('null filter on interface relationship omits the abstract label', () => {
+      const result = compiler.compile({ entities: null }, 'n', containerNode);
+      expect(result.cypher).toBe(
+        'NOT EXISTS { MATCH (n)-[:`HAS_ENTITY`]->(r0) }',
+      );
+      expect(result.params).toEqual({});
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // v1.7.2 codegen/runtime parity regressions
+  // ---------------------------------------------------------------------------
+  describe('v1.7.2 codegen/runtime parity', () => {
+    it('relationship _NOT compiles as NOT EXISTS (was: scalar `<>`)', () => {
+      const result = compiler.compile(
+        { taggedWith_NOT: { id: 't1' } },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'NOT EXISTS { MATCH (n)-[:`TAGGED_WITH`]->(r0:`Tag`) WHERE r0.`id` = $param1 }',
+      );
+      expect(result.params).toEqual({ param1: 't1' });
+    });
+
+    it('scalar _NOT still falls through to `<>`', () => {
+      const result = compiler.compile({ name_NOT: 'X' }, 'n', bookNode);
+      expect(result.cypher).toBe('n.`name` <> $param0');
+      expect(result.params).toEqual({ param0: 'X' });
+    });
+
+    it('relationship Aggregate throws clearly (was: silent wrong rows)', () => {
+      expect(() =>
+        compiler.compile(
+          { taggedWithAggregate: { count_GT: 5 } },
+          'n',
+          bookNode,
+        ),
+      ).toThrow(/aggregate filter "taggedWithAggregate" is not yet supported/);
+    });
+
+    it('connection node_NOT compiles to negated inner clause', () => {
+      const result = compiler.compile(
+        { hasStatusConnection: { node_NOT: { name: 'Active' } } },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE NOT (r0.`name` = $param1) }',
+      );
+      expect(result.params).toEqual({ param1: 'Active' });
+    });
+
+    it('connection edge_NOT compiles to negated edge clause', () => {
+      const result = compiler.compile(
+        { hasStatusConnection: { edge_NOT: { since: '2020' } } },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe(
+        'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE NOT (e0.`since` = $param1) }',
+      );
+      expect(result.params).toEqual({ param1: '2020' });
+    });
+
+    it('connection AND of node-filters compiles to AND-conjoined inner clauses', () => {
+      const result = compiler.compile(
+        {
+          hasStatusConnection: {
+            AND: [{ node: { name: 'A' } }, { node: { name: 'B' } }],
+          },
+        },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toContain(
+        'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE',
+      );
+      expect(result.cypher).toContain(
+        '(r0.`name` = $param1 AND r0.`name` = $param2)',
+      );
+      expect(result.params).toEqual({ param1: 'A', param2: 'B' });
+    });
+
+    it('connection OR mixes node and edge sides', () => {
+      const result = compiler.compile(
+        {
+          hasStatusConnection: {
+            OR: [{ node: { name: 'A' } }, { edge: { since: '2020' } }],
+          },
+        },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toContain(
+        '(r0.`name` = $param1 OR e0.`since` = $param2)',
+      );
+      expect(result.params).toEqual({ param1: 'A', param2: '2020' });
+    });
+
+    it('connection NOT wraps the inner connection-where', () => {
+      const result = compiler.compile(
+        {
+          hasStatusConnection: { NOT: { node: { name: 'X' } } },
+        },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toContain('WHERE NOT (r0.`name` = $param1)');
+      expect(result.params).toEqual({ param1: 'X' });
     });
   });
 

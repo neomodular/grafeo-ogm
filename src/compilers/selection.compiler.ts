@@ -619,17 +619,37 @@ export class SelectionCompiler {
       const cw = node.connectionWhere as Record<string, unknown>;
       const hasNodeKey = isPlainObject(cw.node);
       const hasEdgeKey = isPlainObject(cw.edge);
+      const hasNodeNotKey = isPlainObject(cw.node_NOT);
+      const hasEdgeNotKey = isPlainObject(cw.edge_NOT);
+
+      // Connection-level AND/OR/NOT in the typed `select.where`
+      // connection filter is codegen-emitted but not yet runtime-
+      // supported on the selection path (the `where:` argument on
+      // model methods supports it via WhereCompiler). Throw loudly
+      // so silent-drop never produces wrong results.
+      if (cw.AND !== undefined || cw.OR !== undefined || cw.NOT !== undefined)
+        throw new OGMError(
+          `Connection-level AND/OR/NOT inside select.where for "${node.fieldName}" is not yet supported. ` +
+            `Move the logical operators inside the \`node\` filter, or use the top-level \`where\` argument.`,
+        );
 
       // Resolve the node-side and edge-side branches. Bare-object input
-      // (no `node`/`edge` keys) is the legacy node-where shorthand from
-      // pre-1.7.1 callers — keep treating it as node-where.
+      // (no `node`/`edge`/`*_NOT` keys) is the legacy node-where
+      // shorthand from pre-1.7.1 callers — keep treating it as node-
+      // where so existing code keeps working.
       const userNodeWhere = hasNodeKey
         ? (cw.node as Record<string, unknown>)
-        : !hasEdgeKey
+        : !hasEdgeKey && !hasNodeNotKey && !hasEdgeNotKey
           ? cw
           : undefined;
       const userEdgeWhere = hasEdgeKey
         ? (cw.edge as Record<string, unknown>)
+        : undefined;
+      const userNodeNot = hasNodeNotKey
+        ? (cw.node_NOT as Record<string, unknown>)
+        : undefined;
+      const userEdgeNot = hasEdgeNotKey
+        ? (cw.edge_NOT as Record<string, unknown>)
         : undefined;
 
       const fragments: string[] = [];
@@ -649,6 +669,27 @@ export class SelectionCompiler {
         });
         if (nodeFragment) fragments.push(nodeFragment.replace(/^ WHERE /, ''));
 
+        // Node-side negation. We compile it WITHOUT policy injection
+        // (policy was already attached above) and wrap the body in
+        // `NOT (...)`. Compiling with a fresh nested where call is the
+        // simplest way to reuse all the existing operator support.
+        if (userNodeNot) {
+          const notFragment = this.compileNestedWhere({
+            node,
+            childVar,
+            targetDef,
+            params,
+            paramCounter,
+            // Skip policy on the negation branch — policy is already
+            // AND-stitched on the main node-side fragment.
+            policyContext: null,
+            contextLabel: `connection "${node.fieldName}" node_NOT`,
+            userWhere: userNodeNot,
+          });
+          if (notFragment)
+            fragments.push(`NOT (${notFragment.replace(/^ WHERE /, '')})`);
+        }
+
         // Edge-side
         if (userEdgeWhere && relDef.properties) {
           const edgeFragment = this.compileEdgeWhere({
@@ -661,6 +702,20 @@ export class SelectionCompiler {
           });
           if (edgeFragment)
             fragments.push(edgeFragment.replace(/^ WHERE /, ''));
+        }
+
+        // Edge-side negation
+        if (userEdgeNot && relDef.properties) {
+          const edgeNotFragment = this.compileEdgeWhere({
+            edgeVar,
+            propsTypeName: relDef.properties,
+            userWhere: userEdgeNot,
+            params,
+            paramCounter,
+            contextLabel: `connection "${node.fieldName}" edge_NOT`,
+          });
+          if (edgeNotFragment)
+            fragments.push(`NOT (${edgeNotFragment.replace(/^ WHERE /, '')})`);
         }
       } else {
         // Fallback for callers that didn't wire a WhereCompiler: simple

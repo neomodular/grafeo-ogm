@@ -1170,15 +1170,20 @@ export class MutationCompiler {
                 string,
                 unknown
               >;
-              const conditions: string[] = [];
-              for (const [prop, val] of Object.entries(nodeWhere)) {
-                assertSafeIdentifier(prop, 'delete where property');
-                const paramName = `${itemPrefix}_del${di}_${prop}`;
-                conditions.push(
-                  `${delTarget}.${escapeIdentifier(prop)} = $${paramName}`,
-                );
-                params[paramName] = val;
-              }
+              // Use the same WHERE-condition builder as the disconnect /
+              // connect paths so operator suffixes (_GT/_CONTAINS/_IN/etc.),
+              // `NOT`, and relationship sub-filters work consistently. The
+              // pre-1.7.2 inline implementation only emitted `prop = $param`
+              // for every key, silently turning operator-suffixed keys
+              // (`name_CONTAINS`) into property lookups against
+              // non-existent fields → zero rows deleted.
+              const conditions = this.buildNodeWhereConditions(
+                nodeWhere,
+                delTarget,
+                `${itemPrefix}_del${di}`,
+                params,
+                targetNodeDef,
+              );
               if (conditions.length > 0)
                 lines.push(`WHERE ${conditions.join(' AND ')}`);
             }

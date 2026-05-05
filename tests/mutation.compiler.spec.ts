@@ -1098,6 +1098,40 @@ describe('MutationCompiler', () => {
         update_shelfRows_0_edge_position: 10,
       });
     });
+
+    // v1.7.2 BLOCKER regression: nested `delete: { where: { node: {...} } }`
+    // pre-1.7.2 emitted inline `prop = $param` for every key, ignoring
+    // operator suffixes — `name_CONTAINS` would target a non-existent
+    // property and silently delete nothing. Verify operator suffixes are
+    // now resolved through the same builder used by disconnect.
+    it('honors operator suffixes in nested delete.where.node (v1.7.2)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'a1' },
+        {
+          hasBooks: [
+            {
+              delete: {
+                where: { node: { title_CONTAINS: 'Draft' } },
+              },
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        authorNode,
+        { cypher: 'n.id = $param0', params: { param0: 'a1' } },
+      );
+
+      // The fix: operator suffix is parsed → emits CONTAINS, not equality
+      expect(result.cypher).toContain(
+        'OPTIONAL MATCH (n)-[r_del_hasBooks_0_0:\`CHART_HAS_BOOKS\`]->',
+      );
+      expect(result.cypher).toContain('CONTAINS');
+      expect(result.cypher).toContain('DETACH DELETE');
+      // Pre-1.7.2 would have emitted `n_del0.\`title_CONTAINS\` = $...`
+      // — assert that bug shape never reappears.
+      expect(result.cypher).not.toContain('`title_CONTAINS`');
+    });
   });
 
   describe('compileDelete', () => {

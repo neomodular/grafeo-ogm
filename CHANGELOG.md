@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.7.2 (2026-05-05)
+
+> Codegen/runtime parity bug fixes surfaced by an internal audit. Five
+> blockers that previously produced silent wrong results (or threw with
+> misleading messages). No behavioural change for code that wasn't hitting
+> the buggy paths — Cypher emit is byte-identical for filters that
+> avoided the affected key shapes.
+
+### Fixed
+
+- **Union/interface relationship `null` filter no longer matches every row.** Pre-1.7.2, `where: { someUnionRel: null }` (and the same on interface-typed relationships, including `_SOME` / `_NONE` / `_ALL` / `_SINGLE` quantifiers) emitted the literal abstract type name as a Neo4j label — which no concrete-typed implementer carries — so `NOT EXISTS` was true for every row. The compiler now passes `schema` to `buildRelPattern` and emits a labelless target so the relationship type is authoritative.
+- **`<rel>_NOT` compiles as `NOT EXISTS`, not scalar `<>`.** Pre-1.7.2, `where: { drugs_NOT: { name: 'X' } }` fell through to the scalar branch and emitted `n.drugs <> $param0` against a Map value — producing NULL and silently dropping every row. `_NOT` is now recognised as a relationship suffix (semantically equivalent to `_NONE`). Scalar fields ending in `_NOT` still resolve to `<>` as before because the relationship branch falls through when the prefix isn't a real relationship name.
+- **`<rel>Aggregate` filters throw clearly instead of producing wrong rows.** Pre-1.7.2, `where: { drugsAggregate: { count_GT: 5 } }` fell into the scalar compiler and emitted `n.drugsAggregate = $param0` against a non-existent property → empty result. The runtime now throws `OGMError: Relationship aggregate filter "<key>" is not yet supported at runtime. Use _SOME / _NONE / _ALL with a target Where clause instead.` Codegen still emits the type for forward compatibility; the throw makes the gap loud.
+- **Connection `node_NOT` / `edge_NOT` / `AND` / `OR` / `NOT` are honoured** in `where: { fooConnection: { ... } }`. Pre-1.7.2 only `node` and `edge` keys were inspected; everything else was silently dropped. The new internal `compileConnectionWhereInput` recurses through these keys inside the same EXISTS body so the relationship-type-and-edge pair stays bound. The `select.where` connection path supports `node_NOT` / `edge_NOT` and rejects `AND` / `OR` / `NOT` with a clear `OGMError` (move to top-level `where:` for those — pattern-comprehension nesting limits prevent in-place support without a redesign).
+- **Nested `update: { rel: { delete: { where: {...} } } }` honours operator suffixes.** Pre-1.7.2 the delete branch built inline `prop = $param` for every key, ignoring `_GT` / `_CONTAINS` / `_IN` / etc. — so `delete: { where: { node: { title_CONTAINS: 'Draft' } } }` either deleted nothing or targeted a non-existent literal property. The branch now uses the same `buildNodeWhereConditions` helper as `disconnect` / `connect`, so operators, `NOT`, and relationship sub-filters all work.
+
+### How
+
+- `where.compiler.ts`: every `buildRelPattern` call now passes `schema: this.schema` so abstract-target detection runs (#1). `RELATIONSHIP_SUFFIXES` adds `'_NOT'`, dispatched to the same `NOT EXISTS` body as `_NONE` (#3). New `compileConnectionWhereInput` helper recursively processes `node` / `edge` / `node_NOT` / `edge_NOT` / `AND` / `OR` / `NOT` (#4). Relationship `Aggregate` keys throw clearly before falling into the scalar branch (#2).
+- `selection.compiler.ts`: `compileConnection` extends the `cw` split logic to handle `node_NOT` / `edge_NOT` (negated branches AND-merge with the main fragment) and throws on connection-level `AND` / `OR` / `NOT` until the pattern-comprehension limitation is lifted.
+- `mutation.compiler.ts`: the `delete` branch under `buildUpdateRelationships` calls `this.buildNodeWhereConditions(...)` — the same builder that `disconnect` and `connect` already use.
+
+### Test coverage
+
+- `tests/where.compiler.spec.ts` — interface-target tests updated to assert the new (correct) labelless emit; new regression block `v1.7.2 codegen/runtime parity` covers `_NOT`, `Aggregate` throw, `node_NOT`, `edge_NOT`, connection `AND` / `OR` / `NOT`, and the union/interface null-filter regression.
+- `tests/mutation.compiler.spec.ts` — new regression for `delete.where.node` operator suffixes.
+- 1323 → 1332 tests, all passing.
+
+### Out of scope (tracked for a follow-up)
+
+- Connection-level `AND` / `OR` / `NOT` *inside* the typed `select.where` path. Currently throws with a helpful message pointing to the top-level `where:` argument (which fully supports it via `WhereCompiler`).
+- Relationship aggregate filters (`<rel>Aggregate`). Surface area is bigger than a parity fix — needs a runtime aggregation predicate compiler.
+- Same `delete.where` operator-parity fix for `mutation.compiler.ts:1438` (the deeper-nested cascade variant). The visible top-level path is fixed; the deeper variant uses a different helper and was not touched in this release.
+
 ## 1.7.1 (2026-05-04)
 
 ### Fixed

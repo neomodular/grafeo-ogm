@@ -80,7 +80,19 @@ const OPERATOR_SUFFIXES = OPERATOR_REGISTRY.map(([s]) => s);
 
 type OperatorSuffix = string;
 
-const RELATIONSHIP_SUFFIXES = ['_SOME', '_NONE', '_ALL', '_SINGLE'] as const;
+// Order matters for greedy suffix matching: `_NOT` must come AFTER any
+// scalar operator suffix that contains `_NOT` (e.g. `_NOT_IN`,
+// `_NOT_CONTAINS`). Those are not in this list — they belong to the
+// scalar OPERATOR_REGISTRY — but iteration order here is still safe
+// because we only return a match when `fieldName` resolves to an actual
+// relationship in `nodeDef.relationships` (see `tryCompileRelationship`).
+const RELATIONSHIP_SUFFIXES = [
+  '_SOME',
+  '_NONE',
+  '_ALL',
+  '_SINGLE',
+  '_NOT',
+] as const;
 type RelationshipSuffix = (typeof RELATIONSHIP_SUFFIXES)[number];
 
 const CONNECTION_SUFFIXES = [
@@ -423,6 +435,12 @@ export class WhereCompiler {
               relDef,
               targetVar: relVar,
               targetLabel: 'auto',
+              // Pass schema so that union/interface targets resolve to a
+              // labelless target (relationship-type-only filter). Without
+              // this, the literal abstract type name is escaped as a label
+              // that no concrete node carries → NOT EXISTS is true for
+              // every row → ALL rows match.
+              schema: this.schema,
             });
             clauses.push(`NOT EXISTS { MATCH ${pattern} }`);
           }
@@ -464,6 +482,21 @@ export class WhereCompiler {
         clauses.push(relResult.cypher);
         mergeParams(params, relResult.params);
         continue;
+      }
+
+      // Codegen emits `<rel>Aggregate` keys for every relationship, but
+      // runtime support is not yet implemented. Without this guard the
+      // key falls into `compileScalarCondition` and emits
+      // `n.<rel>Aggregate = $param` against a non-existent property
+      // (NULL → row silently dropped). Throw loudly so the developer
+      // knows to refactor to `_SOME` / `_NONE` / `_ALL`.
+      if (key.endsWith('Aggregate')) {
+        const aggField = key.slice(0, -'Aggregate'.length);
+        if (nodeDef.relationships.has(aggField))
+          throw new OGMError(
+            `Relationship aggregate filter "${key}" is not yet supported at runtime. ` +
+              `Use _SOME / _NONE / _ALL with a target Where clause instead.`,
+          );
       }
 
       // Scalar property operators
@@ -545,10 +578,12 @@ export class WhereCompiler {
       targetVar: relVar,
       edgeVar,
       targetLabel: 'auto',
+      // Abstract targets (unions/interfaces) → labelless target node, so
+      // the relationship-type filter is authoritative. Without `schema`,
+      // the abstract type name would be escaped as a literal label and
+      // never match.
+      schema: this.schema,
     });
-
-    const innerClauses: string[] = [];
-    const innerParams: Record<string, unknown> = {};
 
     // Inner scopes for any `@cypher` projections referenced inside the
     // EXISTS body. Node-side and edge-side get separate scopes so their
@@ -557,41 +592,23 @@ export class WhereCompiler {
     const nodeScope = new CypherFieldScope(relVar, [], '__where');
     const edgeScope = new CypherFieldScope(edgeVar, [], '__where');
 
-    // node conditions
-    if (value.node) {
-      const nodeResult = this.compileConditions(
-        value.node as Record<string, unknown>,
-        relVar,
-        targetNodeDef,
-        counter,
-        depth + 1,
-        nodeScope,
-      );
-      if (nodeResult.cypher) {
-        innerClauses.push(nodeResult.cypher);
-        mergeParams(innerParams, nodeResult.params);
-      }
-    }
+    const propsDef = relDef.properties
+      ? (this.schema.relationshipProperties.get(relDef.properties) ?? null)
+      : null;
 
-    // edge conditions
-    if (value.edge && relDef.properties) {
-      const propsDef = this.schema.relationshipProperties.get(
-        relDef.properties,
-      );
-      if (propsDef) {
-        const edgeResult = this.compileEdgeConditions(
-          value.edge as Record<string, unknown>,
-          edgeVar,
-          propsDef,
-          edgeScope,
-          counter,
-        );
-        if (edgeResult.cypher) {
-          innerClauses.push(edgeResult.cypher);
-          mergeParams(innerParams, edgeResult.params);
-        }
-      }
-    }
+    const inner = this.compileConnectionWhereInput(
+      value,
+      relVar,
+      edgeVar,
+      targetNodeDef,
+      propsDef,
+      nodeScope,
+      edgeScope,
+      counter,
+      depth,
+    );
+    const innerClauses = inner.cypher ? [inner.cypher] : [];
+    const innerParams = inner.params;
 
     // Stitch the inner preludes (CALL { ... } + WITH ...) INSIDE the
     // EXISTS body, between the MATCH pattern and the inner WHERE.
@@ -640,6 +657,130 @@ export class WhereCompiler {
       default:
         return null;
     }
+  }
+
+  /**
+   * Compile a connection-where-input — the value at
+   * `where.<rel>Connection*: { ... }`. Recognises:
+   *   - `node` / `node_NOT` — target node Where filter (negation wraps in `NOT (...)`)
+   *   - `edge` / `edge_NOT` — edge property Where filter (only when relationship has properties)
+   *   - `AND` / `OR` — array of nested connection-where-inputs joined with the operator
+   *   - `NOT` — single nested connection-where-input wrapped in `NOT (...)`
+   *
+   * All nested clauses live inside the SAME EXISTS body — i.e. they
+   * constrain the same `(relVar, edgeVar)` pair. This matches the codegen
+   * shape declared in `connection-emitter.ts`.
+   */
+  private compileConnectionWhereInput(
+    value: Record<string, unknown>,
+    relVar: string,
+    edgeVar: string,
+    targetNodeDef: NodeDefinition,
+    propsDef: { properties: Map<string, PropertyDefinition> } | null,
+    nodeScope: CypherFieldScope,
+    edgeScope: CypherFieldScope,
+    counter: { count: number },
+    depth: number,
+  ): WhereResult {
+    const innerClauses: string[] = [];
+    const innerParams: Record<string, unknown> = {};
+
+    for (const [key, val] of Object.entries(value)) {
+      if (val === undefined) continue;
+
+      if (key === 'node' || key === 'node_NOT') {
+        const nodeResult = this.compileConditions(
+          val as Record<string, unknown>,
+          relVar,
+          targetNodeDef,
+          counter,
+          depth + 1,
+          nodeScope,
+        );
+        if (nodeResult.cypher) {
+          innerClauses.push(
+            key === 'node_NOT'
+              ? `NOT (${nodeResult.cypher})`
+              : nodeResult.cypher,
+          );
+          mergeParams(innerParams, nodeResult.params);
+        }
+        continue;
+      }
+
+      if ((key === 'edge' || key === 'edge_NOT') && propsDef) {
+        const edgeResult = this.compileEdgeConditions(
+          val as Record<string, unknown>,
+          edgeVar,
+          propsDef,
+          edgeScope,
+          counter,
+        );
+        if (edgeResult.cypher) {
+          innerClauses.push(
+            key === 'edge_NOT'
+              ? `NOT (${edgeResult.cypher})`
+              : edgeResult.cypher,
+          );
+          mergeParams(innerParams, edgeResult.params);
+        }
+        continue;
+      }
+
+      if (key === 'AND' || key === 'OR') {
+        const items = val as Record<string, unknown>[];
+        const subResults = items.map((item) =>
+          this.compileConnectionWhereInput(
+            item,
+            relVar,
+            edgeVar,
+            targetNodeDef,
+            propsDef,
+            nodeScope,
+            edgeScope,
+            counter,
+            depth + 1,
+          ),
+        );
+        const subClauses = subResults.map((r) => r.cypher).filter(Boolean);
+        if (subClauses.length > 0) {
+          innerClauses.push(`(${subClauses.join(` ${key} `)})`);
+          for (const r of subResults) mergeParams(innerParams, r.params);
+        }
+        continue;
+      }
+
+      if (key === 'NOT') {
+        if (!isPlainObject(val))
+          throw new OGMError(
+            `NOT operator inside a connection where requires an object value.`,
+          );
+        const sub = this.compileConnectionWhereInput(
+          val as Record<string, unknown>,
+          relVar,
+          edgeVar,
+          targetNodeDef,
+          propsDef,
+          nodeScope,
+          edgeScope,
+          counter,
+          depth + 1,
+        );
+        if (sub.cypher) {
+          innerClauses.push(`NOT (${sub.cypher})`);
+          mergeParams(innerParams, sub.params);
+        }
+        continue;
+      }
+
+      // Unknown key — silently ignore to remain forward-compatible with
+      // future codegen additions.
+    }
+
+    return {
+      cypher: innerClauses.join(' AND '),
+      params: innerParams,
+    };
   }
 
   private tryCompileRelationship(
@@ -703,6 +844,11 @@ export class WhereCompiler {
       relDef,
       targetVar: relVar,
       targetLabel: 'auto',
+      // Interface targets need the same labelless-target treatment as
+      // unions (which are dispatched earlier to compileUnionRelationship).
+      // Without `schema`, an interface name is escaped as a label and
+      // EXISTS never matches concrete-typed nodes.
+      schema: this.schema,
     });
 
     // Inner scope for any `@cypher` fields referenced inside the inner
@@ -732,6 +878,12 @@ export class WhereCompiler {
           params: innerResult.params,
         };
       case '_NONE':
+      case '_NOT':
+        // `_NOT` is the codegen-emitted negation of a relationship filter
+        // (e.g. `drugs_NOT: { name: 'X' }`). Semantically identical to
+        // `_NONE`. Without this case, the suffix used to fall into the
+        // scalar OPERATOR_REGISTRY and emit `n.drugs <> $param` against a
+        // Map → NULL → silent wrong rows.
         return {
           cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment}${whereClause} }`,
           params: innerResult.params,
@@ -842,6 +994,9 @@ export class WhereCompiler {
       case '_SOME':
         return { cypher: combined, params: allParams };
       case '_NONE':
+      case '_NOT':
+        // `_NOT` is the codegen-emitted negation of a union relationship
+        // filter — equivalent to `_NONE`.
         return {
           cypher: `NOT ${combined}`,
           params: allParams,
