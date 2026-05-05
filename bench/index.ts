@@ -17,6 +17,7 @@ import './selection.bench';
 import './result-mapper.bench';
 import './mutation.bench';
 import './escape-id.bench';
+import './policy.bench';
 
 const wantJson = process.argv.includes('--json');
 
