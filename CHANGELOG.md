@@ -1,5 +1,135 @@
 # Changelog
 
+## 1.8.0 (2026-05-05)
+
+> Performance release. Three Tier 4 hot-path fixes from the audit landed
+> after measurement against a new dev-only `mitata` benchmark harness.
+> Two candidate fixes (cache dedup, mutation params spread) didn't clear
+> the 5% acceptance threshold and were reverted. **No behaviour changes
+> — semantics are identical to 1.7.5.** Stored-property queries, NLS
+> policy enforcement, code-generation output, and emitted Cypher are
+> all byte-for-byte equivalent to 1.7.5 for the same inputs.
+
+### Headline gains
+
+The biggest absolute time savings per call (`avg`, mitata, single host):
+
+| Hot path | 1.7.5 | 1.8.0 | Saved | Δ |
+|---|---|---|---|---|
+| Result mapping — 10 nested reviews + 5 tags row | **7.56 µs** | **6.42 µs** | 1.14 µs | **−15%** |
+| Result mapping — mixed types + nested object | 894 ns | **735 ns** | 159 ns | **−18%** |
+| Result mapping — pure scalar map | 185 ns | **119 ns** | 66 ns | **−36%** |
+| WHERE compile — deep AND/OR/NOT nesting | **3.66 µs** | **3.11 µs** | 550 ns | **−15%** |
+| Selection compile — deep (multi-rel + connection) | **2.69 µs** | **2.26 µs** | 428 ns | **−16%** |
+| Selection compile — nested (1 level rels) | 1.11 µs | **940 ns** | 172 ns | **−16%** |
+| Selection compile — simple `{ id title }` | 151 ns | **120 ns** | 32 ns | **−21%** |
+| WHERE compile — connection (node + edge) | 1.30 µs | **1.21 µs** | 99 ns | **−8%** |
+| `escapeIdentifier` (no-backticks fast path) | 19 ns | **1.1 ns** | 18 ns | **−94%** |
+
+### What got faster — and why
+
+#### 1. `ResultMapper.convertNeo4jTypes` — `Object.entries` → `for...in` (fix E)
+
+Pre-1.8.0 the plain-object branch allocated a fresh `[key, value][]` pair array per nested object visit (via `Object.entries`). For a realistic 10-row relationship result with nested children, that's 32 allocations per Cypher row — multiplied by every row in every result. Switched to `for...in` + `Object.prototype.hasOwnProperty.call`. The `Object.create(null)` defensive guard against prototype pollution is preserved.
+
+```
+                                    1.7.5      1.8.0      Saved      Δ
+pure scalar map                    184.5 ns   118.5 ns    66.0 ns   −36%
+single Neo4j Integer (safe)        145.4 ns   134.4 ns    11.0 ns    −8%
+mixed types + nested object        894.0 ns   735.0 ns   159.0 ns   −18%
+nested rel array (10 + 5 children)   7.56 µs    6.42 µs    1.14 µs   −15%
+```
+
+#### 2. `escapeIdentifier` fast path (fix F)
+
+`escapeIdentifier` is called dozens of times per Cypher emit (every relationship type, every label, every property name). Pre-1.8.0 it unconditionally ran a regex-replace + intermediate string allocation, even though identifiers in well-formed schemas effectively never contain backticks. Added a single `indexOf('` ` `')` check before the regex; the >99.99% case now returns the wrapped string directly.
+
+The direct microbenchmark went from 19 ns to 1.1 ns (−94%) — V8 effectively inlines the fast path to no-op cost. The real win is the cascade through every code path that calls `escapeIdentifier` transitively:
+
+```
+                                    1.7.5      1.8.0      Saved      Δ
+compile simple { id title }        151.2 ns   119.7 ns    31.6 ns   −21%
+compile nested (1 level rels)        1.11 µs    940 ns   172.3 ns   −16%
+compile deep (multi-rel + conn)     2.69 µs    2.26 µs   428.4 ns   −16%
+deep logical AND/OR/NOT             3.66 µs    3.11 µs   549.8 ns   −15%
+relationship _SOME inner where     735.5 ns   698.1 ns    37.3 ns    −5%
+connection where (node + edge)      1.30 µs    1.21 µs    99.0 ns    −8%
+```
+
+The slow path (identifier WITH backticks) is unchanged — still routes through the original regex.
+
+#### 3. `WhereCompiler.compileConditions` shared params accumulator (fix C)
+
+`compileConditions` is recursive — `AND` / `OR` / `NOT` branches recurse into themselves with smaller sub-objects. Pre-1.8.0 every recursion frame allocated a fresh `{}` Map and merged via `Object.assign` on the way back up. For a 5-level deep `AND`/`OR`/`NOT` predicate that's 5 fresh objects + 5 merge walks per compile. The recursive paths now thread the parent's params Map as a shared accumulator; leaf scalar conditions write directly into the owner.
+
+```
+                                    1.7.5      1.8.0      Saved      Δ
+deep logical AND/OR/NOT             3.66 µs    3.11 µs   549.8 ns   −15%
+```
+
+The public WhereCompiler API surface is unchanged — `paramsTarget` is an optional internal parameter; external callers keep the old contract.
+
+### Real-world impact
+
+For a typical paginated query (`Book.find({ where, select: { id, title, hasReviews { ... } } })` returning 50 rows):
+
+| Stage | 1.7.5 | 1.8.0 | Saved per request |
+|---|---|---|---|
+| WHERE compile (mixed operators) | 1.96 µs | 1.86 µs | 100 ns |
+| Selection compile (cache hit) | 28 ns | 28 ns | — |
+| Result mapping (50 × mixed-types row) | 44.7 µs | 36.8 µs | 7.9 µs |
+| **Total per request** | **≈46.7 µs** | **≈38.7 µs** | **≈8 µs** |
+
+Multiplied by sustained load:
+
+| QPS | Saved per second | CPU core equivalent |
+|---|---|---|
+| 1,000 | 8 ms | 0.8% of one core |
+| 10,000 | 80 ms | **8% of one core** |
+| 50,000 | 400 ms | **40% of one core liberated** |
+
+For result-heavy workloads (1000 rows × nested relationship array): **~1.14 ms saved per query** at the OGM layer alone.
+
+### Node-Level Security (NLS) policy hot path
+
+Policy-enabled queries got modest gains. Simple policies are dominated by the inherent allocation cost of `when(ctx)` invocation + partial allocation + AND-stitch — none of the Tier 4 fixes target those. Nested-`when` policies see the recursion benefit from fix C.
+
+| Policy shape | 1.7.5 | 1.8.0 | Saved | Δ |
+|---|---|---|---|---|
+| User where, no policy (baseline) | 1.96 µs | 1.89 µs | 71 ns | −3.6% |
+| + single permissive (flat `when`) | 2.28 µs | 2.25 µs | 28 ns | −1.2% 🟡 |
+| + two permissives (OR-grant) | 3.00 µs | 2.95 µs | 54 ns | −1.8% 🟡 |
+| + permissive AND restrictive | 2.93 µs | 2.88 µs | 46 ns | −1.6% 🟡 |
+| + nested AND/OR permissive (deep `when`) | **5.09 µs** | **4.65 µs** | 442 ns | **−8.7%** 🟢 |
+| + cypher escape hatch fragment | 2.31 µs | 2.28 µs | 35 ns | −1.5% 🟡 |
+
+**TL;DR for NLS users**: if your policies are simple (`when: ctx => ({ ownerId: ctx.userId })`) the gain is ≈30–50 ns per query — imperceptible. If your `when` returns nested `AND`/`OR` partials, expect ~440 ns per query saved. NLS-side optimization (caching `when()` results, plumbing the shared accumulator into `compilePolicyClause`) is tracked as Tier 4.5 follow-up work.
+
+### Rejected fixes (measured, didn't clear threshold)
+
+Two Tier 4 candidates were applied, measured, and reverted because they didn't clear the 5% acceptance bar with no >2% regression elsewhere. Snapshots preserved under `bench/snapshots/fix-B.run*.json` and `fix-D.run*.json` for future reference:
+
+- **B — Dedup `Model._selectionCache` and `SelectionCompiler.parseCache`.** Code-wise correct (one fewer Map.get per query), but the bench can't measure the affected path without a Model.find end-to-end benchmark with mock executor. Visible variance was JIT-level noise from the Model class shape shift, not a real regression. May be revisited if a Model.find end-to-end benchmark is added.
+- **D — Mutate `whereResult.params` in place** in mutation compiler (3 sites). Showed unstable variance: `compileUpdate — simple SET` ranged from +2% to +25% across runs. The spread is one allocation per mutation (~50 ns range), and per-mutation cost is dominated by other work (label cache lookup, string concat) — savings too small to surface above noise.
+
+### Dev-only: `mitata` benchmark harness
+
+A new `bench/` directory was added with the `mitata` benchmark library as a `devDependency`. **It is not shipped to npm consumers** — `bench/` is excluded from the package files manifest, the `dist/` build configs only include `src/`, and `mitata` is never imported by runtime code. End users see zero impact: identical `node_modules/grafeo-ogm` contents, identical bundle size.
+
+The harness covers WhereCompiler, SelectionCompiler, ResultMapper, MutationCompiler, escapeIdentifier, and NLS policy paths. Snapshots in `bench/snapshots/` document the pre/post numbers behind every claim above. Run with `pnpm run bench` (rich text output) or `pnpm run bench -- --json` (machine-readable; strips per-iteration samples).
+
+### What's NOT in this release
+
+The audit also flagged these — held back because they need more design:
+
+- **NLS policy optimisations** (Tier 4.5): caching `when()` results by `ctxFingerprint`, threading the shared params accumulator through `compilePolicyClause`. Would close the 1–2% simple-policy gap.
+- **Selection-cache dedup** (deferred fix B): re-evaluate after a Model.find end-to-end benchmark is added.
+- **Bundle-size reduction** by separating the codegen entry point. Breaking change — needs a major version.
+
+### Test coverage
+
+No semantic tests changed in this release — only perf code paths touched. 1358/1358 tests still pass. Lint clean, format clean, build clean.
+
 ## 1.7.5 (2026-05-05)
 
 > Tier 5 cleanups from the audit. Four small but useful fixes: a counter
