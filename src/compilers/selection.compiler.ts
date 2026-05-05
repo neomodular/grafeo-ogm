@@ -609,25 +609,35 @@ export class SelectionCompiler {
 
     const innerMap = `{ ${mapParts.join(', ')} }`;
 
-    // Add WHERE clause if connectionWhere is present, AND-combined with the
-    // target type's `'read'` policy.
+    // Add WHERE clause(s) if connectionWhere is present. Node-side filter is
+    // AND-combined with the target type's `'read'` policy; edge-side filter
+    // is compiled against a synthetic NodeDefinition built from the
+    // relationship-properties type. Both fragments AND-merge into a single
+    // WHERE clause inside the pattern comprehension.
     let whereClause = '';
     if (node.connectionWhere && Object.keys(node.connectionWhere).length > 0) {
-      // Reject unsupported edge WHERE filters with a descriptive error
-      if (node.connectionWhere.edge !== undefined)
-        throw new OGMError(
-          `Connection WHERE with "edge" filters is not supported. ` +
-            `Only "node" filters are supported for connection "${node.fieldName}".`,
-        );
+      const cw = node.connectionWhere as Record<string, unknown>;
+      const hasNodeKey = isPlainObject(cw.node);
+      const hasEdgeKey = isPlainObject(cw.edge);
 
-      // Unwrap { node: { ... } } wrapper if present
-      const nodeWhere = isPlainObject(node.connectionWhere.node)
-        ? node.connectionWhere.node
-        : node.connectionWhere;
+      // Resolve the node-side and edge-side branches. Bare-object input
+      // (no `node`/`edge` keys) is the legacy node-where shorthand from
+      // pre-1.7.1 callers — keep treating it as node-where.
+      const userNodeWhere = hasNodeKey
+        ? (cw.node as Record<string, unknown>)
+        : !hasEdgeKey
+          ? cw
+          : undefined;
+      const userEdgeWhere = hasEdgeKey
+        ? (cw.edge as Record<string, unknown>)
+        : undefined;
 
-      // If we have a full WhereCompiler, delegate to it for complete operator support
-      if (this.whereCompiler && targetDef)
-        whereClause = this.compileNestedWhere({
+      const fragments: string[] = [];
+
+      if (this.whereCompiler && targetDef) {
+        // Node-side (always run when whereCompiler is wired so policy still
+        // injects even when the user only filters on the edge).
+        const nodeFragment = this.compileNestedWhere({
           node,
           childVar,
           targetDef,
@@ -635,17 +645,36 @@ export class SelectionCompiler {
           paramCounter,
           policyContext,
           contextLabel: `connection "${node.fieldName}"`,
-          userWhere: nodeWhere as Record<string, unknown>,
+          userWhere: userNodeWhere,
         });
-      else {
+        if (nodeFragment) fragments.push(nodeFragment.replace(/^ WHERE /, ''));
+
+        // Edge-side
+        if (userEdgeWhere && relDef.properties) {
+          const edgeFragment = this.compileEdgeWhere({
+            edgeVar,
+            propsTypeName: relDef.properties,
+            userWhere: userEdgeWhere,
+            params,
+            paramCounter,
+            contextLabel: `connection "${node.fieldName}" edge`,
+          });
+          if (edgeFragment)
+            fragments.push(edgeFragment.replace(/^ WHERE /, ''));
+        }
+      } else {
+        // Fallback for callers that didn't wire a WhereCompiler: simple
+        // node-where only, edge-where silently ignored (legacy behavior).
         const simpleWhere = this.compileSimpleWhere(
-          node.connectionWhere,
+          userNodeWhere ?? cw,
           childVar,
           params,
           paramCounter,
         );
-        if (simpleWhere) whereClause = ` WHERE ${simpleWhere}`;
+        if (simpleWhere) fragments.push(simpleWhere);
       }
+
+      whereClause = fragments.length ? ` WHERE ${fragments.join(' AND ')}` : '';
     } else if (this.whereCompiler && targetDef)
       // No user where but we still need the policy injected if active.
       whereClause = this.compileNestedWhere({
@@ -771,6 +800,69 @@ export class SelectionCompiler {
     if (compiled.params && Object.keys(compiled.params).length > 0)
       mergeParams(params, compiled.params);
     void node;
+    return '';
+  }
+
+  /**
+   * Compile a connection's `edge`-side WHERE filter against the relationship
+   * properties type. Reuses `WhereCompiler.compile()` by synthesizing a
+   * `NodeDefinition` from the `RelationshipPropertiesDefinition` — full
+   * operator support (scalar ops, AND/OR/NOT, `mode`) flows through for free.
+   *
+   * Edges have no policy enforcement (policies bind to node typeNames), so
+   * this never resolves a policy context. `@cypher` field projections are
+   * rejected with the same error pattern as nested-node selection where:
+   * pattern comprehensions cannot host CALL { ... } subqueries.
+   */
+  private compileEdgeWhere(args: {
+    edgeVar: string;
+    propsTypeName: string;
+    userWhere: Record<string, unknown>;
+    params: Record<string, unknown> | undefined;
+    paramCounter: { count: number } | undefined;
+    contextLabel: string;
+  }): string {
+    const {
+      edgeVar,
+      propsTypeName,
+      userWhere,
+      params,
+      paramCounter,
+      contextLabel,
+    } = args;
+    if (!this.whereCompiler || !params || !paramCounter) return '';
+
+    const propsDef = this.schema.relationshipProperties.get(propsTypeName);
+    if (!propsDef) return '';
+
+    const syntheticDef: NodeDefinition = {
+      typeName: propsDef.typeName,
+      label: propsDef.typeName,
+      labels: [],
+      pluralName: '',
+      properties: propsDef.properties,
+      relationships: new Map(),
+      fulltextIndexes: propsDef.fulltextIndexes ?? [],
+      implementsInterfaces: [],
+    };
+
+    const compiled = this.whereCompiler.compile(
+      userWhere,
+      edgeVar,
+      syntheticDef,
+      paramCounter,
+    );
+
+    if (compiled.preludes && compiled.preludes.length > 0)
+      throw new OGMError(
+        `Filtering ${contextLabel} by an @cypher field is not supported. ` +
+          `@cypher fields can only appear in top-level WHERE filters, not inside select.where on relationship edges.`,
+      );
+
+    if (compiled.cypher) {
+      mergeParams(params, compiled.params);
+      return ` WHERE ${compiled.cypher}`;
+    }
     return '';
   }
 

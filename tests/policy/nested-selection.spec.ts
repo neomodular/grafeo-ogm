@@ -98,6 +98,7 @@ const userNode: NodeDefinition = {
         target: 'Book',
         isArray: true,
         isRequired: false,
+        properties: 'OwnsProps',
       },
     ],
     [
@@ -109,6 +110,7 @@ const userNode: NodeDefinition = {
         target: 'Book',
         isArray: true,
         isRequired: false,
+        properties: 'OwnsProps',
       },
     ],
   ]),
@@ -123,7 +125,17 @@ const schema: SchemaMetadata = {
     ['Tag', tagNode],
   ]),
   interfaces: new Map(),
-  relationshipProperties: new Map(),
+  relationshipProperties: new Map([
+    [
+      'OwnsProps',
+      {
+        typeName: 'OwnsProps',
+        properties: new Map<string, PropertyDefinition>([
+          ['since', prop('since')],
+        ]),
+      },
+    ],
+  ]),
   enums: new Map(),
   unions: new Map(),
 };
@@ -713,7 +725,10 @@ describe('SelectionCompiler — nested-selection policy enforcement', () => {
     expect(result).toContain('ownerId');
   });
 
-  it('connectionWhere "edge" filter still throws (no regression)', () => {
+  it('connectionWhere "edge" filter compiles against the relationship-properties type (1.7.1+)', () => {
+    // Pre-1.7.1: this throw'd `OGMError: Connection WHERE with "edge" filters is not supported.`
+    // Post-1.7.1: the edge branch compiles via a synthetic NodeDefinition built from the
+    // RelationshipPropertiesDefinition, AND-merged with the node-side filter (here empty).
     const selection: SelectionNode[] = [
       {
         fieldName: 'ownedBooksConnection',
@@ -733,19 +748,23 @@ describe('SelectionCompiler — nested-selection policy enforcement', () => {
     ];
     const params: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
-    expect(() =>
-      compiler.compile(
-        selection,
-        'n',
-        userNode,
-        5,
-        0,
-        params,
-        paramCounter,
-        null,
-        bundle({ resolveForType: () => null }),
-      ),
-    ).toThrow(/edge/);
+
+    const out = compiler.compile(
+      selection,
+      'n',
+      userNode,
+      5,
+      0,
+      params,
+      paramCounter,
+      null,
+      bundle({ resolveForType: () => null }),
+    );
+
+    // The edge variable bound by buildRelPattern is `e<currentDepth>` (here `e0`),
+    // and the predicate references `e0.\`since\` = $param0`.
+    expect(out).toContain('WHERE e0.`since` = $param0');
+    expect(params).toMatchObject({ param0: '2020' });
   });
 
   it('default-deny: empty permissives → emits false in nested where', () => {

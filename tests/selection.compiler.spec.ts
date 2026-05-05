@@ -1271,6 +1271,128 @@ describe('SelectionCompiler', () => {
       expect(result).toContain('WHERE');
       expect(result).toContain('n0.\`title\` =');
     });
+
+    it('should compile connectionWhere "edge" filter against the relationship-properties type', () => {
+      // 1.7.1: edge-side filter on a connection. The synthetic NodeDefinition
+      // built from `AuthorBookProps` lets the WhereCompiler emit operators
+      // (here `_GT`) against the edge variable `e0`.
+      const params: Record<string, unknown> = {};
+      const paramCounter = { count: 0 };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          connectionWhere: { edge: { position_GT: 1 } },
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compilerWithWhere.compile(
+        selection,
+        'n',
+        authorDef,
+        5,
+        0,
+        params,
+        paramCounter,
+      );
+
+      expect(result).toContain('WHERE');
+      expect(result).toContain('e0.\`position\` >');
+      expect(params).toMatchObject({ param0: 1 });
+    });
+
+    it('should AND-combine "node" + "edge" filters in a single WHERE', () => {
+      const params: Record<string, unknown> = {};
+      const paramCounter = { count: 0 };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          connectionWhere: {
+            node: { title_CONTAINS: 'aspirin' },
+            edge: { position_GT: 5 },
+          },
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compilerWithWhere.compile(
+        selection,
+        'n',
+        authorDef,
+        5,
+        0,
+        params,
+        paramCounter,
+      );
+
+      expect(result).toContain('n0.\`title\` CONTAINS $param0');
+      expect(result).toContain('e0.\`position\` > $param1');
+      expect(result).toMatch(
+        /WHERE n0\.`title` CONTAINS \$param0 AND e0\.`position` > \$param1/,
+      );
+    });
+
+    it('should compile connectionWhere "edge" with logical AND/OR', () => {
+      // The synthetic-NodeDefinition path inherits full WhereCompiler
+      // operator support, including AND/OR at the edge-properties level.
+      const params: Record<string, unknown> = {};
+      const paramCounter = { count: 0 };
+      const selection: SelectionNode[] = [
+        {
+          fieldName: 'booksConnection',
+          isScalar: false,
+          isRelationship: false,
+          isConnection: true,
+          connectionWhere: {
+            edge: {
+              OR: [{ position_LT: 3 }, { position_GT: 10 }],
+            },
+          },
+          children: [
+            {
+              fieldName: 'id',
+              isScalar: true,
+              isRelationship: false,
+              isConnection: false,
+            },
+          ],
+        },
+      ];
+      const authorDef = schema.nodes.get('Author')!;
+      const result = compilerWithWhere.compile(
+        selection,
+        'n',
+        authorDef,
+        5,
+        0,
+        params,
+        paramCounter,
+      );
+
+      expect(result).toContain('e0.\`position\` <');
+      expect(result).toContain('e0.\`position\` >');
+      expect(result).toMatch(/\(.*OR.*\)/);
+    });
   });
 
   describe('compileSimpleWhere fallback (connection without WhereCompiler)', () => {

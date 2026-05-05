@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.1 (2026-05-04)
+
+### Fixed
+
+- **Connection `where: { edge: ... }` filters now compile** in Prisma-style selections (`select: { fooConnection: { where: { edge: {...} }, ... } }`). Pre-1.7.1, any non-empty `edge` branch threw `OGMError: Connection WHERE with "edge" filters is not supported. Only "node" filters are supported for connection "<field>".` even though the generated `<Parent><Field>ConnectionWhere` type already exposed `edge?: <RelProps>Where` — codegen and runtime were misaligned. The compiler now synthesizes a `NodeDefinition` from the relationship-properties type and delegates to `WhereCompiler.compile()`, picking up the full operator surface for free (scalar operators including `_GT` / `_LT` / `_CONTAINS` / `_IN` / etc., logical `AND` / `OR` / `NOT`, and `mode`).
+- **Mixed `node` + `edge` filters AND-merge into a single `WHERE`** inside the pattern comprehension: `where: { node: { title_CONTAINS: 'aspirin' }, edge: { position_GT: 5 } }` compiles to `WHERE n0.\`title\` CONTAINS $param0 AND e0.\`position\` > $param1`.
+
+### How
+
+- `SelectionCompiler.compileConnection()` resolves both branches: node-side via the existing `compileNestedWhere` (with policy injection), edge-side via the new `compileEdgeWhere` helper. Both produce optional fragments that AND-merge in the comprehension's WHERE.
+- The new `compileEdgeWhere` builds a synthetic `NodeDefinition` from the `RelationshipPropertiesDefinition` and calls `WhereCompiler.compile()` against `edgeVar`. No new operator code — every operator already supported on nodes works on edges.
+- Bare-object `connectionWhere` (no `node` / `edge` keys) is still treated as the legacy node-where shorthand for backwards compatibility with pre-1.7.1 callers.
+
+### Limits
+
+- **`@cypher` fields on edges still throw** in connection `where`. Same constraint as nested `select.where`: pattern comprehensions cannot host `CALL { ... }` preludes. Refactor to filter on stored properties.
+- **Edges have no policy enforcement.** Policies bind to node `typeName`; relationship-properties types are not addressable by `withContext()`. The edge branch never resolves a policy context.
+- **Mutations still throw on connection `where: { edge: ... }`.** `mutation.compiler.ts` rejects `edge` keys in connection-WHERE inputs to `update` / `delete` / etc. — a separate code path with broader scope (left for a future release; track in a separate issue).
+
+### Test coverage
+
+- `tests/selection.compiler.spec.ts` — three new tests: edge-only filter with `_GT`, mixed node + edge filter, and edge-side `OR` logical composition.
+- `tests/policy/nested-selection.spec.ts` — the previous regression-guard `connectionWhere "edge" filter still throws (no regression)` is now `compiles against the relationship-properties type (1.7.1+)` and asserts the positive Cypher emission. Test fixture extended with an `OwnsProps` relationship-properties type.
+
 ## 1.7.0 (2026-05-04)
 
 > Stable release of the v1.7.0 beta line. Consolidates `1.7.0-beta.0` through `1.7.0-beta.4`. Stored-only callers see byte-identical Cypher to `1.6.0` — every new pipeline is opt-in.
