@@ -15,6 +15,7 @@ import { run } from 'mitata';
 import './where.bench';
 import './selection.bench';
 import './result-mapper.bench';
+import './mutation.bench';
 import './escape-id.bench';
 
 const wantJson = process.argv.includes('--json');
