@@ -23,6 +23,26 @@ describe('ResultMapper', () => {
       expect(ResultMapper.convertNeo4jTypes(intVal)).toBe(42);
     });
 
+    // v1.7.3 — safe-range guard
+    it('returns BigInt for Neo4j Integers above 2^53 (no silent truncation)', () => {
+      // Number.MAX_SAFE_INTEGER + 2 — would round-trip incorrectly via toNumber().
+      const huge = neo4j.int('9007199254740993');
+      const out = ResultMapper.convertNeo4jTypes(huge);
+      expect(typeof out).toBe('bigint');
+      expect(out).toBe(9007199254740993n);
+    });
+
+    it('still returns Number for Integers within the safe range', () => {
+      // The exact safe-integer boundary stays a Number to keep callers
+      // from having to handle BigInt for ordinary IDs / counters.
+      expect(ResultMapper.convertNeo4jTypes(neo4j.int(9007199254740991))).toBe(
+        9007199254740991,
+      );
+      expect(ResultMapper.convertNeo4jTypes(neo4j.int(-9007199254740991))).toBe(
+        -9007199254740991,
+      );
+    });
+
     it('should convert Neo4j DateTime to ISO string', () => {
       const dt = new neo4j.types.DateTime(2024, 1, 15, 10, 30, 0, 0, 0);
       const result = ResultMapper.convertNeo4jTypes(dt);

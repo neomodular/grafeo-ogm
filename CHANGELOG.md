@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.7.3 (2026-05-05)
+
+> Security hardening release. Four defensive fixes surfaced by the same
+> internal audit that produced 1.7.2. No behaviour change for callers
+> that weren't reaching the hardened paths — Cypher emit is byte-
+> identical for stored-property filters, vectors, and result mappings
+> below the new boundaries.
+
+### Fixed
+
+- **Lucene bareword booleans neutralised.** `sanitizeLuceneQuery` already escaped symbol-form operators (`+`, `-`, `&&`, `||`, `^`, `~`, `:`, etc.) but let bareword `AND` / `OR` / `NOT` / `TO` survive — so an attacker could still inject a boolean query (e.g. `foo AND _exists_:adminFlag`) even when the developer routed input through the sanitizer. The function now lowercases standalone uppercase booleans BEFORE the placeholder dance, turning them into literal-word matches under Lucene's standard analyser. Word boundaries (`\b`) keep middle-of-word matches like `BAND` / `STOP` / `PORTO` untouched.
+- **Vector + fulltext phrase length capped at 8 KB.** `searchByPhrase` forwards the input directly to the configured embedding provider (OpenAI / Vertex AI / etc., usually billable per token); fulltext forwards directly to the database parser. Pre-1.7.3 there was no cap — an attacker could send a multi-megabyte phrase to drive runaway billing or exhaust driver memory. New behaviour: throws `OGMError` with a clear message before any external call. 8 KB is well above any legitimate search query.
+- **Neo4j Integer overflow no longer truncates silently.** `ResultMapper.convertNeo4jTypes` previously called `value.toNumber()` unconditionally — values above `Number.MAX_SAFE_INTEGER` (2⁵³) returned a wrong-but-plausible Number (e.g. `9007199254740993n` came back as `9007199254740992`). The mapper now gates on `value.inSafeRange()` and returns a `BigInt` for out-of-range integers. Values within the safe range still return as `Number`, so ordinary IDs / counters keep their existing type — only the overflow path changes.
+
+### Documented
+
+- **`@cypher` SDL trust boundary made explicit.** The `statement` argument is interpolated verbatim into Cypher with no parameterisation. README now flags this as a development-time-only trust requirement: if `typeDefs` are ever assembled from runtime input (env vars, database records, remote config, user input), the application has a Cypher-injection vector equivalent to RCE on the database. The runtime cannot distinguish developer-authored from user-derived SDL — that boundary is the application's responsibility.
+
+### Test coverage
+
+- `tests/lucene.spec.ts` — 6 new tests covering bareword lowercase, word-boundary safety, the documented attack vector, and `&&` / `AND` interleaving.
+- `tests/fulltext.compiler.spec.ts` + `tests/vector.compiler.spec.ts` — 3 new tests covering the 8 KB boundary (throw above, accept at).
+- `tests/result-mapper.spec.ts` — 2 new tests covering the `inSafeRange` boundary (Number for safe, BigInt for overflow).
+- 1332 → 1343 tests, all passing.
+
+### Out of scope (deferred)
+
+- Tier 3 contract violations (aggregate codegen mismatch, `setLabels` overlap, `upsert` MERGE-key validation, `extractConnectWhereConditions` array divergence, `InterfaceModel.find` limit/offset) — each needs a public-API decision before fixing.
+- Tier 4 hot-path performance (double selection cache, `params:{}` allocation per where frame, `Object.entries` + `Object.create(null)` per result-mapper visit) — needs a benchmark harness before changes are accepted.
+
 ## 1.7.2 (2026-05-05)
 
 > Codegen/runtime parity bug fixes surfaced by an internal audit. Five

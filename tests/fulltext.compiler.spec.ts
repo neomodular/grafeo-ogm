@@ -98,6 +98,21 @@ describe('FulltextCompiler', () => {
     ).toThrow(/Fulltext phrase must not be empty/);
   });
 
+  // v1.7.3 — phrase length cap
+  it('throws on phrases longer than 8 KB (DoS / billing-attack guard)', () => {
+    const huge = 'a'.repeat(8 * 1024 + 1);
+    expect(() =>
+      compiler.compile({ BookTitleSearch: { phrase: huge } }, mockNodeDef),
+    ).toThrow(/exceeds the maximum length/);
+  });
+
+  it('accepts phrases at the 8 KB boundary', () => {
+    const limit = 'a'.repeat(8 * 1024);
+    expect(() =>
+      compiler.compile({ BookTitleSearch: { phrase: limit } }, mockNodeDef),
+    ).not.toThrow();
+  });
+
   it('should use the correct parameter name ($ft_phrase)', () => {
     const result = compiler.compile(
       { BookTitleSearch: { phrase: 'test' } },

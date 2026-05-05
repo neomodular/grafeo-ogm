@@ -15,6 +15,27 @@ import {
 /** Maximum recursion depth for nested fulltext logical operators */
 const MAX_DEPTH = 10;
 
+/**
+ * Hard cap on the length of a fulltext phrase, in characters. Lucene
+ * itself accepts essentially unbounded query strings, but the OGM
+ * pipeline forwards untrusted user input directly to the driver — and
+ * a multi-megabyte phrase wastes round-trip bandwidth, parser CPU on
+ * the database side, and (for callers that pre-process via embedding
+ * providers) provider tokens. 8 KB is well above any legitimate
+ * search query.
+ */
+const MAX_FULLTEXT_PHRASE_LENGTH = 8 * 1024;
+
+function assertValidFulltextPhrase(phrase: unknown): asserts phrase is string {
+  if (typeof phrase !== 'string' || phrase.trim().length === 0)
+    throw new OGMError('Fulltext phrase must not be empty');
+  if (phrase.length > MAX_FULLTEXT_PHRASE_LENGTH)
+    throw new OGMError(
+      `Fulltext phrase exceeds the maximum length of ${MAX_FULLTEXT_PHRASE_LENGTH} characters ` +
+        `(got ${phrase.length}). Truncate or split the input before searching.`,
+    );
+}
+
 export interface FulltextResult {
   cypher: string;
   params: Record<string, unknown>;
@@ -85,8 +106,7 @@ export class FulltextCompiler {
     assertSafeIdentifier(indexName, 'fulltext index name');
     const input = fulltext[indexName];
 
-    if (!input.phrase || input.phrase.trim().length === 0)
-      throw new OGMError('Fulltext phrase must not be empty');
+    assertValidFulltextPhrase(input.phrase);
 
     if (relIndex.name !== indexName)
       throw new OGMError(
@@ -205,8 +225,7 @@ export class FulltextCompiler {
     nodeVar: string,
     paramCounter: { count: number },
   ): FulltextResult {
-    if (!input.phrase || input.phrase.trim().length === 0)
-      throw new OGMError('Fulltext phrase must not be empty');
+    assertValidFulltextPhrase(input.phrase);
 
     const nodeIndex = nodeDef.fulltextIndexes.find(
       (idx) => idx.name === indexName,
@@ -286,8 +305,7 @@ export class FulltextCompiler {
         `Unknown fulltext index "${indexName}" on @relationshipProperties "${relDef.properties}"`,
       );
 
-    if (!input.phrase || input.phrase.trim().length === 0)
-      throw new OGMError('Fulltext phrase must not be empty');
+    assertValidFulltextPhrase(input.phrase);
 
     const paramName = `ft_phrase_${paramCounter.count++}`;
     const params: Record<string, unknown> = { [paramName]: input.phrase };

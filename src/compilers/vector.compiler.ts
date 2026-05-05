@@ -165,8 +165,23 @@ function assertValidVector(vector: unknown): asserts vector is number[] {
   }
 }
 
-/** Validate `phrase` is a non-empty, non-whitespace string. */
+/**
+ * Hard cap on the length of a vector-search phrase, in characters. The
+ * phrase is forwarded to the configured embedding provider (OpenAI,
+ * Vertex AI, etc.) which usually charges per token; without a cap an
+ * attacker can drive runaway billing and exhaust driver memory by
+ * sending a multi-megabyte phrase. 8 KB is well above any legitimate
+ * search query and below the embedding-provider limits we know about.
+ */
+const MAX_VECTOR_PHRASE_LENGTH = 8 * 1024;
+
+/** Validate `phrase` is a non-empty, non-whitespace, length-capped string. */
 function assertValidPhrase(phrase: unknown): asserts phrase is string {
   if (typeof phrase !== 'string' || phrase.trim().length === 0)
     throw new OGMError('Vector search "phrase" must be a non-empty string');
+  if (phrase.length > MAX_VECTOR_PHRASE_LENGTH)
+    throw new OGMError(
+      `Vector search "phrase" exceeds the maximum length of ${MAX_VECTOR_PHRASE_LENGTH} characters ` +
+        `(got ${phrase.length}). Truncate or split the input before searching.`,
+    );
 }

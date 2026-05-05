@@ -55,8 +55,15 @@ export class ResultMapper {
     // Fast path: primitives (most common in query results)
     if (typeof value !== 'object') return value;
 
-    // Neo4j Integer → number
-    if (neo4j.isInt(value)) return value.toNumber();
+    // Neo4j Integer → number (or BigInt when the value exceeds the
+    // safe-integer range). Pre-1.7.3 this always called `toNumber()`,
+    // which silently truncated values above 2^53 — e.g. a stored id
+    // of `9007199254740993n` came back as `9007199254740992`. Now we
+    // gate on `inSafeRange()` and fall back to BigInt for out-of-range
+    // values so consumers see the exact stored value (or can detect
+    // the BigInt and route accordingly).
+    if (neo4j.isInt(value))
+      return value.inSafeRange() ? value.toNumber() : value.toBigInt();
 
     // Array → map each element (check before other object types)
     if (Array.isArray(value))

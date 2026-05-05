@@ -346,6 +346,19 @@ describe('VectorCompiler', () => {
       ).toThrow(/"phrase" must be a non-empty string/);
     });
 
+    // v1.7.3 — phrase length cap (DoS / billing-attack guard)
+    it('throws on phrases longer than 8 KB', () => {
+      const huge = 'a'.repeat(8 * 1024 + 1);
+      expect(() =>
+        compiler.compileByPhrase({
+          indexName: 'article_content_idx',
+          phrase: huge,
+          k: 3,
+          nodeDef,
+        }),
+      ).toThrow(/exceeds the maximum length/);
+    });
+
     it('throws on unknown indexName', () => {
       expect(() =>
         compiler.compileByPhrase({

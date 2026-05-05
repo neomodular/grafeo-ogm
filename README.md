@@ -866,6 +866,8 @@ type Book @node {
 
 `statement` is the Cypher body — `this` is bound to the matched node. `columnName` is the alias the OGM reads from the `RETURN` clause; if omitted it defaults to the field name.
 
+> **⚠️ Security — `@cypher` SDL is trusted code, not data.** The `statement` argument is interpolated **verbatim** into the compiled Cypher (no parameterisation, no escaping). Treat `@cypher` directives the same way you treat `eval()` in your application code: the string MUST be a constant authored at development time, never built from runtime input. If your `typeDefs` are ever assembled from user input, environment variables, database records, or remote configuration, you have a Cypher-injection vector equivalent to RCE on the database (`MATCH (n) DETACH DELETE n RETURN '' AS x` in a `statement` will wipe the graph). The grafeo-ogm runtime cannot distinguish between developer-authored and user-derived SDL — that boundary is the application's responsibility.
+
 #### Using @cypher in SELECT
 
 ```typescript
