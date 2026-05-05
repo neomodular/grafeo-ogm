@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.7.5 (2026-05-05)
+
+> Tier 5 cleanups from the audit. Four small but useful fixes: a counter
+> bug in `_SINGLE`, a DoS-guard cap on `AND` / `OR` array length, a real
+> LRU eviction policy on the selection-set parse cache, and an opt-in
+> strict mode that surfaces typo'd `where` field names. None of these
+> change behaviour for code that wasn't reaching the broken paths;
+> `strictWhere` is opt-in.
+
+### Fixed
+
+- **`_SINGLE` quantifier no longer skips a parameter slot.** Pre-1.7.5 the `_SINGLE` case did `counter.count++` AFTER the inner compilation completed, leaving an unused index in the param namespace. With one inner condition (`$param1`), the next outer scalar landed on `$param3` instead of `$param2` — invisible to most queries but masking real collisions whenever a future compiler shared this counter. The extra increment is gone.
+- **`AND` / `OR` arrays capped at 256 entries.** Each entry costs a recursion frame, a parameter slot, and a Cypher AST node, so a 100k-entry array compiles to a 100k-clause `WHERE` body — a practical DoS vector if user input ever flows into a logical array. Throws `OGMError` on overrun. The cap also applies inside connection-where logical operators.
+- **`SelectionCompiler.parseCache` is now a real LRU.** Pre-1.7.5 the implementation was `if (size < 200) set(...)` — once saturated, every subsequent miss had to re-parse via `graphql.parse()` because nothing was ever inserted (and nothing was ever evicted to make room). Apps with high selection-set cardinality silently paid full parse cost on every request post-saturation. The new policy: on hit, `delete + set` (move to MRU); on full insert, evict the oldest entry (`Map.keys().next().value` — Maps preserve insertion order). Dedup with `Model._selectionCache` is deferred to Tier 4 / a future release.
+
+### Added
+
+- **Opt-in `strictWhere` mode.** `OGMConfig.features.strictWhere = true` makes the where compiler throw `OGMError` when a `where` clause references a field name not declared on the target type — surfacing typos at the call site instead of silently returning empty results. Default is `false` to preserve existing behaviour. Recommended for new codebases:
+  ```ts
+  new OGM({
+    typeDefs,
+    driver,
+    features: { strictWhere: true },
+  });
+  ```
+  With strict mode off (the default), `where: { naem: 'Alice' }` continues to compile to `n.\`naem\` = $param0` — safe (escaped via `assertSafeIdentifier`) but silent. With strict mode on, the same call throws `OGMError: Unknown field "naem" in where clause.`
+
+### Test coverage
+
+- `tests/where.compiler.spec.ts` — regressions for `_SINGLE` counter, `AND`/`OR` cap (above + at boundary), `strictWhere` on/off behaviour.
+- `tests/selection.compiler.spec.ts` — regressions for real LRU eviction, including the "touched entry survives" property.
+- 1350 → 1358 tests, all passing.
+
+### Out of scope (still deferred)
+
+- `Model._selectionCache` and `SelectionCompiler.parseCache` deduplication — Tier 4 work, needs the perf benchmark harness.
+- `generateTypes` emitter parallelisation — Tier 4, marginal win on schemas under 200 types.
+- Bundle-size reduction by moving the generator to a separate entry point — breaking change, separate discussion.
+- `escapeIdentifier` regex micro-optimisation — Tier 4 micro-opt territory.
+
 ## 1.7.4 (2026-05-05)
 
 > Tier 3 contract violations from the audit. Six fixes across mutations,

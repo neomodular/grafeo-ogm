@@ -934,6 +934,45 @@ describe('SelectionCompiler', () => {
         /Failed to parse selectionSet/,
       );
     });
+
+    // v1.7.5 — real LRU eviction. Pre-1.7.5 we simply stopped caching
+    // at saturation, so a high-cardinality workload silently lost the
+    // cache. Now we evict the oldest entry to make room.
+    it('evicts oldest entries when cache is full (real LRU)', () => {
+      const fresh = new SelectionCompiler(schema);
+      // Fill past the 200-entry cap with distinct selection-sets that
+      // remain valid GraphQL when wrapped by `parseSelectionSet`.
+      for (let i = 0; i < 205; i++) fresh.parseSelectionSet(`{ field${i} }`);
+
+      // Re-parsing the FIRST entry after saturation must succeed (would
+      // have hit the dead branch pre-1.7.5 too — what we really verify
+      // is that mid-range entries that DID survive show up as cached.
+      // We can't directly inspect the cache; instead, we re-parse a
+      // recent entry and verify the result is the same instance (cache
+      // hit returns the same array).
+      const first = fresh.parseSelectionSet('{ field204 }');
+      const second = fresh.parseSelectionSet('{ field204 }');
+      expect(first).toBe(second);
+    });
+
+    it('touches entries on hit so they survive eviction', () => {
+      const fresh = new SelectionCompiler(schema);
+      // Cap is 200. Insert survivor + 199 fillers = 200 entries (full).
+      const survivor = fresh.parseSelectionSet('{ aSurvivor }');
+      for (let i = 0; i < 199; i++) fresh.parseSelectionSet(`{ filler${i} }`);
+
+      // Touch the survivor — moves it to MRU position. After this,
+      // filler0 is the oldest and survivor is the youngest.
+      const touched = fresh.parseSelectionSet('{ aSurvivor }');
+      expect(touched).toBe(survivor);
+
+      // Add 10 more entries → triggers 10 evictions. Without touching,
+      // survivor would have been evicted as the oldest. Because we
+      // touched it, it survives — fillers get evicted instead.
+      for (let i = 0; i < 10; i++) fresh.parseSelectionSet(`{ extra${i} }`);
+      const stillCached = fresh.parseSelectionSet('{ aSurvivor }');
+      expect(stillCached).toBe(survivor);
+    });
   });
 
   describe('compile + parseSelectionSet integration', () => {

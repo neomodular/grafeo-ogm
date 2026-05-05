@@ -41,6 +41,17 @@ export interface WhereResult {
 const MAX_DEPTH = 10;
 
 /**
+ * Hard cap on the length of an `AND` / `OR` clause array. Prevents an
+ * attacker (or a buggy caller) from inducing pathological Cypher
+ * emission by passing thousands of nested clauses — every entry costs
+ * a recursion frame, a parameter slot, and a Cypher AST node, so
+ * unbounded arrays are a practical DoS vector. 256 is well above any
+ * legitimate use; if you need more, you almost certainly want a
+ * different filter shape (`_IN`, a relationship traversal, etc.).
+ */
+const MAX_LOGICAL_ARRAY_LENGTH = 256;
+
+/**
  * Declarative operator definition. Use `%f` for (possibly case-insensitive) field
  * reference, `%rf` for raw field reference, `%p` for (possibly case-insensitive)
  * parameter reference, and `%rp` for raw parameter reference.
@@ -109,6 +120,14 @@ type ConnectionSuffix = (typeof CONNECTION_SUFFIXES)[number];
 export interface WhereCompilerOptions {
   /** Set of operator suffixes to reject at runtime (e.g. `new Set(['_MATCHES'])`) */
   disabledOperators?: Set<OperatorSuffix>;
+  /**
+   * When `true`, the compiler throws `OGMError` if a `where` clause
+   * references a field name that is not declared on the target type.
+   * Default: `false` — preserves pre-1.7.5 behaviour where typo'd
+   * field names compiled to `n.<typo> = $param` and silently produced
+   * empty results. Opt in via `OGMConfig.features.strictWhere = true`.
+   */
+  strictWhere?: boolean;
 }
 
 /**
@@ -116,12 +135,14 @@ export interface WhereCompilerOptions {
  */
 export class WhereCompiler {
   private disabledOperators: Set<OperatorSuffix>;
+  private strictWhere: boolean;
 
   constructor(
     private schema: SchemaMetadata,
     options?: WhereCompilerOptions,
   ) {
     this.disabledOperators = options?.disabledOperators ?? new Set();
+    this.strictWhere = options?.strictWhere ?? false;
   }
 
   compile(
@@ -380,6 +401,12 @@ export class WhereCompiler {
       // Logical operators (check before null handling so NOT with null value is handled correctly)
       if (key === 'AND' || key === 'OR') {
         const items = value as Record<string, unknown>[];
+        if (items.length > MAX_LOGICAL_ARRAY_LENGTH)
+          throw new OGMError(
+            `${key} array length ${items.length} exceeds the maximum of ${MAX_LOGICAL_ARRAY_LENGTH}. ` +
+              `Restructure the predicate (e.g. use _IN for value lists, or split the query) instead of ` +
+              `passing a large logical array.`,
+          );
         const subResults = items.map((item) =>
           this.compileConditions(
             item,
@@ -729,6 +756,11 @@ export class WhereCompiler {
 
       if (key === 'AND' || key === 'OR') {
         const items = val as Record<string, unknown>[];
+        if (items.length > MAX_LOGICAL_ARRAY_LENGTH)
+          throw new OGMError(
+            `${key} array length ${items.length} exceeds the maximum of ${MAX_LOGICAL_ARRAY_LENGTH}. ` +
+              `Restructure the predicate instead of passing a large logical array inside a connection where.`,
+          );
         const subResults = items.map((item) =>
           this.compileConnectionWhereInput(
             item,
@@ -906,7 +938,12 @@ export class WhereCompiler {
               `Refactor the predicate to use _SOME + _NONE, or remove the @cypher reference.`,
           );
 
-        counter.count++;
+        // Pre-1.7.5 we incremented `counter.count` here a second time
+        // even though no new variable was bound — this branch already
+        // claimed `r${counter.count}` at the top of the function and
+        // bumped the counter once. The extra increment was dead and
+        // skipped a slot in the param/var namespace, masking real
+        // collisions if/when a future compiler shared this counter.
         return {
           cypher: `size([${relVar} IN [(${pattern}${whereClause} | ${relVar})] | ${relVar}]) = 1`,
           params: innerResult.params,
@@ -1074,6 +1111,22 @@ export class WhereCompiler {
     if (operator && this.disabledOperators.has(operator))
       throw new OGMError(
         `Operator "${operator}" is disabled. To enable it, set features.filters.String.MATCHES = true in your OGM config.`,
+      );
+
+    // Strict-mode opt-in: reject typo'd field names instead of compiling
+    // `n.<typo> = $param` against a non-existent property (which Neo4j
+    // evaluates to NULL and silently drops the row). Skipped when no
+    // `propsHolder` is available (the caller couldn't resolve the
+    // type — happens for synthetic/edge contexts).
+    if (
+      this.strictWhere &&
+      propsHolder !== undefined &&
+      !propsHolder.properties.has(fieldName)
+    )
+      throw new OGMError(
+        `Unknown field "${fieldName}" in where clause. ` +
+          `Field is not declared on the target type — check for typos. ` +
+          `(strictWhere is enabled via OGMConfig.features.strictWhere = true.)`,
       );
 
     const paramName = `param${counter.count}`;

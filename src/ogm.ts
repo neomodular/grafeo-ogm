@@ -47,7 +47,21 @@ export interface OGMConfig<
   typeDefs: string;
   driver: Driver;
   logger?: OGMLogger;
-  features?: { filters?: { String?: { MATCHES?: boolean } } };
+  features?: {
+    filters?: { String?: { MATCHES?: boolean } };
+    /**
+     * Reject `where` filters that reference a field name not declared
+     * on the target type. Default: `false` (preserves pre-1.7.5
+     * behaviour where typo'd field names compiled to
+     * `n.<typo> = $param` against a non-existent property → empty
+     * result silently). When `true`, the where compiler throws
+     * `OGMError` on the first unknown field, surfacing the bug at
+     * the call site instead of in the result. Recommended for new
+     * codebases; opt-in for existing ones to avoid breaking queries
+     * that happened to rely on the silent behaviour.
+     */
+    strictWhere?: boolean;
+  };
   /**
    * Map of typeName → policies. Validated against the schema at init.
    *
@@ -85,6 +99,7 @@ export class OGM<
     const whereOptions: WhereCompilerOptions = {};
     if (config.features?.filters?.String?.MATCHES === false)
       whereOptions.disabledOperators = new Set(['_MATCHES'] as const);
+    if (config.features?.strictWhere === true) whereOptions.strictWhere = true;
 
     const where = new WhereCompiler(this.schema, whereOptions);
     const selection = new SelectionCompiler(this.schema, where);

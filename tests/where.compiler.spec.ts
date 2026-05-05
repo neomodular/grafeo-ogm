@@ -1109,6 +1109,103 @@ describe('WhereCompiler', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // v1.7.5 Tier 5 cleanups
+  // ---------------------------------------------------------------------------
+  describe('v1.7.5 — Tier 5 cleanups', () => {
+    it('AND array longer than 256 entries throws (DoS guard)', () => {
+      const huge = Array.from({ length: 257 }, (_, i) => ({ id: `x${i}` }));
+      expect(() => compiler.compile({ AND: huge }, 'n', bookNode)).toThrow(
+        /AND array length 257 exceeds the maximum of 256/,
+      );
+    });
+
+    it('OR array at the boundary (256) is accepted', () => {
+      const maxArr = Array.from({ length: 256 }, (_, i) => ({ id: `x${i}` }));
+      expect(() =>
+        compiler.compile({ OR: maxArr }, 'n', bookNode),
+      ).not.toThrow();
+    });
+
+    it('strictWhere rejects unknown field names', () => {
+      // Build a fixture with known properties for this test
+      const userNode = makeNodeDef({
+        typeName: 'User',
+        properties: new Map([
+          [
+            'name',
+            {
+              name: 'name',
+              type: 'String',
+              required: false,
+              isArray: false,
+              isListItemRequired: false,
+              isGenerated: false,
+              isUnique: false,
+              isCypher: false,
+              directives: [],
+            },
+          ],
+        ]),
+      });
+      const strict = new WhereCompiler(schema, { strictWhere: true });
+      expect(() => strict.compile({ naem: 'Alice' }, 'n', userNode)).toThrow(
+        /Unknown field "naem"/,
+      );
+    });
+
+    it('strictWhere off (default) preserves silent compile', () => {
+      // Pre-1.7.5 behaviour: typo'd field still compiles. This test
+      // documents the default — the value is still safe-escaped via
+      // assertSafeIdentifier so there's no injection.
+      const result = compiler.compile({ naem: 'Alice' }, 'n', bookNode);
+      expect(result.cypher).toBe('n.`naem` = $param0');
+    });
+
+    it('strictWhere accepts known fields with operator suffixes', () => {
+      const userNode = makeNodeDef({
+        typeName: 'User',
+        properties: new Map([
+          [
+            'name',
+            {
+              name: 'name',
+              type: 'String',
+              required: false,
+              isArray: false,
+              isListItemRequired: false,
+              isGenerated: false,
+              isUnique: false,
+              isCypher: false,
+              directives: [],
+            },
+          ],
+        ]),
+      });
+      const strict = new WhereCompiler(schema, { strictWhere: true });
+      const result = strict.compile({ name_CONTAINS: 'abc' }, 'n', userNode);
+      expect(result.cypher).toBe('n.`name` CONTAINS $param0');
+    });
+
+    it('_SINGLE quantifier no longer double-increments the counter', () => {
+      // Pre-1.7.5 the _SINGLE branch did `counter.count++` AFTER inner
+      // compilation completed, leaving an unused slot in the param
+      // namespace. With one inner param ($param1) the next outer key
+      // would have landed on $param3 (skipping $param2). Now it lands
+      // on $param2 — no gap.
+      const result = compiler.compile(
+        { hasStatus_SINGLE: { name: 'Active' }, title: 'X' },
+        'n',
+        bookNode,
+      );
+      // Inner uses $param1 (status.name), outer title uses $param2 — no
+      // gap. Pre-1.7.5 title would have been on $param3.
+      expect(result.cypher).toContain('r0.`name` = $param1');
+      expect(result.cypher).toContain('n.`title` = $param2');
+      expect(result.cypher).not.toContain('$param3');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Case-insensitive mode
   // ---------------------------------------------------------------------------
   describe('case-insensitive mode', () => {

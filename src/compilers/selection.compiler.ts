@@ -58,10 +58,20 @@ export interface SelectionNode {
  */
 export class SelectionCompiler {
   private static readonly DEFAULT_MAX_DEPTH = 5;
+  /** Maximum number of distinct parsed selection sets retained. */
+  private static readonly PARSE_CACHE_MAX_ENTRIES = 200;
   /**
-   * Cache of parsed selection sets capped at 200 entries.
-   * No eviction — assumes bounded selection set variety (fixed set of
-   * selectionSet strings used across resolvers). Stops adding after 200.
+   * Real LRU cache of parsed selection sets, capped at
+   * `PARSE_CACHE_MAX_ENTRIES`. Pre-1.7.5 the implementation was
+   * `if (size < 200) set(...)` — once saturated, every miss had to
+   * re-parse via `graphql.parse()` because nothing was ever inserted
+   * (and nothing was ever evicted to make room). Apps with high
+   * selection-set cardinality silently paid full parse cost on every
+   * request post-saturation. The new policy: on hit, delete + re-set
+   * (so the entry moves to the most-recently-used end of the Map's
+   * insertion-order iteration); on miss, evict the oldest entry
+   * (`Map.keys().next().value` — Maps preserve insertion order) before
+   * inserting the new one.
    */
   private parseCache = new Map<string, SelectionNode[]>();
   private whereCompiler?: WhereCompiler;
@@ -247,7 +257,13 @@ export class SelectionCompiler {
    */
   parseSelectionSet(selectionSet: string): SelectionNode[] {
     const cached = this.parseCache.get(selectionSet);
-    if (cached) return cached;
+    if (cached) {
+      // Touch the entry to mark it most-recently-used. Map insertion
+      // order is the LRU iteration order we rely on for eviction.
+      this.parseCache.delete(selectionSet);
+      this.parseCache.set(selectionSet, cached);
+      return cached;
+    }
 
     const trimmed = selectionSet.trim();
     // Wrap in a dummy query so graphql parser can handle it
@@ -270,7 +286,15 @@ export class SelectionCompiler {
 
     const result = this.convertSelectionSet(dummyField.selectionSet);
 
-    if (this.parseCache.size < 200) this.parseCache.set(selectionSet, result);
+    // Real-LRU eviction: drop the oldest entry when the cache is full,
+    // then insert. Pre-1.7.5 we just stopped caching at saturation,
+    // forcing every subsequent miss to re-parse — a silent perf cliff
+    // for apps with high selection-set cardinality.
+    if (this.parseCache.size >= SelectionCompiler.PARSE_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.parseCache.keys().next().value;
+      if (oldestKey !== undefined) this.parseCache.delete(oldestKey);
+    }
+    this.parseCache.set(selectionSet, result);
 
     return result;
   }
