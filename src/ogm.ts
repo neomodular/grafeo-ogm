@@ -380,15 +380,9 @@ export class OGM<
   ): Model<T, any, any, any, any, any, any, any, any, any, any, any>;
   model(
     name: string,
-  ):
-    | Model<any, any, any, any, any, any, any, any, any, any, any, any>
-    | InterfaceModel<any, any, any> {
+  ): Model<any, any, any, any, any, any, any, any, any, any, any, any> {
     const existing = this.models.get(name);
     if (existing) return existing;
-
-    // Also check interface model cache
-    const existingInterface = this.interfaceModels.get(name);
-    if (existingInterface) return existingInterface as any;
 
     const nodeDef = this.schema.nodes.get(name);
     if (nodeDef) {
@@ -420,18 +414,28 @@ export class OGM<
       return model;
     }
 
-    // Fallback: check interfaces
+    // v1.8.3 fix — pre-1.8.3, when `name` matched an interface (not a
+    // node), this method silently returned an `InterfaceModel` cast to
+    // `any`. The TypeScript signature on `model<K>(name)` promised a
+    // `Model<T>` with full CRUD, but the runtime delivered an
+    // `InterfaceModel` whose mutation methods (create/update/delete/
+    // upsert/setLabels) throw at the prototype level. The first
+    // mutation call from typed code thus failed with
+    // `TypeError: this.create is not a function` — a confusing crash
+    // that pointed at the call site instead of the misnamed lookup.
+    //
+    // We now throw an OGMError immediately, naming both the mistake and
+    // the correct API. `interfaceModel(name)` was always the right
+    // entry point for read-only queries spanning all implementing types.
     const interfaceDef = this.schema.interfaces.get(name);
-    if (interfaceDef) {
-      const model = new InterfaceModel(
-        interfaceDef,
-        this.schema,
-        this.config.driver,
-        this.interfaceModelCompilers,
+    if (interfaceDef)
+      throw new OGMError(
+        `"${name}" is an interface, not a node type. Use ` +
+          `\`ogm.interfaceModel('${name}')\` instead. ` +
+          `model() returns Model<T> with full CRUD; interfaceModel() ` +
+          `returns InterfaceModel<T> with read-only queries that span ` +
+          `all implementing types.`,
       );
-      this.interfaceModels.set(name, model as InterfaceModel<unknown>);
-      return model as any;
-    }
 
     throw new OGMError(
       `Unknown type: ${name}. Not found in nodes or interfaces.`,

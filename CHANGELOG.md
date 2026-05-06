@@ -1,5 +1,74 @@
 # Changelog
 
+## 1.8.3 (2026-05-06)
+
+> **Bugfix.** `ogm.model('SomeInterface')` no longer silently returns an `InterfaceModel` — it now throws an `OGMError` immediately, naming the correct API. Pre-1.8.3 this returned an `InterfaceModel` cast to `any`, and the first mutation call (`.create()`, `.update()`, `.delete()`, `.upsert()`, `.setLabels()`) failed with `TypeError: this.create is not a function`.
+
+### What was broken
+
+```ts
+const personModel = ogm.model<Person>('Person');  // 'Person' is an interface
+//                                                    ↑ TypeScript: Model<Person>
+//                                                       Runtime: InterfaceModel
+personModel.create({...});  // 💥 TypeError: this.create is not a function
+```
+
+The TypeScript signature on `model<K>(name)` promises a `Model<T>` with full CRUD. Pre-1.8.3 the runtime cast an `InterfaceModel` to `any` and returned it whenever `name` matched an interface in the schema. Mutation methods on `InterfaceModel` don't exist (only read-only queries that span all implementing types), so the first mutation call crashed at the prototype level.
+
+The crash pointed at the call site (`personModel.create(...)`) instead of the misnamed lookup (`ogm.model('Person')`). Tests asserted the buggy behaviour as a feature.
+
+### What now happens
+
+```ts
+ogm.model('Person');
+// OGMError: "Person" is an interface, not a node type. Use
+// `ogm.interfaceModel('Person')` instead. model() returns Model<T>
+// with full CRUD; interfaceModel() returns InterfaceModel<T> with
+// read-only queries that span all implementing types.
+```
+
+The error fires at the lookup site, naming the mistake and the correct API.
+
+### Migration
+
+If you used the old fallthrough behaviour (which only "worked" for read-only operations), switch to `interfaceModel`:
+
+```ts
+// ❌ Pre-1.8.3 — type-lied, would crash on mutations
+const personModel = ogm.model<Person>('Person').find({});
+
+// ✅ Post-1.8.3 — explicit interface model, read-only by design
+const personModel = ogm.interfaceModel<Person>('Person').find({});
+```
+
+Both `model('Person')` and `interfaceModel('Person')` worked pre-1.8.3 for reads; only `model('Person').create(...)` was the trap. The bugfix surfaces the trap without removing any working code path.
+
+### Fixed
+
+- `src/ogm.ts:381-440` — `model()` now throws when `name` matches an interface (instead of silently returning an `InterfaceModel`). The interface-cache cross-lookup at the top of `model()` was also removed; `interfaceModel()` owns its cache.
+
+### Tests
+
+- Updated `tests/ogm.spec.ts` — replaced 3 tests that documented the old fallthrough as a feature with 3 new tests that pin the new throw contract.
+- Test count unchanged at **1370/1370**.
+
+### Compatibility
+
+Public API surface change. The TypeScript signature on `model()` was already a lie (returned `InterfaceModel` cast to `any`), so any caller actually using the returned object's mutation methods was already broken. The fix turns a confusing `TypeError: this.create is not a function` into a clear `OGMError` at the call site of `model()`.
+
+`interfaceModel()` was always the correct entry point for read-only queries spanning all implementing types — that contract is unchanged.
+
+### Rejected this cycle
+
+Two performance candidates from the post-v1.8.0 audit were measured and rejected for failing the `<2% regression` gate of Tier 4 discipline:
+
+- **Perf H1** — thread `paramsTarget` into `compilePolicyClause` (mirror of the v1.8.0 Fix C pattern). Showed +4% regression on nested AND/OR permissives across 2 runs. Snapshots: `bench/snapshots/rejected-H1-policy-paramsTarget.run{1,2}.json`.
+- **Perf H3** — `key.indexOf('_') === -1` fast path for the OPERATOR_SUFFIXES table walk. Showed -6.5% on `simple equality` but +2.8% regression on `deep logical AND/OR/NOT` across 4 runs. Snapshots: `bench/snapshots/rejected-H3-suffix-fastpath-run{1-4}.json`.
+
+The v1.8.0 audit's predicted gain of -8.7% on H1 was based on assuming the AND/OR/NOT recursion did NOT thread `paramsTarget` — but Fix C v1.8.0 already had. The marginal saving from threading the outer policy entry was inside noise. We keep the discipline.
+
+---
+
 ## 1.8.2 (2026-05-06) — 🚨 SECURITY ADVISORY
 
 > **CRITICAL — Permissive policies that ALL abstain at runtime now correctly DENY instead of silently allowing the entire result set. Upgrade immediately if you use Node-Level Security (NLS) Permissive policies with conditional `when()` callbacks or any `cypher.fragment` that may return an empty string.**

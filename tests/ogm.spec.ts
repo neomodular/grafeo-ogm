@@ -73,21 +73,41 @@ describe('OGM', () => {
       expect(bookModel).toBeInstanceOf(Model);
     });
 
-    it('should return an InterfaceModel when name matches an interface', () => {
-      const entityModel = ogm.model('Entity');
+    // v1.8.3 SOLID L/HIGH fix — pre-1.8.3, calling model() with an
+    // interface name silently returned an InterfaceModel cast to any,
+    // and the first mutation call on that object would TypeError at
+    // the prototype level (`this.create is not a function`). The fix
+    // throws an OGMError immediately, naming the correct API. These
+    // tests pin the new contract.
+    it('throws OGMError when name matches an interface (v1.8.3)', () => {
+      expect(() => ogm.model('Entity')).toThrow(
+        /"Entity" is an interface, not a node type/,
+      );
+      expect(() => ogm.model('Entity')).toThrow(
+        /Use `ogm\.interfaceModel\('Entity'\)` instead/,
+      );
+    });
+
+    it('error message explains the difference between model() and interfaceModel() (v1.8.3)', () => {
+      expect(() => ogm.model('Entity')).toThrow(/Model<T> with full CRUD/);
+      expect(() => ogm.model('Entity')).toThrow(
+        /InterfaceModel<T> with read-only queries/,
+      );
+    });
+
+    it('does NOT cache an InterfaceModel under model() lookup after the throw (v1.8.3)', () => {
+      // Pre-1.8.3 the buggy fallthrough wrote into the interfaceModels
+      // cache via model(); now interfaceModel() owns its cache, and
+      // model() does not touch it.
+      try {
+        ogm.model('Entity');
+      } catch {
+        // expected
+      }
+      // interfaceModel() should still build the InterfaceModel from
+      // scratch (no leaked cache entry from the failed model() call).
+      const entityModel = ogm.interfaceModel('Entity');
       expect(entityModel).toBeInstanceOf(InterfaceModel);
-    });
-
-    it('should cache interface model returned via model() fallback', () => {
-      const first = ogm.model('Entity');
-      const second = ogm.model('Entity');
-      expect(first).toBe(second);
-    });
-
-    it('should return same instance whether accessed via model() or interfaceModel()', () => {
-      const viaModel = ogm.model('Entity');
-      const viaInterface = ogm.interfaceModel('Entity');
-      expect(viaModel).toBe(viaInterface);
     });
 
     it('should throw for unknown type with descriptive message', async () => {
