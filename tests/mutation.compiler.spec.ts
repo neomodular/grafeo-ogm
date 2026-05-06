@@ -1132,6 +1132,141 @@ describe('MutationCompiler', () => {
       // — assert that bug shape never reappears.
       expect(result.cypher).not.toContain('`title_CONTAINS`');
     });
+
+    // v1.8.1 regression — backwards compat with @neo4j/graphql-ogm.
+    // Pre-1.8.1, nested update.<rel>.disconnect[].where with the
+    // connection shape `{ NOT: { node: {...} } }` (or AND/OR wrappers)
+    // was routed through `buildNodeWhereConditions` directly, which
+    // treated `node` as a property name. The compiler emitted broken
+    // Cypher like `WHERE target.\`node\` <> $param` — `node` is a Map
+    // literal, the comparison never matches, the DELETE is a no-op,
+    // `relationshipsDeleted: 0`. Now nested disconnect routes through
+    // `buildConnectionWhereConditions`, matching the top-level disconnect
+    // path and the @neo4j/graphql-ogm contract.
+    it('handles connection-shape NOT in nested update.<rel>.disconnect (v1.8.1)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [
+                {
+                  where: {
+                    NOT: {
+                      node: { id_IN: ['tier1', 'tier2'] },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      // Correct shape: WHERE NOT (...id IN ...)
+      expect(result.cypher).toContain(
+        'WHERE NOT (n_disc0.`id` IN $update_tiers_0_disc_0_NOT_id_IN)',
+      );
+      // Pre-1.8.1 broken shape MUST NOT reappear
+      expect(result.cypher).not.toContain('`node`');
+      expect(result.params).toMatchObject({
+        update_tiers_0_disc_0_NOT_id_IN: ['tier1', 'tier2'],
+      });
+    });
+
+    it('handles AND wrapper in nested update.<rel>.disconnect (v1.8.1)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [
+                {
+                  where: {
+                    AND: [
+                      { node: { id_IN: ['tier1'] } },
+                      { node: { name: 'archived' } },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toContain('IN $update_tiers_0_disc_0_AND0_id_IN');
+      expect(result.cypher).toContain(
+        'n_disc0.`name` = $update_tiers_0_disc_0_AND1_name',
+      );
+      expect(result.cypher).not.toContain('`node`');
+    });
+
+    it('handles OR wrapper in nested update.<rel>.disconnect (v1.8.1)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [
+                {
+                  where: {
+                    OR: [{ node: { id: 'tier1' } }, { node: { id: 'tier2' } }],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      // OR wraps each leg in parens
+      expect(result.cypher).toMatch(/WHERE \(\(.+\) OR \(.+\)\)/);
+      expect(result.cypher).not.toContain('`node`');
+    });
+
+    it('handles connection-shape NOT in nested update.<rel>.connect (v1.8.1)', () => {
+      // Mirror of disconnect bug — same broken path existed for nested connect.
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              connect: [
+                {
+                  where: {
+                    NOT: {
+                      node: { id: 'tier_blocklist' },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toContain(
+        'WHERE NOT (n_conn0.`id` = $update_tiers_0_conn0_NOT_id)',
+      );
+      expect(result.cypher).not.toContain('`node`');
+    });
   });
 
   describe('compileDelete', () => {

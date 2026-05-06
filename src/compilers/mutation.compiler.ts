@@ -1354,10 +1354,6 @@ export class MutationCompiler {
               lines.push(`OPTIONAL MATCH ${pattern}`);
               lines.push(`DELETE ${relVar}`);
             } else {
-              const nodeWhere = (whereSpec.node ?? whereSpec) as Record<
-                string,
-                unknown
-              >;
               const discTarget = `${sourceVar}_disc${varCounter}`;
               varCounter++;
 
@@ -1370,8 +1366,17 @@ export class MutationCompiler {
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
 
-              const conditions = this.buildNodeWhereConditions(
-                nodeWhere,
+              // Pre-1.8.1 this called `buildNodeWhereConditions` with
+              // `(whereSpec.node ?? whereSpec)`, which silently fell through
+              // for connection-shape inputs like `{ NOT: { node: {...} } }`,
+              // `{ AND: [...] }`, or `{ OR: [...] }` — producing broken
+              // Cypher (e.g. `target.\`node\` <> $param`). Now we route
+              // through the connection-aware compiler so connection-shape
+              // keys are handled identically to the top-level disconnect
+              // path (`buildDisconnects`). Restores backwards-compat with
+              // @neo4j/graphql-ogm's nested update.disconnect[].where shape.
+              const conditions = this.buildConnectionWhereConditions(
+                whereSpec,
                 discTarget,
                 `${itemPrefix}_disc_${di}`,
                 params,
@@ -1397,10 +1402,6 @@ export class MutationCompiler {
             const whereSpec = connectSpec.where as
               | Record<string, unknown>
               | undefined;
-            const nodeWhere = (whereSpec?.node ?? whereSpec ?? {}) as Record<
-              string,
-              unknown
-            >;
             const edgeInput = connectSpec.edge as
               | Record<string, unknown>
               | undefined;
@@ -1415,8 +1416,15 @@ export class MutationCompiler {
 
             lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
 
-            const conditions = this.buildNodeWhereConditions(
-              nodeWhere,
+            // Pre-1.8.1 this used `buildNodeWhereConditions` with
+            // `(whereSpec?.node ?? whereSpec ?? {})`, which broke on
+            // connection-shape inputs (NOT/AND/OR wrappers). Routing
+            // through `buildConnectionWhereConditions` makes nested
+            // connect handle the same shapes as nested disconnect and
+            // top-level paths. Empty/undefined `whereSpec` short-circuits
+            // to `[]` inside the helper, so the no-where case still works.
+            const conditions = this.buildConnectionWhereConditions(
+              whereSpec,
               connectVar,
               `${itemPrefix}_conn${ci}`,
               params,

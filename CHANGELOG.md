@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.8.1 (2026-05-06)
+
+> **Critical backwards-compatibility fix.** Nested `update.<rel>.disconnect[].where` and `update.<rel>.connect[].where` with connection-shape inputs (`{ NOT: { node: {...} } }`, `{ AND: [...] }`, `{ OR: [...] }`) compiled to broken Cypher. Anyone migrating from `@neo4j/graphql-ogm` using these wrapper shapes inside nested update operations was hit silently — `relationshipsDeleted: 0` with no error. **Upgrade immediately if you use nested `update.<rel>.disconnect` or `update.<rel>.connect` with `NOT` / `AND` / `OR` wrappers.**
+
+### What was broken
+
+For input like:
+
+```ts
+ogm.model('Edition').update({
+  where: { id: 'conc1' },
+  update: {
+    tiers: [
+      {
+        disconnect: [
+          { where: { NOT: { node: { id_IN: ['tier1', 'tier2'] } } } },
+        ],
+      },
+    ],
+  },
+});
+```
+
+Pre-1.8.1 emitted:
+
+```cypher
+OPTIONAL MATCH (n)<-[r:GRANTS_ACCESS_TO_CONCENTRATION]-(target:Tier)
+WHERE target.`node` <> $param   -- ❌ "node" treated as property name
+DELETE r                         -- ❌ never matches → no-op
+```
+
+`target.node` is a non-existent property; the `<>` comparison against a Map literal never matches; the `DELETE` is a no-op. Symptom: `relationshipsDeleted: 0` with no warning.
+
+1.8.1 emits the correct Cypher:
+
+```cypher
+OPTIONAL MATCH (n)<-[r_disc_tiers_0_0:`GRANTS_ACCESS_TO_CONCENTRATION`]-(n_disc0:`Tier`)
+WHERE NOT (n_disc0.`id` IN $update_tiers_0_disc_0_NOT_id_IN)
+DELETE r_disc_tiers_0_0
+```
+
+### Root cause
+
+Tier 1 (1.7.2) introduced `buildConnectionWhereConditions` to handle the connection-shape inputs (`node`, `NOT`, `AND`, `OR`, fallback to bare node fields) for top-level `disconnect`/`connect` and selection-set connection filters. The **nested** update path (`buildUpdateRelationships`, `mutation.compiler.ts:1331+`) was not migrated and still routed through `buildNodeWhereConditions(whereSpec.node ?? whereSpec, ...)` directly — which treats `NOT`/`AND`/`OR` as scalar property names with operator suffixes, producing the broken emit above.
+
+The same bug existed symmetrically on the nested `connect` path.
+
+### Fixed
+
+- `src/compilers/mutation.compiler.ts:1357-1379` — nested disconnect now routes through `buildConnectionWhereConditions`, identical to the top-level `buildDisconnects` path.
+- `src/compilers/mutation.compiler.ts:1400-1426` — nested connect routes through the same compiler. Mirror of the disconnect fix.
+
+### Tests
+
+Added 4 regression tests in `tests/mutation.compiler.spec.ts`:
+- Nested `disconnect.where: { NOT: { node: { id_IN } } }` (the user-reported case)
+- Nested `disconnect.where: { AND: [...] }`
+- Nested `disconnect.where: { OR: [...] }`
+- Nested `connect.where: { NOT: { node: {...} } }` (mirror)
+
+Test count: **1358 → 1362** (+4). All 1362 pass. No semantics change for callers using only `where: { node: {...} }` or bare node-field shapes.
+
+### Compatibility
+
+Purely additive fix. No public API change. No emitted-Cypher change for any input that was working in 1.8.0.
+
+---
+
 ## 1.8.0 (2026-05-05)
 
 > Performance release. Three Tier 4 hot-path fixes from the audit landed
