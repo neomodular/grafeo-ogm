@@ -350,11 +350,33 @@ export class WhereCompiler {
     }
 
     // At least one permissive matched. Compose `(perm) AND (rest)`.
+    //
+    // SECURITY FIX (v1.8.2 — CRITICAL): Pre-1.8.2 emitted `'true'` here
+    // when `permFrags.length === 0`, on the assumption that an empty
+    // permFrags meant "every permissive returned an empty partial,
+    // which is match-anything". That assumption was WRONG and silently
+    // inverted the deny default in three documented patterns:
+    //
+    //   permissive: [{ when: (ctx) => ctx.userId ? {...} : null }]
+    //                                              ^^^ abstain
+    //   permissive: [{ when: (ctx) => undefined }]
+    //   permissive: [{ cypher: { fragment: () => '', params: ... } }]
+    //
+    // In every case, `permFrags` ended up empty and the compiler emitted
+    // `WHERE true`, dumping unrestricted data. The bug survived TS
+    // checks, code review, and the v1.7.0 NLS audit because "abstain"
+    // and "match-anything" looked indistinguishable at this layer.
+    //
+    // Permissives are an ALLOW-LIST. If no rule fires, access is DENIED.
+    // The explicit "match-anything" path is preserved: when a developer
+    // writes `when: () => ({})`, line 257-259 still pushes `'true'` into
+    // permFrags before this check, so permFrags.length > 0 and we take
+    // the else branch. The migration path for users relying on the old
+    // abstain-as-allow behaviour is to write `when: () => ({})` instead
+    // of `when: () => null`.
     const permClause =
       permFrags.length === 0
-        ? // Permissives existed but every one returned an empty partial.
-          // Each empty partial is "match anything" — `true`.
-          'true'
+        ? 'false'
         : permFrags.length === 1
           ? permFrags[0]
           : `(${permFrags.join(' OR ')})`;

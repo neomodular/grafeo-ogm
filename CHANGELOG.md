@@ -1,5 +1,121 @@
 # Changelog
 
+## 1.8.2 (2026-05-06) — 🚨 SECURITY ADVISORY
+
+> **CRITICAL — Permissive policies that ALL abstain at runtime now correctly DENY instead of silently allowing the entire result set. Upgrade immediately if you use Node-Level Security (NLS) Permissive policies with conditional `when()` callbacks or any `cypher.fragment` that may return an empty string.**
+
+### Affected versions
+
+`1.7.0` through `1.8.1` (all NLS-enabled releases prior to 1.8.2).
+
+### Severity
+
+**CRITICAL** — silently inverts the deny default. Surfaced by an internal post-v1.8.0 security audit.
+
+### Impact
+
+When EVERY registered Permissive policy on a node abstained at runtime, the WHERE compiler emitted `WHERE true` and returned the **full table** to the caller. The pre-compile guard (`Model.assertNotDeniedAtCompile`) inspected `permissives.length`, not runtime contributions, so the bypass survived TS checks, code review, and the v1.7.0 NLS audit. The audit metadata also reported the request as policy-enforced.
+
+### Reproducer
+
+Three documented patterns triggered the bypass. The most natural — a conditional grant that abstains when ctx is missing the relevant field:
+
+```ts
+ogm.policies.register('Document', {
+  permissive: [{
+    operations: ['read'],
+    when: (ctx: { tenantId?: string }) =>
+      ctx.tenantId ? { tenantId: ctx.tenantId } : null, // ❌ abstain
+  }],
+});
+
+// Caller without tenantId in ctx (anonymous, misconfigured middleware, etc):
+await ogm.withContext({}).model('Document').find({});
+//   Pre-1.8.2: MATCH (n:Document) WHERE true RETURN n  → DUMP ALL TENANTS
+//   Post-1.8.2: MATCH (n:Document) WHERE false RETURN n → []
+```
+
+The other two patterns: `when: () => undefined`, and `cypher.fragment: () => ''` (the empty-fragment path is type-clean — `string` includes `''` — so it required no TS bypass).
+
+### Root cause
+
+`src/compilers/where.compiler.ts:353-360` emitted `permClause = 'true'` whenever `permFrags.length === 0`, on the assumption that an empty `permFrags` meant "every permissive returned an empty partial, which is match-anything." That conflated TWO distinct runtime states:
+
+1. `when()` returns `{}` (empty partial) — line 257-259 explicitly pushes `'true'` into `permFrags`. **Length is 1, not 0.** This is the documented "I want allow-all" escape hatch.
+2. `when()` returns `null`/`undefined` OR `cypher.fragment` returns `''` — the contribution is silently dropped. `permFrags` stays empty.
+
+The audit identified the conflation. Permissives are an ALLOW-LIST: if no rule grants access, access is DENIED. Empty `permFrags` is now `'false'`, not `'true'`.
+
+### Fix
+
+`src/compilers/where.compiler.ts:353-380` — single-line change with a long comment block:
+
+```diff
+   const permClause =
+     permFrags.length === 0
+-      ? 'true'   // pre-1.8.2: silently invert deny default
++      ? 'false'  // permissives are an allow-list; no rule fired = DENY
+       : permFrags.length === 1
+         ? permFrags[0]
+         : `(${permFrags.join(' OR ')})`;
+```
+
+The `permissives.length === 0` branch (line 346-350 — no permissives registered AT ALL) was already correct (`return 'false'`). This patch fixes the case where permissives WERE registered but all abstained.
+
+### Migration path
+
+If you genuinely need "this policy grants access to every row," use **explicit allow-all** by returning an empty partial:
+
+```ts
+// ❌ Pre-1.8.2 worked accidentally — abstain leaked to allow-all
+when: (ctx) => ctx.userId ? { ownerId: ctx.userId } : null
+
+// ✅ Explicit grant — return empty partial (match-anything)
+when: (ctx) => ctx.userId ? { ownerId: ctx.userId } : ({} as never)
+
+// ✅ Better — separate permissives, each with its own scope
+permissive: [
+  { operations: ['read'], when: (ctx) => ({ ownerId: ctx.userId }) },
+  { operations: ['read'], appliesWhen: (ctx) => ctx.role === 'admin', when: () => ({}) },
+]
+```
+
+### What this DOES NOT change
+
+- **No-policy queries** (typeName has zero registered policies) — byte-identical Cypher emit. The `permissives.length === 0` branch in `compilePolicyClause` is unchanged.
+- **Successful permissive grants** — when at least one permissive returns a non-empty partial OR a non-empty `cypher.fragment`, behaviour is identical.
+- **Restrictive policies** — same code, same behaviour. (The audit identified a related MEDIUM finding on write-restrictive null-as-allow which is queued for a follow-up release; the patch here only addresses the CRITICAL permissive path.)
+- **Empty-partial allow-all escape hatch** — `when: () => ({})` still pushes `'true'` and emits `WHERE true`. The migration path leaves this preserved.
+
+### Tests
+
+Added `tests/policy/permissive-abstain-default-deny.spec.ts` with 8 regression tests covering:
+
+- Single permissive `when()` returns `null` / `undefined` / via `cypher.fragment: () => ''`
+- Multiple permissives all abstaining
+- Mixed: one permissive grants, others abstain (the granting one wins as before)
+- Empty partial `when: () => ({})` still emits `WHERE true` (migration path)
+- Conditional `when()` with both grant and abstain branches
+- Abstaining permissive + restrictive — the absence of a granting permissive denies even if the restrictive returns `{}`
+
+Test count: **1362 → 1370** (+8). All 1370 pass.
+
+### Other findings from the same audit (NOT in this patch)
+
+The post-v1.8.0 security audit also surfaced:
+
+- **HIGH** — write-restrictive `when()` returning `null` treated as allow (write-side, separate code path)
+- **MEDIUM** — shallow `Object.freeze` on ctx (defense-in-depth)
+- **LOW** — `assertSafeKey` not called from mutation compiler (consistency gap)
+
+These are queued for v1.9.0 — none have an exploit path comparable to the CRITICAL fixed here.
+
+### Acknowledgement
+
+Discovered by an internal multi-agent code audit run on the v1.8.0 release. Reported, scoped, fixed, tested, and shipped within hours of the audit completing.
+
+---
+
 ## 1.8.1 (2026-05-06)
 
 > **Critical backwards-compatibility fix.** Nested `update.<rel>.disconnect[].where` and `update.<rel>.connect[].where` with connection-shape inputs (`{ NOT: { node: {...} } }`, `{ AND: [...] }`, `{ OR: [...] }`) compiled to broken Cypher. Anyone migrating from `@neo4j/graphql-ogm` using these wrapper shapes inside nested update operations was hit silently — `relationshipsDeleted: 0` with no error. **Upgrade immediately if you use nested `update.<rel>.disconnect` or `update.<rel>.connect` with `NOT` / `AND` / `OR` wrappers.**
