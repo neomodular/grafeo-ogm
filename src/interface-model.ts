@@ -385,11 +385,38 @@ export class InterfaceModel<
     // WHERE — user where compiled against the interface's synthetic
     // NodeDefinition (interface props only). Policy is composed via
     // the CASE-per-label clause that AND's interface + implementer.
+    //
+    // v1.8.5 — When the user's where contains relationship traversals
+    // (`_SOME` / `_NONE` / `_ALL` / `_SINGLE` / `*Connection { node: {...} }`),
+    // the WhereCompiler needs `resolveForType` access so the TARGET type's
+    // `'read'` policy AND-stitches into the EXISTS body. The interface-
+    // level CASE clause already handles SOURCE-side enforcement; this
+    // synthetic bundle is marked `overridden: true` so the WhereCompiler
+    // does NOT re-apply a top-level policy clause for the synthetic source
+    // (which would default-deny because `permissives: []`), while keeping
+    // `resolveForType` reachable for crossed-boundary recursions inside
+    // `tryCompileRelationship` / `tryCompileConnection` /
+    // `compileUnionRelationship`.
+    const whereInputBundle: PolicyContextBundle | undefined = policyContext
+      ? {
+          ctx: policyContext.ctx,
+          operation: 'read',
+          resolved: {
+            overridden: true,
+            permissives: [],
+            restrictives: [],
+            evaluated: [],
+          },
+          defaults: policyContext.defaults,
+          resolveForType: policyContext.resolveForType,
+        }
+      : undefined;
     const whereResult = this.whereCompiler.compile(
       params?.where as WhereInput | undefined,
       'n',
       syntheticNodeDef,
       paramCounter,
+      whereInputBundle ? { policyContext: whereInputBundle } : undefined,
     );
     if (whereResult.preludes && whereResult.preludes.length > 0)
       cypherParts.push(...whereResult.preludes);
@@ -535,11 +562,30 @@ export class InterfaceModel<
     cypherParts.push(`MATCH (n:${labels.join(':')})`);
 
     const syntheticNodeDef = this.syntheticNodeDef;
+    // v1.8.5 — see corresponding comment in `find()`. Synthetic bundle
+    // with `overridden: true` keeps `resolveForType` reachable for
+    // user-where relationship traversals while the interface-level
+    // CASE clause handles source-side enforcement.
+    const whereInputBundle: PolicyContextBundle | undefined = policyContext
+      ? {
+          ctx: policyContext.ctx,
+          operation: 'read',
+          resolved: {
+            overridden: true,
+            permissives: [],
+            restrictives: [],
+            evaluated: [],
+          },
+          defaults: policyContext.defaults,
+          resolveForType: policyContext.resolveForType,
+        }
+      : undefined;
     const whereResult = this.whereCompiler.compile(
       params.where as WhereInput | undefined,
       'n',
       syntheticNodeDef,
       paramCounter,
+      whereInputBundle ? { policyContext: whereInputBundle } : undefined,
     );
     if (whereResult.preludes && whereResult.preludes.length > 0)
       cypherParts.push(...whereResult.preludes);

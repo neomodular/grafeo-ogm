@@ -188,7 +188,16 @@ export class WhereCompiler {
       '__where',
     );
     const userBody = hasUserWhere
-      ? this.compileConditions(where, nodeVar, nodeDef, paramCounter, 0, scope)
+      ? this.compileConditions(
+          where,
+          nodeVar,
+          nodeDef,
+          paramCounter,
+          0,
+          scope,
+          undefined,
+          policyContext,
+        )
       : { cypher: '', params: {} as Record<string, unknown> };
 
     let cypher = userBody.cypher;
@@ -396,6 +405,36 @@ export class WhereCompiler {
       : `(${permClause} AND ${restClause})`;
   }
 
+  /**
+   * Build a `PolicyContextBundle` for a target type when crossing a
+   * node-type boundary inside a relationship traversal (`_SOME` /
+   * `_NONE` / `_ALL` / `_SINGLE` / connection-where `node`). Mirrors the
+   * canonical pattern at `selection.compiler.ts:826-847`.
+   *
+   * Returns `undefined` when:
+   *   - the input `policyContext` is `undefined` (caller has no policy state), OR
+   *   - `resolveForType(typeName, 'read')` returns `null` (no policy
+   *     registered for the target type).
+   *
+   * The synthesized bundle reuses the same `resolveForType` so further
+   * nesting (target → target's relationship → ...) keeps cascading.
+   */
+  private buildTargetBundle(
+    typeName: string,
+    policyContext: PolicyContextBundle | undefined,
+  ): PolicyContextBundle | undefined {
+    if (!policyContext) return undefined;
+    const targetPolicy = policyContext.resolveForType(typeName, 'read');
+    if (!targetPolicy) return undefined;
+    return {
+      ctx: policyContext.ctx,
+      operation: 'read',
+      resolved: targetPolicy,
+      resolveForType: policyContext.resolveForType,
+      defaults: policyContext.defaults,
+    };
+  }
+
   private compileConditions(
     where: Record<string, unknown>,
     nodeVar: string,
@@ -414,6 +453,17 @@ export class WhereCompiler {
      * keep the old contract (no arg → fresh Map allocated locally).
      */
     paramsTarget?: Record<string, unknown>,
+    /**
+     * Policy context to thread through relationship / connection
+     * recursions so target-type `'read'` policies AND-stitch into the
+     * EXISTS body when crossing a node-type boundary. NOT used for
+     * leaf scalar predicates or for AND/OR/NOT logical recursions
+     * within the same node-type scope (those simply forward through).
+     *
+     * v1.8.5 — fixes CRIT-3 (target-policy bypass via `_SOME`/`_NONE`/
+     * `_ALL`/`_SINGLE` and `Connection_*` user-where filters).
+     */
+    policyContext?: PolicyContextBundle,
   ): WhereResult {
     if (depth > MAX_DEPTH)
       throw new OGMError(
@@ -457,6 +507,7 @@ export class WhereCompiler {
             depth + 1,
             scope,
             params,
+            policyContext,
           );
           if (sub.cypher) subClauses.push(sub.cypher);
         }
@@ -481,6 +532,7 @@ export class WhereCompiler {
           depth + 1,
           scope,
           params,
+          policyContext,
         );
         if (sub.cypher) clauses.push(`NOT (${sub.cypher})`);
         continue;
@@ -527,6 +579,7 @@ export class WhereCompiler {
         nodeDef,
         counter,
         depth,
+        policyContext,
       );
       if (connResult) {
         clauses.push(connResult.cypher);
@@ -542,6 +595,7 @@ export class WhereCompiler {
         nodeDef,
         counter,
         depth,
+        policyContext,
       );
       if (relResult) {
         clauses.push(relResult.cypher);
@@ -610,6 +664,14 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     depth: number,
+    /**
+     * Policy context for target-type enforcement inside the connection's
+     * `node` filter. v1.8.5 — fixes CRIT-3: the target type's `'read'`
+     * policy MUST AND-stitch into the EXISTS body when crossing a node-
+     * type boundary via a connection-where filter. Edges have no NLS by
+     * design, so this never threads into `compileEdgeConditions`.
+     */
+    policyContext?: PolicyContextBundle,
   ): WhereResult | null {
     let connSuffix: ConnectionSuffix | null = null;
     let fieldName = '';
@@ -671,15 +733,24 @@ export class WhereCompiler {
       edgeScope,
       counter,
       depth,
+      policyContext,
     );
     const innerClauses = inner.cypher ? [inner.cypher] : [];
     const innerParams = inner.params;
 
     // Stitch the inner preludes (CALL { ... } + WITH ...) INSIDE the
     // EXISTS body, between the MATCH pattern and the inner WHERE.
+    //   - `nodeScope.emit()` — preludes from `@cypher` fields registered
+    //     directly on the connection-where input's edge-side scope.
+    //   - `edgeScope.emit()` — same, but edge-side.
+    //   - `inner.preludes` (v1.8.5) — preludes returned by the recursive
+    //     `compile()` calls on the node side, which now own their own
+    //     scopes.
     const innerPreludes: string[] = [];
     if (nodeScope.hasAny()) innerPreludes.push(...nodeScope.emit());
     if (edgeScope.hasAny()) innerPreludes.push(...edgeScope.emit());
+    if (inner.preludes && inner.preludes.length > 0)
+      innerPreludes.push(...inner.preludes);
     const preludeFragment = innerPreludes.length
       ? ` ${innerPreludes.join(' ')}`
       : '';
@@ -746,22 +817,54 @@ export class WhereCompiler {
     edgeScope: CypherFieldScope,
     counter: { count: number },
     depth: number,
+    /**
+     * Policy context to thread into target-side `node` / `node_NOT`
+     * filters AND through nested AND/OR/NOT logical groups. Edge-side
+     * compilation never receives this — edges have no NLS by design.
+     * v1.8.5 — fixes CRIT-3.
+     */
+    policyContext?: PolicyContextBundle,
   ): WhereResult {
     const innerClauses: string[] = [];
     const innerParams: Record<string, unknown> = {};
+    /**
+     * Preludes returned by recursive `compile()` calls on the node side.
+     * Pre-1.8.5 the node-side scope was shared via `nodeScope`; now the
+     * inner `compile()` owns its own scope and we hoist its preludes back
+     * out so the caller (`tryCompileConnection`) can stitch them between
+     * `MATCH ${pattern}` and `WHERE ...` inside the EXISTS body.
+     */
+    const extraPreludes: string[] = [];
+
+    // Resolve the target type's `'read'` policy ONCE per connection-where
+    // input. The same bundle is reused across every `node` / `node_NOT`
+    // key we encounter at this level (and across nested AND/OR/NOT
+    // groups via direct policyContext threading).
+    const targetBundle = this.buildTargetBundle(
+      targetNodeDef.typeName,
+      policyContext,
+    );
 
     for (const [key, val] of Object.entries(value)) {
       if (val === undefined) continue;
 
       if (key === 'node' || key === 'node_NOT') {
-        const nodeResult = this.compileConditions(
+        // Re-enter the top-level `compile()` so that the target type's
+        // `'read'` policy AND-stitches into the same body that the user
+        // filter produces. `compile()` manages its own inner scope and
+        // returns any preludes via `WhereResult.preludes`; we hoist
+        // those into `extraPreludes` so the surrounding `tryCompileConnection`
+        // can stitch them inside the EXISTS body alongside the existing
+        // `nodeScope.emit()` content.
+        const nodeResult = this.compile(
           val as Record<string, unknown>,
           relVar,
           targetNodeDef,
           counter,
-          depth + 1,
-          nodeScope,
+          targetBundle ? { policyContext: targetBundle } : undefined,
         );
+        if (nodeResult.preludes && nodeResult.preludes.length > 0)
+          extraPreludes.push(...nodeResult.preludes);
         if (nodeResult.cypher) {
           innerClauses.push(
             key === 'node_NOT'
@@ -799,6 +902,8 @@ export class WhereCompiler {
             `${key} array length ${items.length} exceeds the maximum of ${MAX_LOGICAL_ARRAY_LENGTH}. ` +
               `Restructure the predicate instead of passing a large logical array inside a connection where.`,
           );
+        // Thread `policyContext` through so deeply-nested connection-
+        // where keeps target-policy enforcement.
         const subResults = items.map((item) =>
           this.compileConnectionWhereInput(
             item,
@@ -810,12 +915,17 @@ export class WhereCompiler {
             edgeScope,
             counter,
             depth + 1,
+            policyContext,
           ),
         );
         const subClauses = subResults.map((r) => r.cypher).filter(Boolean);
         if (subClauses.length > 0) {
           innerClauses.push(`(${subClauses.join(` ${key} `)})`);
-          for (const r of subResults) mergeParams(innerParams, r.params);
+          for (const r of subResults) {
+            mergeParams(innerParams, r.params);
+            if (r.preludes && r.preludes.length > 0)
+              extraPreludes.push(...r.preludes);
+          }
         }
         continue;
       }
@@ -835,11 +945,14 @@ export class WhereCompiler {
           edgeScope,
           counter,
           depth + 1,
+          policyContext,
         );
         if (sub.cypher) {
           innerClauses.push(`NOT (${sub.cypher})`);
           mergeParams(innerParams, sub.params);
         }
+        if (sub.preludes && sub.preludes.length > 0)
+          extraPreludes.push(...sub.preludes);
         continue;
       }
 
@@ -847,10 +960,12 @@ export class WhereCompiler {
       // future codegen additions.
     }
 
-    return {
+    const result: WhereResult = {
       cypher: innerClauses.join(' AND '),
       params: innerParams,
     };
+    if (extraPreludes.length > 0) result.preludes = extraPreludes;
+    return result;
   }
 
   private tryCompileRelationship(
@@ -860,6 +975,12 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     depth: number,
+    /**
+     * Policy context to thread into the target type when crossing the
+     * relationship boundary. v1.8.5 — fixes CRIT-3 (target-policy bypass
+     * via `_SOME`/`_NONE`/`_ALL`/`_SINGLE` user-where filters).
+     */
+    policyContext?: PolicyContextBundle,
   ): WhereResult | null {
     let suffix: RelationshipSuffix | null = null;
     let fieldName = key;
@@ -898,6 +1019,7 @@ export class WhereCompiler {
         relDef,
         counter,
         depth,
+        policyContext,
       );
 
     const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
@@ -921,20 +1043,30 @@ export class WhereCompiler {
       schema: this.schema,
     });
 
-    // Inner scope for any `@cypher` fields referenced inside the inner
-    // WHERE — preludes are stitched into the EXISTS body.
-    const innerScope = new CypherFieldScope(relVar, [], '__where');
-    const innerResult = this.compileConditions(
+    // v1.8.5 — re-resolve the TARGET type's `'read'` policy when crossing
+    // the relationship boundary, mirroring `selection.compiler.ts:826-847`.
+    // Pre-1.8.5 this call site invoked `compileConditions` directly,
+    // skipping policy AND-stitching for the target — CRIT-3.
+    const targetBundle = this.buildTargetBundle(
+      targetNodeDef.typeName,
+      policyContext,
+    );
+
+    // Re-enter the top-level `compile()` so the target's policy clause
+    // (when present) AND-stitches into the same body that the user filter
+    // produces. `compile()` manages its own inner scope and returns any
+    // preludes via `WhereResult.preludes` for stitching inside EXISTS.
+    const innerResult = this.compile(
       value,
       relVar,
       targetNodeDef,
       counter,
-      depth + 1,
-      innerScope,
+      targetBundle ? { policyContext: targetBundle } : undefined,
     );
 
-    const innerPreludeFragment = innerScope.hasAny()
-      ? ` ${innerScope.emit().join(' ')}`
+    const innerPreludes = innerResult.preludes ?? [];
+    const innerPreludeFragment = innerPreludes.length
+      ? ` ${innerPreludes.join(' ')}`
       : '';
 
     const whereClause = innerResult.cypher
@@ -970,11 +1102,21 @@ export class WhereCompiler {
       case '_SINGLE': {
         // Exactly one relationship satisfies. Pattern comprehensions cannot
         // contain CALL { ... } subqueries, so reject `@cypher` fields here.
-        if (innerScope.hasAny())
+        // v1.8.5: a `@cypher`-projecting policy on the TARGET type also
+        // produces preludes — distinguish that case so the error message
+        // points at the right cause.
+        if (innerPreludes.length > 0) {
+          if (targetBundle)
+            throw new OGMError(
+              `Policy on "${targetNodeDef.typeName}" requires @cypher field projection, ` +
+                `which is not supported inside _SINGLE quantifiers. Refactor the policy ` +
+                `to use stored properties, or refactor the predicate to _SOME + _NONE.`,
+            );
           throw new OGMError(
             `_SINGLE quantifiers do not support filtering by @cypher fields. ` +
               `Refactor the predicate to use _SOME + _NONE, or remove the @cypher reference.`,
           );
+        }
 
         // Pre-1.7.5 we incremented `counter.count` here a second time
         // even though no new variable was bound — this branch already
@@ -1005,10 +1147,21 @@ export class WhereCompiler {
     relDef: RelationshipDefinition,
     counter: { count: number },
     depth: number,
+    /**
+     * Policy context to thread per-member: each union member receives its
+     * OWN target-bundle resolved via `policyContext.resolveForType(memberKey,
+     * 'read')`. Members without a registered policy compile as before (no
+     * extra clause). v1.8.5 — fixes CRIT-3 in the union path.
+     */
+    policyContext?: PolicyContextBundle,
   ): WhereResult | null {
     const unionMembers = this.schema.unions!.get(relDef.target)!;
     const memberClauses: string[] = [];
     const allParams: Record<string, unknown> = {};
+
+    // depth-only suppression for unused-when-no-policy lint passes; keep
+    // for symmetry with `tryCompileRelationship`.
+    void depth;
 
     for (const [memberKey, memberValue] of Object.entries(value)) {
       if (!unionMembers.includes(memberKey))
@@ -1030,26 +1183,36 @@ export class WhereCompiler {
         targetLabelRaw: labelStr,
       });
 
-      // Compile inner WHERE conditions for this member (if any properties specified)
+      // Per-member target bundle. `null` member-policy → undefined bundle
+      // → no policy stitching for this branch (original behavior).
+      const targetBundle = this.buildTargetBundle(
+        memberDef.typeName,
+        policyContext,
+      );
+
+      // Compile inner WHERE conditions for this member (if any properties
+      // specified). When the member has its own `'read'` policy, we still
+      // re-enter `compile()` so the policy AND-stitches into the EXISTS
+      // body even when `memberValue` is empty/null.
       const memberWhere = memberValue as Record<string, unknown> | null;
+      const hasUserMemberWhere =
+        memberWhere && Object.keys(memberWhere).length > 0;
       let whereClause = '';
       let preludeFragment = '';
-      if (memberWhere && Object.keys(memberWhere).length > 0) {
-        const innerScope = new CypherFieldScope(relVar, [], '__where');
-        const innerResult = this.compileConditions(
-          memberWhere,
+      if (hasUserMemberWhere || targetBundle) {
+        const memberCompile = this.compile(
+          hasUserMemberWhere ? memberWhere : undefined,
           relVar,
           memberDef,
           counter,
-          depth + 1,
-          innerScope,
+          targetBundle ? { policyContext: targetBundle } : undefined,
         );
-        if (innerResult.cypher) {
-          whereClause = ` WHERE ${innerResult.cypher}`;
-          mergeParams(allParams, innerResult.params);
+        if (memberCompile.cypher) {
+          whereClause = ` WHERE ${memberCompile.cypher}`;
+          mergeParams(allParams, memberCompile.params);
         }
-        if (innerScope.hasAny())
-          preludeFragment = ` ${innerScope.emit().join(' ')}`;
+        if (memberCompile.preludes && memberCompile.preludes.length > 0)
+          preludeFragment = ` ${memberCompile.preludes.join(' ')}`;
       }
 
       memberClauses.push(

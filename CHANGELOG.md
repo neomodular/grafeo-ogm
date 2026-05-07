@@ -1,5 +1,132 @@
 # Changelog
 
+## 1.8.5 (2026-05-07) — 🚨 SECURITY ADVISORY
+
+> **CRITICAL.** When a query traversed a relationship in a WHERE filter (`_SOME` / `_NONE` / `_ALL` / `_SINGLE` / `*Connection*` / union-typed relationships), the target type's NLS `'read'` policy was NOT applied inside the `EXISTS` body. A kill-switched org with a leaked target-type ID could use `where: { contentRel_SOME: { id: 'leakedId' } }` as a confirmation oracle / IDOR vector — even when its source-type policy correctly denied direct reads of the target type. **Upgrade immediately if you use NLS policies on target types reachable via relationship filters.**
+
+### Affected versions
+
+`1.7.0` through `1.8.4` (all NLS-enabled releases prior to 1.8.5).
+
+### Severity
+
+**CRITICAL** — survived the v1.7.0 NLS audit, the v1.8.0 perf audit, and the v1.8.2 default-deny security fix. Identified by external reviewers running mutation-style analysis on a downstream service.
+
+### Impact
+
+`WhereCompiler.tryCompileRelationship`, `compileUnionRelationship`, and `tryCompileConnection`/`compileConnectionWhereInput` recursed into target types via `compileConditions(...)` directly — there was no path for the target's `'read'` policy to AND-stitch into the EXISTS body. `SelectionCompiler.compileNestedWhere` already had the correct pattern (re-resolve `targetPolicy` via `policyContext.resolveForType(targetTypeName, 'read')` and inject a synthesized bundle); WhereCompiler did not.
+
+`InterfaceModel.find()` and `aggregate()` had a related gap — they never passed `policyContext` to `whereCompiler.compile()` at all, so even with the source-side fix, user-where relationship traversals on interface entry points still bypassed target-side policy.
+
+### Reproducer
+
+```ts
+// User has a permissive NLS policy that grants 'read' iff !ctx.killed.
+ogm.policies.register('Content', {
+  permissive: [{
+    operations: ['read'],
+    appliesWhen: (ctx) => !ctx.killed,
+    when: () => ({}),
+  }],
+});
+
+// Attacker's ctx has killed = true. Direct reads correctly return [].
+await ogm.withContext({ killed: true })
+  .model('Content')
+  .findUnique({ where: { id: 'leaked' } });
+//   Pre/Post-1.8.5: WHERE false → []  ✅
+
+// Pre-1.8.5 IDOR: traverse via a relationship.
+await ogm.withContext({ killed: true, userId: 'attacker' })
+  .model('User')
+  .find({ where: { contentRel_SOME: { id: 'leaked' } } });
+//   Pre-1.8.5 cypher:
+//     MATCH (n:User)
+//     WHERE EXISTS { MATCH (n)-[:HAS_CONTENT]->(r0:Content) WHERE r0.id = $param0 }
+//     RETURN n
+//   The User-side policy fires, but Content's appliesWhen never runs.
+//   If the attacker has any User row at all (own profile), the EXISTS
+//   acts as a confirmation oracle: row exists ↔ leaked Content ID
+//   exists in the graph + linked to the attacker's user.
+//
+// Post-1.8.5 cypher:
+//     MATCH (n:User)
+//     WHERE EXISTS { MATCH (n)-[:HAS_CONTENT]->(r0:Content)
+//                    WHERE (r0.id = $param0) AND false }
+//     RETURN n
+//   Content's appliesWhen runs → permissives.length > 0 but all abstain
+//   → permClause = 'false' → EXISTS can never match → IDOR closed.
+```
+
+### Root cause
+
+`WhereCompiler.tryCompileRelationship` (line 856 pre-fix) and the union/connection variants recursed via:
+
+```ts
+const innerResult = this.compileConditions(value, relVar, targetNodeDef, ...);
+// ❌ No policyContext threaded — target policy never AND-stitched
+```
+
+The correct pattern, already present in `SelectionCompiler.compileNestedWhere` (selection.compiler.ts:826-847), is:
+
+```ts
+const targetPolicy = policyContext?.resolveForType(targetDef.typeName, 'read');
+const targetBundle = targetPolicy ? { ctx, operation: 'read', resolved: targetPolicy, ... } : undefined;
+const compiled = this.whereCompiler.compile(value, childVar, targetDef, ..., { policyContext: targetBundle });
+// ✅ result.cypher = (user filter) AND (target policy) AND-stitched
+```
+
+The fix mirrors this pattern at every WHERE-side relationship-traversal entry point.
+
+### Fix
+
+5 surfaces closed:
+
+- `src/compilers/where.compiler.ts` — `tryCompileRelationship` (`_SOME` / `_NONE` / `_NOT` / `_ALL` / `_SINGLE` quantifiers + bare-relationship shorthand): now builds `targetBundle = buildTargetBundle(targetNodeDef.typeName, policyContext)` and re-enters `this.compile()` with the bundle. Inner result already AND-stitches user + policy; the EXISTS template substitutes it.
+- `src/compilers/where.compiler.ts` — `compileUnionRelationship`: same pattern per union member, so each branch enforces ITS OWN target policy (not the union's).
+- `src/compilers/where.compiler.ts` — `tryCompileConnection` / `compileConnectionWhereInput`: `node` and `node_NOT` keys now route through `this.compile()` with target bundle. Recursive `AND` / `OR` / `NOT` paths inside connection-where propagate `policyContext` for any nested node-keys to pick up.
+- `src/compilers/where.compiler.ts` — `_SINGLE` quantifier: distinguishes user-`@cypher` vs policy-`@cypher` errors so authors get a precise message naming the target type when the policy is the blocker.
+- `src/interface-model.ts` — `find()` and `aggregate()` now pass a synthetic `PolicyContextBundle` with `resolved.overridden: true` (no top-level policy clause emit, since CASE-per-label already enforces source-side policy) and live `resolveForType` (so user-where relationship traversals enforce target-side policy via the new WhereCompiler logic).
+
+### What this DOES NOT change
+
+- **No-policy queries** — when no `policyContext` is present, the relationship-traversal code paths short-circuit identically to pre-1.8.5. Byte-identical Cypher emission, byte-identical params, zero overhead.
+- **Source-side policy** — the v1.7.0+ AND-stitch of source-type policy at the top-level `WHERE` is unchanged. `compilePolicyClause` is untouched.
+- **Edge WHERE** — relationship-properties types are NOT registered in the policy registry by design. No NLS on edges. `compileEdgeConditions` is unchanged.
+- **`null` relationship → `NOT EXISTS`** — graph-shape only (no row leakage). Documented as out-of-scope; no change.
+- **Policy-on-policy recursion** — when a policy's own `when()` partial uses `_SOME`, the recursive `compileConditions` calls inside `compilePolicyClause` deliberately do NOT thread `policyContext`. Adding this would create infinite-regress risk requiring cycle detection. Documented as deferred to v1.9.0.
+
+### Tests
+
+New file `tests/policy/where-relationship-traversal.spec.ts` — 7 regression tests using a real `WhereCompiler` instance and a real `PolicyContextBundle` with a real `resolveForType` callback. NO mocks of the WhereCompiler or OGM.
+
+Cases covered:
+1. `_SOME` + permissive on target → asserts target permissive predicate inside EXISTS body
+2. `_NONE` + restrictive on target → asserts restrictive AND-stitched inside `NOT EXISTS { ... }`
+3. `_ALL` + default-deny → asserts target unreachable
+4. `*Connection { node: {...} }` + permissive on target → asserts connection EXISTS body has policy
+5. Union relationship `_SOME: { Image: {...} }` + per-member permissive → policy in `Image` branch only
+6. `_SINGLE` + permissive (stored properties only) → works
+7. `_SINGLE` + policy with `@cypher` field → throws with target-type-named error
+
+Test count: **1381 → 1388** (+7). All 1388 pass.
+
+**Zero existing tests required modification.** The byte-identical regression contract held: when no `policyContext` is passed, every relationship-traversal path emits the same Cypher as pre-1.8.5.
+
+### Compatibility
+
+Public API surface unchanged. Cypher emission changes ONLY for queries with `policyContext` AND a relationship traversal AND a registered `'read'` policy on the target type — exactly the queries that were silently leaking pre-1.8.5.
+
+### Acknowledgement
+
+Discovered by external reviewers performing mutation-style analysis on a downstream service. Reported, scoped via parallel exploration agents, fixed via parallel implementation agents, tested with real-compiler regression tests, and shipped within hours.
+
+### For consumers writing tests against grafeo-ogm
+
+The failure mode that hid CRIT-3 in downstream services was mocking `clientOgm.find()` itself — those tests proved wiring (the service called the OGM with the right ctx) but never proved authorization (the kill-switch policy actually compiled to `WHERE false`). The robust pattern, used throughout grafeo-ogm's own test suite, is to construct a real `OGM` with a mocked `Driver` (capture `cypher` + `params` via `session.run`), let the real WhereCompiler run, and assert on the captured Cypher. See `tests/policy/where-relationship-traversal.spec.ts` for a concrete example. A first-class `TestDriver` API is planned for v1.9.0.
+
+---
+
 ## 1.8.4 (2026-05-07)
 
 > **Backwards-compat fix.** `Model` now always auto-emits `__typename` in default projections — matching `@neo4j/graphql-ogm` behaviour. Apollo Client cache normalisation, type-discriminated unions in TS callers, and any consumer that uses `__typename` as a discriminator now get it on every concrete-type read and mutation, not just on union/interface targets.
