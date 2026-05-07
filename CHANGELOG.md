@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.8.6 (2026-05-07)
+
+> **DX fix.** Re-export `CypherAssert`, `Neo4jRecordFactory`, and `SelectionSetFactory` from the main entry. Consumers on legacy module resolvers (TypeScript `moduleResolution: "node"`, older Jest configs without subpath-imports support) can now do `import { CypherAssert } from 'grafeo-ogm'` without needing a `.d.ts` shim or a `moduleNameMapper` workaround.
+
+### What was happening
+
+The `grafeo-ogm/testing` subpath export has shipped since v1.0 — it works perfectly on modern resolvers (`moduleResolution: "bundler"` / `"node16"` / `"nodenext"`). But on legacy `"node"` resolution (still common in Jest configs and older TypeScript projects), the subpath wasn't picked up. Consumers had to drop a stub:
+
+```ts
+// grafeo-ogm-testing.d.ts (workaround, no longer needed)
+declare module 'grafeo-ogm/testing' {
+  export * from 'grafeo-ogm/dist/cjs/testing';
+}
+```
+
+…plus a `moduleNameMapper` entry in `jest.config.js`. That's a four-line workaround on every consumer for a one-line problem on our end.
+
+### Fix
+
+`src/index.ts` re-exports the three testing utilities from `./testing`:
+
+```ts
+export {
+  CypherAssert,
+  Neo4jRecordFactory,
+  SelectionSetFactory,
+} from './testing';
+```
+
+Both import paths now work:
+
+```ts
+// Modern resolvers — namespaced (still works, recommended)
+import { CypherAssert } from 'grafeo-ogm/testing';
+
+// Legacy resolvers — main entry (now works in 1.8.6)
+import { CypherAssert } from 'grafeo-ogm';
+```
+
+The dedicated `grafeo-ogm/testing` subpath is preserved — no breaking change, no deprecation. Just one more way in.
+
+### Compatibility
+
+Purely additive. No behavior change, no API surface removal. Consumers who already use the subpath import keep working unchanged.
+
+### Tests
+
+All 1388 tests still pass. Lint, format, and build all clean.
+
+---
+
 ## 1.8.5 (2026-05-07) — 🚨 SECURITY ADVISORY
 
 > **CRITICAL.** When a query traversed a relationship in a WHERE filter (`_SOME` / `_NONE` / `_ALL` / `_SINGLE` / `*Connection*` / union-typed relationships), the target type's NLS `'read'` policy was NOT applied inside the `EXISTS` body. A kill-switched org with a leaked target-type ID could use `where: { contentRel_SOME: { id: 'leakedId' } }` as a confirmation oracle / IDOR vector — even when its source-type policy correctly denied direct reads of the target type. **Upgrade immediately if you use NLS policies on target types reachable via relationship filters.**

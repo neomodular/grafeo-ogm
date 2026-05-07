@@ -118,3 +118,16 @@ export {
   assertSortDirection,
   escapeIdentifier,
 } from './utils/validation';
+
+// Testing utilities — re-exported from the main entry so consumers
+// on legacy module resolvers (TypeScript `moduleResolution: "node"`,
+// older Jest configs without `subpath imports` support) can do
+// `import { CypherAssert } from 'grafeo-ogm'` without needing a
+// `.d.ts` shim or a `moduleNameMapper` workaround. The dedicated
+// `grafeo-ogm/testing` subpath export is preserved for callers on
+// modern resolvers who prefer the namespaced import.
+export {
+  CypherAssert,
+  Neo4jRecordFactory,
+  SelectionSetFactory,
+} from './testing';
