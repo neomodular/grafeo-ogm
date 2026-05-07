@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.8.4 (2026-05-07)
+
+> **Backwards-compat fix.** `Model` now always auto-emits `__typename` in default projections — matching `@neo4j/graphql-ogm` behaviour. Apollo Client cache normalisation, type-discriminated unions in TS callers, and any consumer that uses `__typename` as a discriminator now get it on every concrete-type read and mutation, not just on union/interface targets.
+
+### What was happening
+
+```ts
+const result = await ogm.model('Book').find({ where: { id: 'b1' } });
+// Pre-1.8.4: { id: 'b1', title: 'Dune', pageCount: 412 }
+// Post-1.8.4: { __typename: 'Book', id: 'b1', title: 'Dune', pageCount: 412 }
+```
+
+Pre-1.8.4, `__typename` was auto-emitted ONLY when the target was abstract (union or interface with implementations) — `selection.compiler.ts:145-158`. Reads of concrete `@node` types (`Book`, `User`, etc.) returned the schema's scalar properties and nothing else. Mutations without explicit selection returned the bare Neo4j Node, which has no `__typename` field at all.
+
+This was a documented behaviour difference from `@neo4j/graphql-ogm` that consumers running Apollo Client / GraphQL pipelines hit immediately:
+
+- Apollo's `InMemoryCache` keys entries by `__typename + id`. Without `__typename` it can't normalise.
+- Discriminated-union pattern matching in TypeScript silently falls into the `default` branch.
+- Test fixtures depending on `__typename === 'Book'` evaluate to `false`.
+
+### Fix
+
+Three call sites in `src/model.ts` now route through the default projection (which includes `__typename`) instead of bailing to a bare `RETURN n`:
+
+- `defaultSelection()` (line 1728) — `__typename` is now the first scalar in the default selection list. `find()`, `findFirst()`, `findUnique()`, `findFirstOrThrow()`, `findUniqueOrThrow()`, `searchByVector()`, and `searchByPhrase()` all inherit this transitively via `resolveSelection()`.
+- `applySelectionSetToMutation()` (line 1770) — when `selectionSet` is undefined (the no-explicit-selection path used by `create()` / `update()` / `delete()` / `setLabels()`), now compiles `defaultSelection()` instead of leaving the bare `RETURN n`.
+- `applySelectionSetToUpsert()` (line 1888) — same fix for `upsert()`.
+
+`SelectionCompiler` already understood `__typename` as a synthetic scalar field (line 164 of `selection.compiler.ts`) — for concrete types it emits the constant string (`__typename: 'Book'`), for unions/interfaces it emits a `head([__label IN labels(n) WHERE __label IN [...]])` expression. The fix is purely a default-selection change; no compiler logic changed.
+
+### What this DOES NOT change
+
+- **Explicit `select` / `selectionSet`** — callers who specify their own projection get exactly what they ask for. We do NOT silently inject `__typename` into a user-supplied selection. If you want it, ask for it explicitly: `select: { __typename: true, id: true }`.
+- **InterfaceModel** — already emitted `__typename` via CASE-per-label (resolved from `labels(n)`). Unchanged.
+- **Abstract relationship targets** — `Model.find({ select: { authors: { ... } } })` where `authors` points at a union/interface still auto-emits `__typename` in the nested projection, same as pre-1.8.4.
+- **`@cypher` field** projections, `aggregate()`, `count()` — all unchanged.
+
+### Behaviour change risks
+
+Two edge cases for consumers to be aware of:
+
+1. **Wire size** — every entity result now includes a `__typename` field. For a 50-row result this is ~50 × ~13 bytes (`__typename: 'Book'`) = ~650 extra bytes. Negligible for almost all callers.
+2. **Schema-vs-store divergence** — pre-1.8.4 mutations without selection returned the raw Neo4j Node, including any properties stored on the node that are NOT in the GraphQL schema (e.g., legacy fields removed from the SDL but still present in the database). Post-1.8.4 the projection includes only schema-declared fields plus `__typename`. If your code relied on out-of-schema properties leaking through mutation responses, you must either (a) add them to the schema or (b) supply an explicit `selectionSet` that mentions them. Reads via `find()` already had this constraint pre-1.8.4 and behaved identically.
+
+### Tests
+
+- New file `tests/typename-auto-emit.spec.ts` — 11 regression tests covering `find()`, `findFirst()`, `findUnique()`, `create()`, `update()`, `upsert()`, explicit-select preservation, and unchanged InterfaceModel behaviour.
+- One existing test in `tests/policy/model-mutation.spec.ts:305` was updated — it asserted "policy bypass means cypher must NOT contain `ownerId`" via a bare substring match. With the new projection emitting `.\`ownerId\``, the test now asserts the policy's WHERE-clause shape (`n.\`ownerId\` = $...`) is absent, which was the test's actual intent.
+- Test count: **1370 → 1381** (+11). All pass.
+
+### Compatibility
+
+Public API surface unchanged. The Cypher emit changes for `find()`-family and mutation calls that did NOT pass an explicit `select` / `selectionSet`. Result shape gains a single `__typename` field; existing fields remain. This is the third backwards-compat fix in the v1.8.x series (after v1.8.1 connection-shape WHERE in nested disconnect/connect and v1.8.2 NLS permissive abstain default-deny).
+
+---
+
 ## 1.8.3 (2026-05-06)
 
 > **Bugfix.** `ogm.model('SomeInterface')` no longer silently returns an `InterfaceModel` — it now throws an `OGMError` immediately, naming the correct API. Pre-1.8.3 this returned an `InterfaceModel` cast to `any`, and the first mutation call (`.create()`, `.update()`, `.delete()`, `.upsert()`, `.setLabels()`) failed with `TypeError: this.create is not a function`.

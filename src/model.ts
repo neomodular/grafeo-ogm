@@ -1727,7 +1727,26 @@ export class Model<
 
   private defaultSelection(): SelectionNode[] {
     if (this._defaultSelection) return this._defaultSelection;
-    const nodes: SelectionNode[] = [];
+    // v1.8.4 — `__typename` is always emitted in default projections to
+    // match `@neo4j/graphql-ogm` behaviour. Apollo Client cache
+    // normalisation, type-discriminated unions in TS callers, and any
+    // consumer that uses `__typename` as a discriminator depend on it
+    // being present. SelectionCompiler resolves the field by checking
+    // the schema (line 164 of selection.compiler.ts) — for concrete
+    // types it emits the constant string, for unions/interfaces it
+    // emits a `head([... labels(n) ...])` expression.
+    //
+    // Pre-1.8.4, `__typename` was auto-emitted only on abstract
+    // targets (relationships pointing at unions/interfaces). Concrete
+    // top-level reads got back raw scalar properties without it.
+    const nodes: SelectionNode[] = [
+      {
+        fieldName: '__typename',
+        isScalar: true,
+        isRelationship: false,
+        isConnection: false,
+      },
+    ];
     for (const [, prop] of this.nodeDef.properties) {
       if (prop.isCypher) continue;
       nodes.push({
@@ -1755,35 +1774,44 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
-    if (!selectionSet) return cypher;
+    let selection: SelectionNode[];
 
-    let selection = this.parseSelectionSetCached(selectionSet);
+    if (selectionSet) {
+      selection = this.parseSelectionSetCached(selectionSet);
 
-    // Mutation selectionSets use the pattern: { <pluralName> { <actual fields> } }
-    // or { info { ... } <pluralName> { <actual fields> } }
-    // Unwrap the outer response key to get the inner node fields.
-    if (
-      selection.length === 1 &&
-      !selection[0].isScalar &&
-      selection[0].children?.length
-    ) {
-      const outer = selection[0];
+      // Mutation selectionSets use the pattern: { <pluralName> { <actual fields> } }
+      // or { info { ... } <pluralName> { <actual fields> } }
+      // Unwrap the outer response key to get the inner node fields.
       if (
-        outer.fieldName === this.nodeDef.pluralName ||
-        !this.nodeDef.relationships.has(outer.fieldName)
-      )
-        selection = outer.children!;
-    } else if (selection.length > 1) {
-      // Multi-field mutation response (e.g., { info { ... } drugs { id } })
-      // Find the field matching the plural name and use its children.
-      const entityField = selection.find(
-        (s) =>
-          s.fieldName === this.nodeDef.pluralName &&
-          !s.isScalar &&
-          s.children?.length,
-      );
-      if (entityField) selection = entityField.children!;
-    }
+        selection.length === 1 &&
+        !selection[0].isScalar &&
+        selection[0].children?.length
+      ) {
+        const outer = selection[0];
+        if (
+          outer.fieldName === this.nodeDef.pluralName ||
+          !this.nodeDef.relationships.has(outer.fieldName)
+        )
+          selection = outer.children!;
+      } else if (selection.length > 1) {
+        // Multi-field mutation response (e.g., { info { ... } drugs { id } })
+        // Find the field matching the plural name and use its children.
+        const entityField = selection.find(
+          (s) =>
+            s.fieldName === this.nodeDef.pluralName &&
+            !s.isScalar &&
+            s.children?.length,
+        );
+        if (entityField) selection = entityField.children!;
+      }
+    } else
+      // v1.8.4 — no selectionSet provided. Project via `defaultSelection`
+      // (which now includes `__typename`) instead of bailing out and
+      // leaving the bare `RETURN n`. Pre-1.8.4, the raw Node return
+      // path produced `{ id, title, ... }` without `__typename`. The
+      // projected path produces `{ __typename, id, title, ... }` —
+      // additive change, same fields plus the GraphQL discriminator.
+      selection = this.defaultSelection();
 
     const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(
@@ -1816,6 +1844,15 @@ export class Model<
     policyContext: PolicyContextBundle | null = null,
   ): string {
     const entitySelect = select[this.nodeDef.pluralName];
+    // v1.8.4 — when typed select doesn't request the entity field
+    // (e.g., `select: { info: {...} }` only), pre-1.8.4 left a bare
+    // `RETURN n` that produced raw Node properties. The response
+    // builder dropped them anyway, but the wire still carried them.
+    // Now we still bail (no entities expected → no projection needed)
+    // since `buildSelectResult` won't surface the mapped rows in the
+    // response. This branch is deliberately untouched — the
+    // `__typename` requirement applies when the caller actually
+    // receives entities.
     if (!entitySelect || typeof entitySelect !== 'object') return cypher;
 
     const selection = this.selectNormalizer.normalize(
@@ -1873,9 +1910,12 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
-    if (!selectionSet) return cypher;
-
-    const selection = this.parseSelectionSetCached(selectionSet);
+    // v1.8.4 — symmetric with `applySelectionSetToMutation`: project
+    // via `defaultSelection()` (which includes `__typename`) when no
+    // selectionSet is provided, instead of leaving the bare `RETURN n`.
+    const selection = selectionSet
+      ? this.parseSelectionSetCached(selectionSet)
+      : this.defaultSelection();
 
     const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(

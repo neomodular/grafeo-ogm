@@ -302,7 +302,14 @@ describe('Model mutations — policy integration', () => {
         update: { title: 'X' },
         unsafe: { bypassPolicies: true },
       });
-    expect(recorded[0].cypher).not.toContain('ownerId');
+    // v1.8.4 — Default RETURN projection now includes every scalar
+    // property (including `ownerId`), so a bare `ownerId` substring
+    // match is no longer a faithful signal of policy enforcement.
+    // Assert specifically that the policy's WHERE filter did NOT
+    // make it into the cypher (`n.\`ownerId\` = ...`), not that
+    // the field name is absent everywhere.
+    expect(recorded[0].cypher).not.toMatch(/n\.`ownerId`\s*=\s*\$/);
+    expect(recorded[0].cypher).not.toContain('WHERE n.`ownerId`');
   });
 
   it('default-deny throw on update raises PolicyDeniedError before compile', async () => {
