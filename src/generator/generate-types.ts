@@ -70,7 +70,11 @@ export interface GenerateTypesResult {
 }
 
 export interface GeneratorWarning {
-  code: 'UNKNOWN_DIRECTIVE' | 'UNSUPPORTED_TYPE' | 'CIRCULAR_REFERENCE';
+  code:
+    | 'UNKNOWN_DIRECTIVE'
+    | 'UNSUPPORTED_TYPE'
+    | 'CIRCULAR_REFERENCE'
+    | 'FORMATTING_SKIPPED';
   message: string;
   location?: { typeName: string; fieldName?: string };
 }
@@ -198,11 +202,24 @@ export async function generateTypes(
         parser: 'typescript',
         ...config.prettierConfig,
       });
-    } catch {
+    } catch (error) {
+      // The common case is "prettier isn't installed" (it's an OPTIONAL peer,
+      // not bundled, to keep the runtime footprint minimal) — surface an
+      // actionable message rather than a bare failure. A genuine formatting
+      // error reports its detail instead.
+      const message = error instanceof Error ? error.message : String(error);
+      const code = (error as { code?: string } | null)?.code;
+      const notInstalled =
+        code === 'MODULE_NOT_FOUND' ||
+        code === 'ERR_MODULE_NOT_FOUND' ||
+        /cannot find (module|package) ['"]?prettier/i.test(message);
       warnings.push({
-        code: 'UNSUPPORTED_TYPE',
-        message:
-          'Prettier formatting failed; output written without formatting.',
+        code: 'FORMATTING_SKIPPED',
+        message: notInstalled
+          ? 'prettier is not installed — generated types were written ' +
+            'unformatted. Run `npm i -D prettier` for formatted output, or set ' +
+            '`generate.formatOutput: false` to silence this warning.'
+          : `prettier formatting failed (${message}) — output written unformatted.`,
       });
     }
 

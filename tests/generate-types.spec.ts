@@ -518,20 +518,36 @@ describe('generateTypes — config', () => {
     expect(result.typeCount).toBeGreaterThan(0);
   });
 
-  it('adds warning when prettier formatting fails', async () => {
-    // Mock prettier to fail by using formatOutput: true but
-    // prettier is not installed or fails
-    const result = await generateTypes({
+  it('emits an actionable FORMATTING_SKIPPED warning when prettier is unavailable', async () => {
+    // Force the "prettier not installed" path by making the dynamic import throw
+    // a module-not-found error, then re-import the generator so the mock applies.
+    jest.resetModules();
+    jest.doMock('prettier', () => {
+      const err: NodeJS.ErrnoException = new Error(
+        "Cannot find module 'prettier'",
+      );
+      err.code = 'MODULE_NOT_FOUND';
+      throw err;
+    });
+    const { generateTypes: gen } =
+      await import('../src/generator/generate-types');
+    const result = await gen({
       typeDefs: TEST_SCHEMA,
       outFile,
       config: { formatOutput: true },
     });
+    jest.dontMock('prettier');
+    jest.resetModules();
 
-    // Prettier may or may not be available; either way the output should be valid
+    // Output is still produced (just unformatted), and the warning is actionable.
     expect(result.typeCount).toBeGreaterThan(0);
-    // If prettier failed, there should be a warning; if it succeeded, no warnings
-    // Either way the output file should exist
     expect(fs.existsSync(outFile)).toBe(true);
+    const warning = result.warnings.find(
+      (w) => w.code === 'FORMATTING_SKIPPED',
+    );
+    expect(warning).toBeDefined();
+    expect(warning?.message).toMatch(/prettier is not installed/);
+    expect(warning?.message).toMatch(/npm i -D prettier/);
   });
 
   it('supports custom header', async () => {

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.9.1 (2026-06-13) — 🩹 `grafeo generate` formatting DX
+
+> **A first-run papercut from the 1.9.0 CLI.** Prettier is a *dev* dependency (kept out of the runtime footprint on purpose), so a consumer who runs `grafeo generate` without prettier installed got a terse `Prettier formatting failed; output written without formatting.` — accurate, but unhelpful. The output was always valid TypeScript; only the message was poor. `1.9.1` makes that path friendly and honest.
+
+### 🩹 Actionable "formatting skipped" warning
+
+When prettier isn't available, the generator now detects the missing-module case specifically and emits: *"prettier is not installed — generated types were written unformatted. Run `npm i -D prettier` for formatted output, or set `generate.formatOutput: false` to silence this warning."* A genuine prettier *error* (as opposed to a missing install) now reports its actual detail instead of a generic string. The warning carries a dedicated `FORMATTING_SKIPPED` code (previously mislabeled `UNSUPPORTED_TYPE`).
+
+### 🔧 prettier declared as an optional peer dependency
+
+`prettier` is now listed under `peerDependencies` with `peerDependenciesMeta.prettier.optional = true`. This documents the relationship for tooling and package managers without auto-installing it — the runtime footprint is unchanged (still just `jiti`), and consumers who want formatted codegen opt in by installing prettier.
+
+### Tests
+
+Added coverage that forces the prettier-missing path and asserts the actionable `FORMATTING_SKIPPED` warning. Full suite green; lint, format, and type-check clean.
+
+---
+
 ## 1.9.0 (2026-06-13) — 🚀 the `grafeo` CLI
 
 > **The first developer-facing command-line tool.** Until now grafeo-ogm was a library you imported; the schema-to-types step, the constraint/index provisioning, and seeding were all things you wired up by hand. `1.9.0` ships `grafeo` — a thin, lazy-loaded CLI over machinery the library already had. Three commands: `grafeo generate` (codegen, including a CI staleness gate), `grafeo db push` (declarative constraint/index sync against a live database), and `grafeo db seed` (idempotent project seeding). Config lives in a typed `grafeo.config.ts`. **The CLI adds exactly one runtime dependency (`jiti`), and importing the library doesn't pull it in.** No library API surface changed; existing consumers upgrade transparently.
