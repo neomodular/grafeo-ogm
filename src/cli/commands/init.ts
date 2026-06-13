@@ -77,12 +77,17 @@ function renderConfig(
   outPath: string,
   includeSeed: boolean,
 ): string {
+  // JSON.stringify, NOT string-templating: the paths come from --schema/--out
+  // /prompts and this file is later EXECUTED by jiti, so a raw `'${path}'`
+  // would let a quote in the path break out and inject code (and an innocent
+  // apostrophe would produce a broken config). JSON.stringify emits a fully
+  // escaped, valid string literal.
   const seedLine = includeSeed ? `\n  seed: './seed.ts',` : '';
   return `import { defineConfig } from 'grafeo-ogm';
 
 export default defineConfig({
-  schema: '${rel(schemaPath)}',
-  out: '${rel(outPath)}',
+  schema: ${JSON.stringify(rel(schemaPath))},
+  out: ${JSON.stringify(rel(outPath))},
   database: {
     uri: process.env.NEO4J_URI,
     username: process.env.NEO4J_USERNAME,
@@ -112,16 +117,26 @@ function writeFileEnsuringDir(absPath: string, content: string): void {
 function wireGenerateScript(cwd: string): 'added' | 'kept' | 'none' {
   const pkgPath = path.join(cwd, 'package.json');
   if (!fs.existsSync(pkgPath)) return 'none';
-  const raw = fs.readFileSync(pkgPath, 'utf-8');
-  let pkg: { scripts?: Record<string, string> };
+  // Strip a UTF-8 BOM (common on Windows-edited files) so parse doesn't fail.
+  const raw = fs.readFileSync(pkgPath, 'utf-8').replace(/^\uFEFF/, '');
+  let pkg: { scripts?: unknown };
   try {
-    pkg = JSON.parse(raw) as { scripts?: Record<string, string> };
+    pkg = JSON.parse(raw) as { scripts?: unknown };
   } catch {
     return 'none';
   }
-  if (pkg.scripts?.generate) return 'kept';
+  // Only treat `scripts` as a map when it's actually an object — otherwise a
+  // malformed value would be spread into garbage.
+  const scripts =
+    typeof pkg.scripts === 'object' && pkg.scripts !== null
+      ? (pkg.scripts as Record<string, string>)
+      : {};
+  if (scripts.generate) return 'kept';
 
-  pkg.scripts = { ...pkg.scripts, generate: 'grafeo generate' };
+  (pkg as { scripts: Record<string, string> }).scripts = {
+    ...scripts,
+    generate: 'grafeo generate',
+  };
   const indent = /^\t/m.test(raw) ? '\t' : 2;
   fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, indent)}\n`, 'utf-8');
   return 'added';
