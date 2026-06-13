@@ -36,6 +36,7 @@ import {
   SubgraphConfig,
   SubgraphDeleteResult,
 } from './subgraph/types';
+import { deepFreezeSnapshot } from './utils/deep-freeze';
 import { assertSafeIdentifier, assertSafeLabel } from './utils/validation';
 
 const POLICY_SET_VERSION = '1.7.0-beta.0';
@@ -215,7 +216,11 @@ export class OGM<
       compilers: this.modelCompilers,
       interfaceCompilers: this.interfaceModelCompilers,
       logger: this.config.logger,
-      ctx: Object.freeze({ ...ctx }),
+      // v1.8.7 — deep snapshot, not shallow freeze. `Object.freeze({
+      // ...ctx })` left nested ctx state (`ctx.user.roles`) mutable, so
+      // a policy callback could escalate the context seen by every
+      // subsequent policy decision in the same request.
+      ctx: deepFreezeSnapshot({ ...ctx }) as C,
       resolver: this.policyResolver,
       defaults: this.policyDefaults,
       globalBypass: this.globalBypass,
@@ -767,13 +772,9 @@ export class OGMWithContext<
   ): Model<T, any, any, any, any, any, any, any, any, any, any, any>;
   model(
     name: string,
-  ):
-    | Model<any, any, any, any, any, any, any, any, any, any, any, any>
-    | InterfaceModel<any, any, any> {
+  ): Model<any, any, any, any, any, any, any, any, any, any, any, any> {
     const cached = this.cache.get(name);
     if (cached) return cached;
-    const cachedIface = this.interfaceCache.get(name);
-    if (cachedIface) return cachedIface as any;
 
     const nodeDef = this.schema.nodes.get(name);
     if (nodeDef) {
@@ -798,26 +799,21 @@ export class OGMWithContext<
       return model;
     }
 
+    // v1.8.7 — mirror of the v1.8.3 guard on `OGM.model()`. The context
+    // wrapper kept the pre-1.8.3 fallthrough: an interface name returned
+    // an `InterfaceModel` cast to `any`, so the first mutation call from
+    // typed code crashed with `TypeError: this.create is not a function`.
+    // Since the wrapper is the entry point every NLS consumer uses on
+    // every request, it must enforce the same contract as the base OGM.
     const interfaceDef = this.schema.interfaces.get(name);
-    if (interfaceDef) {
-      const model = new InterfaceModel(
-        interfaceDef,
-        this.schema,
-        this.driver,
-        this.interfaceCompilers,
-        {
-          ctx: this.ctx as PolicyContext,
-          resolve: (typeName, op, ctx) =>
-            this.resolver.resolve(typeName, op, ctx),
-          defaults: this.defaults,
-          logger: this.logger,
-          globalBypass: this.globalBypass,
-          policySetVersion: POLICY_SET_VERSION,
-        },
+    if (interfaceDef)
+      throw new OGMError(
+        `"${name}" is an interface, not a node type. Use ` +
+          `\`interfaceModel('${name}')\` on this context wrapper instead. ` +
+          `model() returns Model<T> with full CRUD; interfaceModel() ` +
+          `returns InterfaceModel<T> with read-only queries that span ` +
+          `all implementing types.`,
       );
-      this.interfaceCache.set(name, model as InterfaceModel<unknown>);
-      return model as any;
-    }
 
     throw new OGMError(
       `Unknown type: ${name}. Not found in nodes or interfaces.`,
@@ -839,6 +835,34 @@ export class OGMWithContext<
   >;
   interfaceModel<T = Record<string, unknown>>(name: string): InterfaceModel<T>;
   interfaceModel(name: string): InterfaceModel<any, any, any> {
-    return this.model(name) as unknown as InterfaceModel<any, any, any>;
+    // v1.8.7 — pre-1.8.7 this delegated through `model(name)`, relying on
+    // the interface fallthrough removed above (and returning a `Model`
+    // cast to `InterfaceModel` when handed a NODE name — the inverse type
+    // lie). It now owns construction and mirrors the base
+    // `OGM.interfaceModel()` contract: unknown or non-interface names
+    // throw immediately.
+    const existing = this.interfaceCache.get(name);
+    if (existing) return existing as InterfaceModel<any, any, any>;
+
+    const interfaceDef = this.schema.interfaces.get(name);
+    if (!interfaceDef) throw new OGMError(`Unknown interface type: ${name}`);
+
+    const model = new InterfaceModel(
+      interfaceDef,
+      this.schema,
+      this.driver,
+      this.interfaceCompilers,
+      {
+        ctx: this.ctx as PolicyContext,
+        resolve: (typeName, op, ctx) =>
+          this.resolver.resolve(typeName, op, ctx),
+        defaults: this.defaults,
+        logger: this.logger,
+        globalBypass: this.globalBypass,
+        policySetVersion: POLICY_SET_VERSION,
+      },
+    );
+    this.interfaceCache.set(name, model as InterfaceModel<unknown>);
+    return model;
   }
 }

@@ -1677,7 +1677,11 @@ export class Model<
           bundle.ctx,
           input as unknown as Record<string, unknown>,
         );
-        if (verdict === false)
+        // v1.8.7 — require explicit positive consent. Pre-1.8.7 only
+        // `=== false` rejected, so a `when` returning undefined/null
+        // (e.g. `ctx.canWrite && input.tenantId === ctx.tenantId` with
+        // an anonymous ctx) silently ALLOWED the write.
+        if (verdict !== true)
           throw new PolicyDeniedError({
             typeName: this.nodeDef.typeName,
             operation: 'create',
@@ -1690,8 +1694,9 @@ export class Model<
   /**
    * Evaluate WRITE-side restrictive policies (create/update) at the
    * application layer. Each `WriteRestrictive` is invoked exactly once
-   * with `(ctx, input)`; returning `false` rejects the operation with
-   * `PolicyDeniedError`.
+   * with `(ctx, input)`; anything other than an explicit `true` return
+   * rejects the operation with `PolicyDeniedError` (v1.8.7 — previously
+   * only `false` rejected, so nullish returns silently allowed).
    *
    * ReadRestrictives are NOT consumed here — they enforce row-filter
    * semantics via the compiled WHERE clause (see `WhereCompiler`). Only
@@ -1715,7 +1720,9 @@ export class Model<
       // policy entirely for this operation.
       if (r.appliesWhen && !r.appliesWhen(bundle.ctx)) continue;
       const verdict = r.when(bundle.ctx, input ?? {});
-      if (verdict === false)
+      // v1.8.7 — require explicit positive consent (see
+      // evaluateCreatePolicies for the rationale).
+      if (verdict !== true)
         throw new PolicyDeniedError({
           typeName: this.nodeDef.typeName,
           operation,

@@ -1267,6 +1267,109 @@ describe('MutationCompiler', () => {
       );
       expect(result.cypher).not.toContain('`node`');
     });
+
+    // v1.8.7 — third sibling of the v1.8.1 fix. Nested
+    // `update.<rel>[].update` with a `where` containing operator
+    // suffixes (`name_CONTAINS`) or logical wrappers (NOT/AND/OR)
+    // compiled EVERY key as plain equality: `u.\`name_CONTAINS\` = $p`
+    // is a non-existent property lookup that matches nothing, so the
+    // nested update was a silent no-op. The disconnect and connect
+    // siblings were fixed in v1.8.1; this path was missed.
+    it('handles operator suffixes in nested update.<rel>.update where (v1.8.7)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              update: { node: { name: 'Renamed' } },
+              where: { node: { name_CONTAINS: 'legacy' } },
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toContain(
+        'CONTAINS $update_tiers_0_where_name_CONTAINS',
+      );
+      // The pre-1.8.7 broken equality on the suffixed key must not reappear.
+      expect(result.cypher).not.toContain('`name_CONTAINS`');
+      expect(result.params).toMatchObject({
+        update_tiers_0_where_name_CONTAINS: 'legacy',
+      });
+    });
+
+    it('handles connection-shape NOT in nested update.<rel>.update where (v1.8.7)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              update: { node: { name: 'Renamed' } },
+              where: { NOT: { node: { id: 'tier9' } } },
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toContain(
+        'WHERE NOT (n_u0.`id` = $update_tiers_0_where_NOT_id)',
+      );
+      expect(result.cypher).not.toContain('`NOT`');
+      expect(result.cypher).not.toContain('`node`');
+    });
+
+    it('keeps byte-identical params for plain-equality nested update where (v1.8.7)', () => {
+      // The legacy shape must keep compiling to the same param names so
+      // existing query plans and tests stay stable.
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              update: { node: { name: 'Renamed' } },
+              where: { node: { id: 'tier1' } },
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toContain(
+        'WHERE n_u0.`id` = $update_tiers_0_where_id',
+      );
+      expect(result.params).toMatchObject({
+        update_tiers_0_where_id: 'tier1',
+      });
+    });
+
+    // v1.8.7 — mutation property names are now guarded against
+    // prototype-pollution names (`__proto__`/`constructor`/`prototype`),
+    // matching the WHERE compiler's existing assertSafeKey convention.
+    // `JSON.parse` produces an OWN `__proto__` property, which pre-1.8.7
+    // was accepted and persisted as a literal Neo4j node property.
+    it('rejects prototype-pollution property names in update input (v1.8.7)', () => {
+      expect(() =>
+        compiler.compileUpdate(
+          { id: 'conc1' },
+          JSON.parse('{"__proto__": "evil", "name": "x"}'),
+          undefined,
+          undefined,
+          concentrationNode,
+          { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+        ),
+      ).toThrow(/dangerous key "__proto__"/);
+    });
   });
 
   describe('compileDelete', () => {

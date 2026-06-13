@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.8.7 (2026-06-12) — 🚨 SECURITY + correctness
+
+> **Three HIGH correctness bugs, two subgraph guards, and three security hardenings** from the post-1.8.6 comprehensive audit. Two of the three HIGH bugs are "fixed one site, missed the sibling" regressions of earlier fixes (v1.8.1 and v1.8.3) — sibling-site sweeps are now part of the fix checklist. Upgrade if you use `withContext`, nested relationship updates, union relationship filters, write restrictives, or subgraph operations.
+
+### HIGH — `OGMWithContext.model(interfaceName)` reintroduced the v1.8.3 type-lying bug
+
+v1.8.3 made `ogm.model('SomeInterface')` throw a descriptive `OGMError`. The per-request context wrapper — the entry point every NLS consumer uses — kept the pre-1.8.3 fallthrough: an interface name returned an `InterfaceModel` cast to `any`, so the first mutation call from typed code crashed with `TypeError: this.create is not a function`. The wrapper now enforces the same contract in **both** directions: `model(interfaceName)` throws and points at `interfaceModel()`, and `interfaceModel(nodeName)` throws `Unknown interface type` instead of returning a `Model` cast to `InterfaceModel`. `interfaceModel()` owns its own construction and cache now (it previously delegated through the buggy `model()` fallthrough).
+
+### HIGH — nested `update.<rel>[].update` WHERE compiled operator suffixes as plain equality
+
+v1.8.1 routed nested `disconnect[].where` and `connect[].where` through the connection-aware WHERE compiler — but missed the third sibling: the **nested update** path. `where: { node: { name_CONTAINS: 'x' } }` compiled to ``u.`name_CONTAINS` = $p`` — a non-existent property lookup that matches nothing — so the nested update was a **silent no-op**. `AND`/`OR`/`NOT` wrappers became bogus property predicates the same way. Now routed through `buildConnectionWhereConditions` like its siblings. Plain-equality inputs keep byte-identical param names (`update_<rel>_<i>_where_<prop>`); `edge` filters now throw loudly instead of silently never matching.
+
+### HIGH — union relationship `_ALL` and `_SINGLE` silently behaved as `_SOME`
+
+For union-typed relationships, `chapters_ALL: {...}` and `chapters_SINGLE: {...}` compiled to the same OR-of-EXISTS as `_SOME` — wrong rows, no error. A node with five matching chapters passed `_SINGLE`; a node with one failing chapter passed `_ALL`. Both now implement real quantifier semantics mirroring the non-union shapes:
+
+- `_ALL` — per mentioned member, `NOT EXISTS { MATCH … WHERE NOT (inner) }`, AND-combined. Members with an empty predicate are vacuously satisfied; unmentioned union members are unconstrained (consistent with `_SOME`).
+- `_SINGLE` — summed `size(…)` pattern comprehensions `= 1` across mentioned members. `@cypher`-projecting members (user fields or target policies) are rejected with an `OGMError`, mirroring the non-union `_SINGLE` contract.
+
+v1.8.5's per-member target-policy stitching is preserved in both shapes.
+
+### MEDIUM — subgraph operations: empty filter arrays meant "delete/clone EVERYTHING reachable"
+
+`apoc.path.subgraphAll` treats an empty `relationshipFilter`/`labelFilter` string as "no constraint", so `$deleteSubgraph(rootId, { ownedLabels: [], ownedRelationships: [], … })` DETACH-DELETEd the **entire connected component** reachable from the root. `validateConfig` now rejects empty `ownedLabels`/`ownedRelationships` before any Cypher runs (both clone and delete). Validation errors also carry the real operation and rootId — they were previously hardcoded to `'clone'` with an empty rootId, misdirecting delete-path debugging.
+
+### SECURITY — write restrictives now require explicit positive consent
+
+`WriteRestrictivePolicy.when` verdicts were checked with `=== false`, so `undefined`/`null`/`0`/`''` returns silently **allowed** the write. The classic foot-gun — `when: (ctx, input) => ctx.canWrite && input.tenantId === ctx.tenantId` with an anonymous ctx — returns `undefined` and passed. Both evaluation sites (create-path and update-path) now require an explicit `true`; anything else throws `PolicyDeniedError`. **Behavior change:** policies returning truthy non-`true` values (e.g. a string) now deny — return a real boolean.
+
+### SECURITY — `withContext` ctx is now a deep-frozen snapshot
+
+`Object.freeze({ ...ctx })` was shallow: a policy callback could mutate nested ctx state (`ctx.user.roles.push('admin')`) and every subsequent policy decision in the same request — including nested-selection target policies — saw the escalated context. ctx is now a **deep-frozen clone** (`deepFreezeSnapshot`): plain objects/arrays are cloned recursively and frozen; class instances, Dates, Maps, and functions are kept by reference and left unfrozen. The caller's original objects stay mutable. **Behavior change:** policies must not rely on reference identity between nested ctx objects and external state (top-level identity was already broken by the spread).
+
+### SECURITY — mutation property names now reject `__proto__`/`constructor`/`prototype`
+
+The WHERE compiler has always blocked prototype-pollution names via `assertSafeKey`; the mutation compiler validated identifier shape only, so `model.create({ input: JSON.parse('{"__proto__": "evil"}') })` persisted a literal `__proto__` property to Neo4j. Reads through the OGM were safe (`Object.create(null)` in ResultMapper), but downstream consumers doing `Object.assign({}, node)` would re-trigger setter semantics. All mutation property-name sites (create/update/createMany/merge keys/edge properties/nested updates/mutation WHEREs) now route through a combined `assertSafePropertyName` guard. **Behavior change:** schemas with properties literally named `constructor`/`prototype` can no longer write them via the OGM — they already couldn't query them.
+
+### Tests
+
+24 new regression tests (union quantifiers, nested-update WHERE shapes, wrapper contract both directions, deep-freeze unit + integration, verdict strictness, subgraph guards, `__proto__` rejection). Full suite: 1414 tests, 63 suites, all green. Lint and type-check clean.
+
+---
+
 ## 1.8.6 (2026-05-07)
 
 > **DX fix.** Re-export `CypherAssert`, `Neo4jRecordFactory`, and `SelectionSetFactory` from the main entry. Consumers on legacy module resolvers (TypeScript `moduleResolution: "node"`, older Jest configs without subpath-imports support) can now do `import { CypherAssert } from 'grafeo-ogm'` without needing a `.d.ts` shim or a `moduleNameMapper` workaround.

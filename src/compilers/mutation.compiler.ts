@@ -12,6 +12,7 @@ import {
 import {
   assertSafeIdentifier,
   assertSafeLabel,
+  assertSafePropertyName,
   escapeIdentifier,
   mergeParams,
 } from '../utils/validation';
@@ -154,7 +155,7 @@ export class MutationCompiler {
         // Skip relationship fields — handled separately below
         if (nodeDef.relationships.has(key)) continue;
         if (value === undefined) continue;
-        assertSafeIdentifier(key, 'update property');
+        assertSafePropertyName(key, 'update property');
         const paramName = `update_${key}`;
         setClauses.push(`n.${escapeIdentifier(key)} = $${paramName}`);
         params[paramName] = value;
@@ -268,7 +269,7 @@ export class MutationCompiler {
       // Skip relationship suffixes and operators
       if (key === 'AND' || key === 'OR' || key === 'NOT') continue;
       if (key.includes('_') && !nodeDef.properties.has(key)) continue;
-      assertSafeIdentifier(key, 'merge key');
+      assertSafePropertyName(key, 'merge key');
       const paramName = `merge_${key}`;
       mergeProps.push(`${escapeIdentifier(key)}: $${paramName}`);
       mergeKeyNames.push(key);
@@ -313,7 +314,7 @@ export class MutationCompiler {
     for (const [key, value] of Object.entries(create)) {
       if (value === undefined) continue;
       if (nodeDef.relationships.has(key)) continue;
-      assertSafeIdentifier(key, 'create property');
+      assertSafePropertyName(key, 'create property');
       const paramName = `onCreate_${key}`;
       createSets.push(`n.${escapeIdentifier(key)} = $${paramName}`);
       params[paramName] = value;
@@ -326,7 +327,7 @@ export class MutationCompiler {
     for (const [key, value] of Object.entries(update)) {
       if (value === undefined) continue;
       if (nodeDef.relationships.has(key)) continue;
-      assertSafeIdentifier(key, 'update property');
+      assertSafePropertyName(key, 'update property');
       const paramName = `onMatch_${key}`;
       updateSets.push(`n.${escapeIdentifier(key)} = $${paramName}`);
       params[paramName] = value;
@@ -424,7 +425,7 @@ export class MutationCompiler {
         throw new OGMError(
           `createMany does not support relationship fields. Found: "${key}". Use create() for nested operations.`,
         );
-      assertSafeIdentifier(key, 'createMany property');
+      assertSafePropertyName(key, 'createMany property');
       scalarKeys.push(key);
     }
 
@@ -521,7 +522,7 @@ export class MutationCompiler {
       // Skip relationship fields and undefined values
       if (nodeDef.relationships.has(key)) continue;
       if (value === undefined) continue;
-      assertSafeIdentifier(key, 'create property');
+      assertSafePropertyName(key, 'create property');
       const paramName = `${prefix}_${key}`;
       parts.push(`${escapeIdentifier(key)}: $${paramName}`);
       propParams[paramName] = value;
@@ -700,7 +701,7 @@ export class MutationCompiler {
           const setItems: string[] = [];
           for (const [prop, val] of Object.entries(edgeInput)) {
             if (val === undefined) continue;
-            assertSafeIdentifier(prop, 'edge property');
+            assertSafePropertyName(prop, 'edge property');
             const paramName = `${prefix}_create${ci}_edge_${prop}`;
             setItems.push(
               `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -767,7 +768,7 @@ export class MutationCompiler {
           const setItems: string[] = [];
           for (const [prop, val] of Object.entries(edgeInput)) {
             if (val === undefined) continue;
-            assertSafeIdentifier(prop, 'edge property');
+            assertSafePropertyName(prop, 'edge property');
             const paramName = `${prefix}_conn${ci}_edge_${prop}`;
             setItems.push(
               `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -861,7 +862,7 @@ export class MutationCompiler {
               const setItems: string[] = [];
               for (const [prop, val] of Object.entries(edgeInput)) {
                 if (val === undefined) continue;
-                assertSafeIdentifier(prop, 'edge property');
+                assertSafePropertyName(prop, 'edge property');
                 const paramName = `connect_${fieldName}_${ci}_edge_${prop}`;
                 setItems.push(
                   `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -1446,7 +1447,7 @@ export class MutationCompiler {
               const setItems: string[] = [];
               for (const [prop, val] of Object.entries(edgeInput)) {
                 if (val === undefined) continue;
-                assertSafeIdentifier(prop, 'edge property');
+                assertSafePropertyName(prop, 'edge property');
                 const paramName = `${itemPrefix}_conn${ci}_edge_${prop}`;
                 setItems.push(
                   `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -1488,7 +1489,7 @@ export class MutationCompiler {
           for (const [prop, val] of Object.entries(nodeUpdate)) {
             if (targetNodeDef.relationships.has(prop)) continue;
             if (val === undefined) continue;
-            assertSafeIdentifier(prop, 'nested update property');
+            assertSafePropertyName(prop, 'nested update property');
             const paramName = `${itemPrefix}_set_${prop}`;
             setClauses.push(
               `${updateVar}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -1502,7 +1503,7 @@ export class MutationCompiler {
           if (edgeUpdate)
             for (const [prop, val] of Object.entries(edgeUpdate)) {
               if (val === undefined) continue;
-              assertSafeIdentifier(prop, 'edge update property');
+              assertSafePropertyName(prop, 'edge update property');
               const paramName = `${itemPrefix}_edge_${prop}`;
               edgeClauses.push(
                 `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
@@ -1544,21 +1545,25 @@ export class MutationCompiler {
             });
             lines.push(`MATCH ${relArrow}`);
 
-            // WHERE on the target
+            // WHERE on the target.
+            // v1.8.7 — pre-1.8.7 this unwrapped `(updateWhere.node ??
+            // updateWhere)` and compiled EVERY key as plain equality, so
+            // operator suffixes became non-existent property lookups
+            // (`u.\`name_CONTAINS\` = $p` — matches nothing, silent
+            // no-op) and `AND`/`OR`/`NOT` became bogus property
+            // predicates. The disconnect (v1.8.1) and connect (v1.8.1)
+            // siblings were already routed through the connection-aware
+            // compiler; this was the missed third sibling. The param
+            // prefix is chosen so the legacy plain-equality case keeps
+            // byte-identical param names (`${itemPrefix}_where_${prop}`).
             if (updateWhere) {
-              const nodeWhere = (updateWhere.node ?? updateWhere) as Record<
-                string,
-                unknown
-              >;
-              const conditions: string[] = [];
-              for (const [prop, val] of Object.entries(nodeWhere)) {
-                assertSafeIdentifier(prop, 'update where property');
-                const paramName = `${itemPrefix}_where_${prop}`;
-                conditions.push(
-                  `${updateVar}.${escapeIdentifier(prop)} = $${paramName}`,
-                );
-                params[paramName] = val;
-              }
+              const conditions = this.buildConnectionWhereConditions(
+                updateWhere,
+                updateVar,
+                `${itemPrefix}_where`,
+                params,
+                targetNodeDef,
+              );
               if (conditions.length > 0)
                 lines.push(`WHERE ${conditions.join(' AND ')}`);
             }
@@ -1643,7 +1648,7 @@ export class MutationCompiler {
         const notSpec = val as Record<string, unknown>;
         for (const [notProp, notVal] of Object.entries(notSpec)) {
           const { baseProp, template } = this.parseOperatorSuffix(notProp);
-          assertSafeIdentifier(baseProp, 'where property');
+          assertSafePropertyName(baseProp, 'where property');
           const paramName = `${prefix}_NOT_${notProp}`;
           const escapedProp = escapeIdentifier(baseProp);
           let expr: string;
@@ -1676,7 +1681,7 @@ export class MutationCompiler {
         }
 
         const { baseProp, template } = this.parseOperatorSuffix(prop);
-        assertSafeIdentifier(baseProp, 'where property');
+        assertSafePropertyName(baseProp, 'where property');
         const paramName = `${prefix}_${prop}`;
         conditions.push(
           template
@@ -1931,7 +1936,7 @@ export class MutationCompiler {
     const nodeWhere = (whereSpec.node ?? whereSpec) as Record<string, unknown>;
     for (const key of Object.keys(nodeWhere)) {
       const { baseProp, template } = this.parseOperatorSuffix(key);
-      assertSafeIdentifier(baseProp, 'connect where property');
+      assertSafePropertyName(baseProp, 'connect where property');
       // Replace template placeholders with dynamic UNWIND references
       // Note: itemVar map access is NOT escaped (parameter map keys, not Cypher identifiers)
       const valueRef = `${itemVar}.where.node.${key}`;
@@ -1949,7 +1954,7 @@ export class MutationCompiler {
     const edgeSpec = item.edge as Record<string, unknown> | undefined;
     if (!edgeSpec) return [];
     const keys = Object.keys(edgeSpec).filter((k) => edgeSpec[k] !== undefined);
-    for (const key of keys) assertSafeIdentifier(key, 'edge property');
+    for (const key of keys) assertSafePropertyName(key, 'edge property');
 
     return keys;
   }

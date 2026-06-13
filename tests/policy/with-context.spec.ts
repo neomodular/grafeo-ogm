@@ -1,4 +1,6 @@
 import { Driver } from 'neo4j-driver';
+import { OGMError } from '../../src/errors';
+import { InterfaceModel } from '../../src/interface-model';
 import { OGM } from '../../src/ogm';
 import { permissive, restrictive } from '../../src/policy/types';
 
@@ -209,5 +211,106 @@ describe('OGM.withContext + per-call unsafe', () => {
     await expect(
       ogm.withContext({ uid: 'a' }).model('Book').find({}),
     ).rejects.toThrow(/no-permissive-matched/);
+  });
+
+  it('deep-freezes nested ctx — policy callbacks cannot escalate shared state (v1.8.7)', async () => {
+    // Pre-1.8.7 `withContext` shallow-froze the ctx spread, so a policy
+    // callback could `ctx.user.roles.push('admin')` and every subsequent
+    // policy decision in the same request saw the escalated context.
+    const recorded: Recorded[] = [];
+    let captured: unknown;
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(recorded),
+      policies: {
+        Book: [
+          permissive({
+            operations: ['read'],
+            when: (c) => {
+              captured = c;
+              return { ownerId: (c as { uid: string }).uid };
+            },
+          }),
+        ],
+      },
+    });
+
+    const original = { uid: 'alex', user: { roles: ['viewer'] } };
+    await ogm.withContext(original).model('Book').find({});
+
+    // Nested state inside the snapshot is frozen all the way down…
+    const snapshot = captured as { user: { roles: string[] } };
+    expect(Object.isFrozen(snapshot.user)).toBe(true);
+    expect(Object.isFrozen(snapshot.user.roles)).toBe(true);
+    expect(() => {
+      snapshot.user.roles.push('admin');
+    }).toThrow(TypeError);
+
+    // …while the caller's ORIGINAL objects stay untouched and mutable
+    // (the snapshot clones; it does not freeze shared references).
+    expect(Object.isFrozen(original.user)).toBe(false);
+    original.user.roles.push('editor');
+    expect(original.user.roles).toContain('editor');
+  });
+});
+
+// v1.8.7 — the context wrapper kept the pre-1.8.3 interface fallthrough
+// that the base OGM.model() already fixed: an interface name returned an
+// InterfaceModel cast to `any`, so the first mutation call from typed
+// code crashed with `TypeError: this.create is not a function`. The
+// wrapper now enforces the same contract in BOTH directions.
+describe('OGMWithContext.model/interfaceModel type-contract guard (v1.8.7)', () => {
+  const interfaceSchema = `
+    interface Entity {
+      id: ID!
+    }
+    type Book implements Entity @node {
+      id: ID! @id @unique
+      title: String!
+      ownerId: String
+    }
+  `;
+
+  function buildWrapper() {
+    const ogm = new OGM({
+      typeDefs: interfaceSchema,
+      driver: createMockDriver(),
+      policies: {
+        Book: [permissive({ operations: ['read'], when: () => ({}) })],
+      },
+    });
+    return ogm.withContext({ uid: 'alex' });
+  }
+
+  it('model(interfaceName) throws OGMError naming the correct API', () => {
+    const wrapper = buildWrapper();
+    expect(() => wrapper.model('Entity')).toThrow(OGMError);
+    expect(() => wrapper.model('Entity')).toThrow(
+      /"Entity" is an interface, not a node type/,
+    );
+    expect(() => wrapper.model('Entity')).toThrow(/interfaceModel\('Entity'\)/);
+  });
+
+  it('interfaceModel(nodeName) throws instead of returning a type-lying Model', () => {
+    const wrapper = buildWrapper();
+    expect(() => wrapper.interfaceModel('Book')).toThrow(
+      /Unknown interface type: Book/,
+    );
+  });
+
+  it('interfaceModel(interfaceName) constructs and caches the InterfaceModel', () => {
+    const wrapper = buildWrapper();
+    const first = wrapper.interfaceModel('Entity');
+    expect(first).toBeInstanceOf(InterfaceModel);
+    // Cache hit — the pre-1.8.7 delegation through model() is gone, so
+    // the wrapper must own its own construction + caching path.
+    expect(wrapper.interfaceModel('Entity')).toBe(first);
+  });
+
+  it('model(unknownName) keeps the descriptive unknown-type error', () => {
+    const wrapper = buildWrapper();
+    expect(() => wrapper.model('Nope')).toThrow(
+      'Unknown type: Nope. Not found in nodes or interfaces.',
+    );
   });
 });

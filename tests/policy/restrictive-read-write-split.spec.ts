@@ -20,6 +20,7 @@
 import { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
 import { OGMError } from '../../src/errors';
+import { PolicyDeniedError } from '../../src/policy/errors';
 import { permissive, restrictive } from '../../src/policy/types';
 
 const schema = `
@@ -261,5 +262,84 @@ describe('Read/Write restrictive split — C1 contract', () => {
     // The create-side restrictive must NEVER be invoked on a read.
     await ogm.withContext({}).model('Book').find({});
     expect(calls).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------
+  // v1.8.7 — strict positive consent. Pre-1.8.7 only `=== false`
+  // rejected, so a `when` returning undefined/null (the classic
+  // `ctx.canWrite && input.tenantId === ctx.tenantId` with an anonymous
+  // ctx) silently ALLOWED the write. Anything other than an explicit
+  // `true` now denies.
+  // -------------------------------------------------------------------
+  it('WriteRestrictive returning undefined DENIES update (v1.8.7)', async () => {
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(),
+      policies: {
+        Book: [
+          permissive({ operations: ['update'], when: () => ({}) }),
+          restrictive({
+            operations: ['update'],
+            // Anonymous ctx → `canWrite` is undefined → the && chain
+            // short-circuits to undefined, NOT false.
+            when: (ctx, input) =>
+              ((ctx as { canWrite?: boolean }).canWrite &&
+                (input as { tenantId?: string }).tenantId ===
+                  'acme') as boolean,
+          }),
+        ],
+      },
+    });
+
+    await expect(
+      ogm
+        .withContext({})
+        .model('Book')
+        .update({ where: { id: 'b1' }, update: { title: 'x' } }),
+    ).rejects.toMatchObject({ reason: 'restrictive-rejected-input' });
+  });
+
+  it('WriteRestrictive returning undefined DENIES create (v1.8.7)', async () => {
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(),
+      policies: {
+        Book: [
+          permissive({ operations: ['create'], when: () => ({}) }),
+          restrictive({
+            operations: ['create'],
+            when: (ctx) =>
+              (ctx as { canWrite?: boolean }).canWrite as unknown as boolean,
+          }),
+        ],
+      },
+    });
+
+    await expect(
+      ogm
+        .withContext({})
+        .model('Book')
+        .create({ input: [{ id: 'b1', title: 'x' }] }),
+    ).rejects.toBeInstanceOf(PolicyDeniedError);
+  });
+
+  it('WriteRestrictive returning explicit true still allows (v1.8.7)', async () => {
+    const recorded: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(recorded),
+      policies: {
+        Book: [
+          permissive({ operations: ['update'], when: () => ({}) }),
+          restrictive({ operations: ['update'], when: () => true }),
+        ],
+      },
+    });
+
+    await ogm
+      .withContext({})
+      .model('Book')
+      .update({ where: { id: 'b1' }, update: { title: 'x' } });
+    expect(recorded).toHaveLength(1);
   });
 });

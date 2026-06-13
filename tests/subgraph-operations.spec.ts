@@ -69,6 +69,19 @@ describe('cloneSubgraph', () => {
     referenceRelationships: [],
   };
 
+  // v1.8.7 — same guard as deleteSubgraph: empty filters would clone the
+  // entire connected component instead of a scoped subgraph.
+  it('rejects empty ownedLabels and ownedRelationships (v1.8.7)', async () => {
+    const tx = createMockTransaction();
+    await expect(
+      cloneSubgraph('root-1', { ...baseConfig, ownedLabels: [] }, tx),
+    ).rejects.toThrow(/ownedLabels must not be empty/);
+    await expect(
+      cloneSubgraph('root-1', { ...baseConfig, ownedRelationships: [] }, tx),
+    ).rejects.toThrow(/ownedRelationships must not be empty/);
+    expect(tx.run).not.toHaveBeenCalled();
+  });
+
   it('should clone a basic subgraph and return mapping', async () => {
     const tx = createMockTransaction([
       // Step 1: APOC clone result
@@ -266,6 +279,53 @@ describe('deleteSubgraph', () => {
 
     expect(result.deletedCount).toBe(5);
     expect(tx.run).toHaveBeenCalledTimes(1);
+  });
+
+  // v1.8.7 — empty filter arrays are treated by apoc.path.subgraphAll
+  // as "no constraint", so pre-1.8.7 an empty ownedLabels/
+  // ownedRelationships expanded the DETACH DELETE to the ENTIRE
+  // connected component reachable from the root. The guard must fire
+  // BEFORE any Cypher runs.
+  it('rejects empty ownedLabels before running any Cypher (v1.8.7)', async () => {
+    const tx = createMockTransaction();
+    await expect(
+      deleteSubgraph('root-1', { ...baseConfig, ownedLabels: [] }, tx),
+    ).rejects.toThrow(/ownedLabels must not be empty/);
+    expect(tx.run).not.toHaveBeenCalled();
+  });
+
+  it('rejects empty ownedRelationships before running any Cypher (v1.8.7)', async () => {
+    const tx = createMockTransaction();
+    await expect(
+      deleteSubgraph('root-1', { ...baseConfig, ownedRelationships: [] }, tx),
+    ).rejects.toThrow(/ownedRelationships must not be empty/);
+    expect(tx.run).not.toHaveBeenCalled();
+  });
+
+  it('validation errors carry operation "delete" and the real rootId (v1.8.7)', async () => {
+    // Pre-1.8.7 validateConfig hardcoded operation 'clone' and an empty
+    // rootId, so delete-path failures surfaced as clone errors.
+    const tx = createMockTransaction();
+    const badDirection: SubgraphConfig = {
+      ...baseConfig,
+      referenceRelationships: [
+        {
+          fromLabel: 'Post',
+          relationshipType: 'HAS_TAG',
+          direction: 'SIDEWAYS' as 'OUT',
+        },
+      ],
+    };
+
+    let caught: unknown;
+    try {
+      await deleteSubgraph('root-9', badDirection, tx);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SubgraphOperationError);
+    expect((caught as SubgraphOperationError).operation).toBe('delete');
+    expect((caught as SubgraphOperationError).rootId).toBe('root-9');
   });
 
   it('should pass correct params to the cypher query', async () => {

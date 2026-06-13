@@ -17,9 +17,38 @@ const NOOP_LOGGER: OGMLogger = { debug: () => {} };
 
 /**
  * Validates all labels and relationship types in a SubgraphConfig
- * to prevent Cypher injection (these values are string-interpolated).
+ * to prevent Cypher injection (these values are string-interpolated),
+ * and rejects empty filter arrays.
+ *
+ * v1.8.7 — empty arrays are a foot-cannon: `apoc.path.subgraphAll`
+ * treats an empty `relationshipFilter`/`labelFilter` string as "no
+ * constraint", so an empty `ownedLabels` or `ownedRelationships` would
+ * silently expand the operation to the ENTIRE connected component
+ * reachable from the root — catastrophic for `deleteSubgraph` (unbounded
+ * DETACH DELETE) and surprising for `cloneSubgraph`. Errors also carry
+ * the real operation and rootId now (pre-1.8.7 they were hardcoded to
+ * `'clone'` with an empty rootId, misdirecting delete-path debugging).
  */
-function validateConfig(config: SubgraphConfig): void {
+function validateConfig(
+  config: SubgraphConfig,
+  operation: 'clone' | 'delete',
+  rootId: string,
+): void {
+  if (config.ownedLabels.length === 0)
+    throw new SubgraphOperationError(
+      operation,
+      rootId,
+      'ownedLabels must not be empty — an empty label filter would match ' +
+        'every node reachable from the root.',
+    );
+  if (config.ownedRelationships.length === 0)
+    throw new SubgraphOperationError(
+      operation,
+      rootId,
+      'ownedRelationships must not be empty — an empty relationship filter ' +
+        'would traverse every relationship reachable from the root.',
+    );
+
   for (const label of config.ownedLabels) assertSafeLabel(label);
 
   for (const rel of config.ownedRelationships)
@@ -31,8 +60,8 @@ function validateConfig(config: SubgraphConfig): void {
 
     if (ref.direction !== 'OUT' && ref.direction !== 'IN')
       throw new SubgraphOperationError(
-        'clone',
-        '',
+        operation,
+        rootId,
         `Invalid direction "${ref.direction}" for reference relationship ${ref.relationshipType}`,
       );
   }
@@ -61,7 +90,7 @@ export async function cloneSubgraph(
   logger?: OGMLogger,
 ): Promise<SubgraphCloneResult> {
   const log = logger ?? NOOP_LOGGER;
-  validateConfig(config);
+  validateConfig(config, 'clone', sourceRootId);
 
   try {
     const cloneResult = await executeApocClone(
@@ -111,7 +140,7 @@ export async function deleteSubgraph(
   logger?: OGMLogger,
 ): Promise<SubgraphDeleteResult> {
   const log = logger ?? NOOP_LOGGER;
-  validateConfig(config);
+  validateConfig(config, 'delete', rootId);
 
   const relFilter = config.ownedRelationships.join('|');
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');

@@ -1156,7 +1156,19 @@ export class WhereCompiler {
     policyContext?: PolicyContextBundle,
   ): WhereResult | null {
     const unionMembers = this.schema.unions!.get(relDef.target)!;
-    const memberClauses: string[] = [];
+    // Per-member compilation artifacts. `_SOME`/`_NONE` only need the
+    // EXISTS-wrapped clause, but `_ALL`/`_SINGLE` (v1.8.7) build their
+    // own quantifier shapes from the raw pattern + inner predicate, so
+    // the pieces stay structured instead of pre-wrapped in EXISTS.
+    const members: {
+      memberKey: string;
+      pattern: string;
+      relVar: string;
+      /** Raw inner predicate ('' when the member contributes none). */
+      inner: string;
+      /** ' CALL {...}' fragment from @cypher projections ('' when none). */
+      preludeFragment: string;
+    }[] = [];
     const allParams: Record<string, unknown> = {};
 
     // depth-only suppression for unused-when-no-policy lint passes; keep
@@ -1197,7 +1209,7 @@ export class WhereCompiler {
       const memberWhere = memberValue as Record<string, unknown> | null;
       const hasUserMemberWhere =
         memberWhere && Object.keys(memberWhere).length > 0;
-      let whereClause = '';
+      let inner = '';
       let preludeFragment = '';
       if (hasUserMemberWhere || targetBundle) {
         const memberCompile = this.compile(
@@ -1208,42 +1220,89 @@ export class WhereCompiler {
           targetBundle ? { policyContext: targetBundle } : undefined,
         );
         if (memberCompile.cypher) {
-          whereClause = ` WHERE ${memberCompile.cypher}`;
+          inner = memberCompile.cypher;
           mergeParams(allParams, memberCompile.params);
         }
         if (memberCompile.preludes && memberCompile.preludes.length > 0)
           preludeFragment = ` ${memberCompile.preludes.join(' ')}`;
       }
 
-      memberClauses.push(
-        `EXISTS { MATCH ${pattern}${preludeFragment}${whereClause} }`,
-      );
+      members.push({ memberKey, pattern, relVar, inner, preludeFragment });
     }
 
-    if (memberClauses.length === 0) return { cypher: '', params: {} };
-
-    // Combine member clauses — for _SOME/_ALL, any member match counts
-    const combined =
-      memberClauses.length === 1
-        ? memberClauses[0]
-        : `(${memberClauses.join(' OR ')})`;
+    if (members.length === 0) return { cypher: '', params: {} };
 
     switch (suffix) {
       case '_SOME':
-        return { cypher: combined, params: allParams };
       case '_NONE':
-      case '_NOT':
+      case '_NOT': {
+        const memberClauses = members.map(
+          (m) =>
+            `EXISTS { MATCH ${m.pattern}${m.preludeFragment}${
+              m.inner ? ` WHERE ${m.inner}` : ''
+            } }`,
+        );
+        const combined =
+          memberClauses.length === 1
+            ? memberClauses[0]
+            : `(${memberClauses.join(' OR ')})`;
         // `_NOT` is the codegen-emitted negation of a union relationship
         // filter — equivalent to `_NONE`.
+        return suffix === '_SOME'
+          ? { cypher: combined, params: allParams }
+          : { cypher: `NOT ${combined}`, params: allParams };
+      }
+      case '_ALL': {
+        // v1.8.7 — pre-1.8.7 `_ALL` returned the same OR-of-EXISTS as
+        // `_SOME`, silently widening the filter. `_ALL` on a union
+        // mirrors the non-union double negation per MENTIONED member: no
+        // related node of that member's type may fail the member's
+        // predicate. Members with an empty predicate are vacuously
+        // satisfied (same as the non-union empty-inner short-circuit),
+        // and union members absent from the input are unconstrained —
+        // consistent with `_SOME`, where only mentioned members count.
+        const failClauses = members
+          .filter((m) => m.inner)
+          .map(
+            (m) =>
+              `NOT EXISTS { MATCH ${m.pattern}${m.preludeFragment} WHERE NOT (${m.inner}) }`,
+          );
+        if (failClauses.length === 0) return { cypher: '', params: {} };
         return {
-          cypher: `NOT ${combined}`,
+          cypher:
+            failClauses.length === 1
+              ? failClauses[0]
+              : `(${failClauses.join(' AND ')})`,
           params: allParams,
         };
-      case '_ALL':
-        return { cypher: combined, params: allParams };
+      }
       case '_SINGLE': {
-        // For union _SINGLE, exactly one member should have exactly one match
-        return { cypher: combined, params: allParams };
+        // v1.8.7 — pre-1.8.7 `_SINGLE` also returned the `_SOME` shape.
+        // Now: exactly ONE related node across all mentioned members
+        // matches its member's predicate. Pattern comprehensions cannot
+        // contain CALL { ... } subqueries, so @cypher-projecting members
+        // (user fields or target policies) are rejected — mirroring the
+        // non-union `_SINGLE` contract.
+        for (const m of members)
+          if (m.preludeFragment)
+            throw new OGMError(
+              `_SINGLE quantifiers do not support filtering by @cypher ` +
+                `fields (union member "${m.memberKey}" of "${relDef.target}"). ` +
+                `Refactor the predicate to _SOME + _NONE, or remove the ` +
+                `@cypher reference.`,
+            );
+        const sizeExprs = members.map(
+          (m) =>
+            `size([${m.relVar} IN [(${m.pattern}${
+              m.inner ? ` WHERE ${m.inner}` : ''
+            } | ${m.relVar})] | ${m.relVar}])`,
+        );
+        return {
+          cypher: `${
+            sizeExprs.length === 1 ? sizeExprs[0] : `(${sizeExprs.join(' + ')})`
+          } = 1`,
+          params: allParams,
+        };
       }
       default:
         return null;

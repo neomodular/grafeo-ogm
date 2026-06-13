@@ -127,6 +127,13 @@ export interface WriteRestrictivePolicy<
   readonly operations: ReadonlyArray<WriteOperation>;
   /** Optional compile-time gate. Skips evaluation entirely when false. */
   readonly appliesWhen?: (ctx: C) => boolean;
+  /**
+   * "WITH CHECK" predicate over the write input. The operation proceeds
+   * ONLY on an explicit `true` return — any other value (including
+   * `undefined`/`null` from expressions like `ctx.canWrite &&
+   * input.tenantId === ctx.tenantId` with an anonymous ctx) rejects with
+   * `PolicyDeniedError`. (v1.8.7 — previously only `false` rejected.)
+   */
   readonly when: (ctx: C, input: I) => boolean;
   readonly name?: string;
 }

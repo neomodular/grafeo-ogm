@@ -838,6 +838,78 @@ describe('WhereCompiler', () => {
       );
     });
 
+    // v1.8.7 — pre-1.8.7, `_ALL` and `_SINGLE` on union targets silently
+    // compiled to the `_SOME` shape (OR-of-EXISTS), returning wrong rows:
+    // a node with five matching chapters passed `_SINGLE`, and a node
+    // with one failing chapter passed `_ALL`. These tests pin the real
+    // quantifier semantics, mirroring the non-union shapes.
+    it('should compile _ALL on union as per-member double negation (v1.8.7)', () => {
+      const result = unionCompiler.compile(
+        { chapters_ALL: { StandardChapter: { value: 10 } } },
+        'n',
+        doseNode,
+      );
+      expect(result.cypher).toBe(
+        'NOT EXISTS { MATCH (n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) WHERE NOT (r0.`value` = $param1) }',
+      );
+      expect(result.params).toEqual({ param1: 10 });
+    });
+
+    it('should AND per-member double negations for _ALL on union with multiple members (v1.8.7)', () => {
+      const result = unionCompiler.compile(
+        {
+          chapters_ALL: {
+            StandardChapter: { value: 10 },
+            RangeChapter: { value: 5 },
+          },
+        },
+        'n',
+        doseNode,
+      );
+      expect(result.cypher).toContain(
+        'NOT EXISTS { MATCH (n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) WHERE NOT (r0.`value` = $param1) }',
+      );
+      expect(result.cypher).toContain(' AND ');
+      expect(result.cypher).toContain(
+        'NOT EXISTS { MATCH (n)-[:`DOSE_IS_OF_TYPE`]->(r2:`RangeChapter`:`ChapterType`) WHERE NOT (r2.`value` = $param3) }',
+      );
+      // The pre-1.8.7 `_SOME` shape must not reappear.
+      expect(result.cypher).not.toContain(' OR ');
+    });
+
+    it('_ALL on union with only empty member predicates is vacuously true (v1.8.7)', () => {
+      const result = unionCompiler.compile(
+        { chapters_ALL: { StandardChapter: {} } },
+        'n',
+        doseNode,
+      );
+      expect(result.cypher).toBe('');
+    });
+
+    it('should compile _SINGLE on union as size() = 1 (v1.8.7)', () => {
+      const result = unionCompiler.compile(
+        { chapters_SINGLE: { StandardChapter: { value: 10 } } },
+        'n',
+        doseNode,
+      );
+      expect(result.cypher).toBe(
+        'size([r0 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) WHERE r0.`value` = $param1 | r0)] | r0]) = 1',
+      );
+      expect(result.params).toEqual({ param1: 10 });
+    });
+
+    it('should sum member sizes for _SINGLE on union with multiple members (v1.8.7)', () => {
+      const result = unionCompiler.compile(
+        { chapters_SINGLE: { StandardChapter: {}, RangeChapter: {} } },
+        'n',
+        doseNode,
+      );
+      expect(result.cypher).toBe(
+        '(size([r0 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) | r0)] | r0]) + ' +
+          'size([r1 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r1:`RangeChapter`:`ChapterType`) | r1)] | r1])) = 1',
+      );
+    });
+
     it('should throw on unknown union member key (security: prevent silent typos)', () => {
       expect(() =>
         unionCompiler.compile(

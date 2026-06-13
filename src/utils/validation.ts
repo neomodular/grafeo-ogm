@@ -13,6 +13,25 @@ export function assertSafeKey(key: string, context: string): void {
     );
 }
 
+/**
+ * Combined guard for user-supplied property names that will be persisted
+ * or matched as node/relationship properties. Blocks prototype-pollution
+ * names (`assertSafeKey`) THEN validates identifier shape
+ * (`assertSafeIdentifier`) — mirroring the WhereCompiler convention.
+ *
+ * v1.8.7 — pre-1.8.7 the MutationCompiler validated identifier shape
+ * only, so properties literally named `__proto__`/`constructor`/
+ * `prototype` (own properties via `JSON.parse` or computed keys) were
+ * accepted and persisted to Neo4j. Reads through the OGM stay safe
+ * (`Object.create(null)` in ResultMapper), but downstream consumers
+ * doing `Object.assign({}, node)` would re-trigger setter semantics on
+ * those names. Mutations now reject them, consistent with WHERE filters.
+ */
+export function assertSafePropertyName(name: string, context: string): void {
+  assertSafeKey(name, context);
+  assertSafeIdentifier(name, context);
+}
+
 /** Regex for valid Cypher identifiers */
 const SAFE_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
