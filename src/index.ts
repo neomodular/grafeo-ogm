@@ -131,3 +131,13 @@ export {
   Neo4jRecordFactory,
   SelectionSetFactory,
 } from './testing';
+
+// CLI configuration — `defineConfig` gives grafeo.config.ts files full type
+// inference. The CLI itself (bin "grafeo") lives in dist/cjs/cli and is NOT
+// re-exported here, so library consumers never load CLI code or jiti.
+export { defineConfig } from './cli/types';
+export type {
+  GrafeoConfig,
+  GrafeoDatabaseConfig,
+  GrafeoVectorIndexConfig,
+} from './cli/types';

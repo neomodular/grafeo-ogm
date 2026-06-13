@@ -27,6 +27,11 @@ import type {
   PolicyContext,
   PolicyDefaults,
 } from './policy/types';
+import {
+  buildNodeFulltextStatements,
+  buildRelationshipFulltextStatements,
+  buildUniqueConstraintStatements,
+} from './schema/index-statements';
 import { parseSchema } from './schema/parser';
 import { SchemaMetadata } from './schema/types';
 import { clearResolveTargetDefCache } from './schema/utils';
@@ -37,7 +42,6 @@ import {
   SubgraphDeleteResult,
 } from './subgraph/types';
 import { deepFreezeSnapshot } from './utils/deep-freeze';
-import { assertSafeIdentifier, assertSafeLabel } from './utils/validation';
 
 const POLICY_SET_VERSION = '1.7.0-beta.0';
 
@@ -85,7 +89,6 @@ export class OGM<
   private interfaceModels: Map<string, InterfaceModel<unknown>> = new Map();
   private modelCompilers!: ModelCompilers;
   private interfaceModelCompilers!: InterfaceModelCompilers;
-  private relPropsToRelType: Map<string, string> = new Map();
   private policyRegistry: ReadonlyMap<string, ReadonlyArray<Policy>>;
   private policyResolver: PolicyResolver;
   private policyDefaults: PolicyDefaults;
@@ -121,12 +124,6 @@ export class OGM<
       selection,
       fulltext,
     };
-
-    // Pre-build reverse lookup: propsTypeName → relationship type
-    for (const [, nodeDef] of this.schema.nodes)
-      for (const [, relDef] of nodeDef.relationships)
-        if (relDef.properties && !this.relPropsToRelType.has(relDef.properties))
-          this.relPropsToRelType.set(relDef.properties, relDef.type);
 
     // Build the policy registry and validate against the schema. An OGM
     // configured WITHOUT policies builds an empty registry — all model
@@ -270,58 +267,22 @@ export class OGM<
   }): Promise<void> {
     if (!options?.options?.create) return;
 
+    // v1.9.0 — statement generation extracted to schema/index-statements.ts
+    // (shared with the CLI's `db push` planner). Statement text and
+    // execution order are byte-identical to the pre-extraction inline
+    // version: node fulltext, relationship fulltext, unique constraints.
+    const statements = [
+      ...buildNodeFulltextStatements(this.schema),
+      ...buildRelationshipFulltextStatements(this.schema),
+      ...buildUniqueConstraintStatements(this.schema),
+    ];
+
     const session = this.config.driver.session();
     try {
-      // Create node fulltext indexes
-      for (const [, nodeDef] of this.schema.nodes)
-        for (const ftIndex of nodeDef.fulltextIndexes)
-          if (ftIndex.fields.length > 0) {
-            assertSafeLabel(nodeDef.label);
-            assertSafeIdentifier(ftIndex.name, 'fulltext index name');
-            for (const f of ftIndex.fields)
-              assertSafeIdentifier(f, 'fulltext index field');
-            const fieldsStr = ftIndex.fields.map((f) => `n.${f}`).join(', ');
-            const cypher = `CREATE FULLTEXT INDEX ${ftIndex.name} IF NOT EXISTS FOR (n:${nodeDef.label}) ON EACH [${fieldsStr}]`;
-            await session.run(cypher);
-          }
-
-      // Create relationship fulltext indexes (from @fulltext on @relationshipProperties)
-      for (const [, relPropsDef] of this.schema.relationshipProperties)
-        for (const ftIndex of relPropsDef.fulltextIndexes ?? []) {
-          assertSafeIdentifier(ftIndex.name, 'fulltext index name');
-          for (const f of ftIndex.fields)
-            assertSafeIdentifier(f, 'fulltext index field');
-          const relType = this.findRelTypeForProps(relPropsDef.typeName);
-          assertSafeIdentifier(relType, 'relationship type');
-          const fieldsStr = ftIndex.fields.map((f) => `r.${f}`).join(', ');
-          const cypher = `CREATE FULLTEXT INDEX ${ftIndex.name} IF NOT EXISTS FOR ()-[r:${relType}]-() ON EACH [${fieldsStr}]`;
-          await session.run(cypher);
-        }
-
-      // Create uniqueness constraints
-      for (const [, nodeDef] of this.schema.nodes)
-        for (const [, prop] of nodeDef.properties)
-          if (prop.isUnique) {
-            assertSafeLabel(nodeDef.label);
-            assertSafeIdentifier(prop.name, 'property name');
-            const constraintName = `${nodeDef.label}_${prop.name}_unique`;
-            assertSafeIdentifier(constraintName, 'constraint name');
-            const cypher = `CREATE CONSTRAINT ${constraintName} IF NOT EXISTS FOR (n:${nodeDef.label}) REQUIRE n.${prop.name} IS UNIQUE`;
-            await session.run(cypher);
-          }
+      for (const statement of statements) await session.run(statement.cypher);
     } finally {
       await session.close();
     }
-  }
-
-  /** Resolve which relationship type uses a given @relationshipProperties type name. */
-  private findRelTypeForProps(propsTypeName: string): string {
-    const relType = this.relPropsToRelType.get(propsTypeName);
-    if (relType) return relType;
-
-    throw new OGMError(
-      `No relationship found using properties type "${propsTypeName}"`,
-    );
   }
 
   model<K extends string & keyof TModelMap>(

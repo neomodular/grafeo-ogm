@@ -21,6 +21,7 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 - [Why grafeo-ogm?](#why-grafeo-ogm)
 - [Common Use Cases](#common-use-cases)
 - [Quick Start](#quick-start)
+- [CLI](#cli)
 - [Features Overview](#features-overview)
 - [Schema Definition](#schema-definition)
 - [Query API](#query-api)
@@ -151,7 +152,15 @@ type Category @node {
 }
 ```
 
-### 2. Initialize the OGM
+### 2. Generate types (recommended)
+
+```bash
+npx grafeo generate
+```
+
+This wraps `generateTypes()` to emit typed models from your SDL — wire them in with `new OGM<ModelMap>(...)` for full inference. See the [CLI](#cli) and [Type Generation](#type-generation) sections. You can skip this and run the OGM untyped, but you forfeit compile-time safety.
+
+### 3. Initialize the OGM
 
 ```typescript
 import { OGM } from 'grafeo-ogm';
@@ -167,7 +176,7 @@ const typeDefs = fs.readFileSync('./schema.graphql', 'utf-8');
 const ogm = new OGM({ typeDefs, driver });
 ```
 
-### 3. Basic CRUD
+### 4. Basic CRUD
 
 ```typescript
 const Book = ogm.model('Book');
@@ -201,7 +210,7 @@ await Book.update({
 await Book.delete({ where: { isbn: '978-1491930892' } });
 ```
 
-### 4. Transactions
+### 5. Transactions
 
 ```typescript
 await ogm.$transaction(async (ctx) => {
@@ -213,21 +222,118 @@ await ogm.$transaction(async (ctx) => {
 
 ---
 
-## Beta features
+## CLI
 
-The current beta release exposes one new feature behind opt-in config:
+grafeo-ogm ships a `grafeo` binary (installed with the package — no global install needed). Run it with `npx grafeo <command>`. The CLI is plumbing over the same library machinery you can call programmatically: `generate` wraps `generateTypes()`, and `db push` reuses the constraint/index logic behind `assertIndexesAndConstraints()`.
 
-- **Node-Level Security (NLS)** — a Postgres-RLS-style filter layer that compiles into the existing WHERE pipeline. See **[Advanced Features → Node-Level Security (Beta)](#node-level-security-beta)**.
+| Command | Purpose |
+|---|---|
+| `grafeo generate` | Generate TypeScript types from your SDL — one-shot, `--watch`, or `--verify` CI gate |
+| `grafeo db push` | Diff SDL-declared constraints/indexes against the live database and apply them |
+| `grafeo db seed` | Run your seed script with a constructed, connected OGM |
 
-The beta is purely additive: an OGM constructed without the new `policies` option emits **byte-identical Cypher** to v1.6.0. Install with:
+### Configuration
 
-```bash
-npm install grafeo-ogm@beta
-# or
-pnpm add grafeo-ogm@beta
+All commands read `grafeo.config.ts` (or `.js` / `.json`) from the working directory — first found wins. Command-line flags override config values. `defineConfig` gives full type inference:
+
+```typescript
+// grafeo.config.ts
+import { defineConfig } from 'grafeo-ogm';
+
+export default defineConfig({
+  schema: './schema.graphql',          // default: ./schema.graphql
+  out: './src/generated/ogm-types.ts', // default: ./grafeo.generated.ts
+  // generate: forwarded to generateTypes(). Set packageName ONLY if you
+  // installed grafeo-ogm under an npm alias, e.g. { packageName: '@myorg/ogm' }
+  database: {
+    uri: process.env.NEO4J_URI,
+    username: process.env.NEO4J_USERNAME,
+    // password: from config or NEO4J_PASSWORD — never a CLI flag (see below)
+  },
+  seed: './scripts/seed.ts',
+  vectorIndexes: {
+    // @vector SDL carries no dimensions; db push reads them here, keyed by index name
+    BookEmbedding: { dimensions: 1536, similarity: 'cosine' },
+  },
+});
 ```
 
-The shape of the public API is settled, but the beta window is for collecting integration feedback. Minor adjustments may land before `1.7.0` final.
+**Database connection** resolves per setting in precedence order: CLI flag (`--uri`, `--username`, `--database`) > config `database` block > environment (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`). The **password is never accepted as a CLI flag** — argv leaks through process listings and shell history, so it must come from `NEO4J_PASSWORD` or the config file.
+
+> **Config and seed files run as trusted code.** `grafeo.config.ts` and your seed script are executed in-process (via [jiti](https://github.com/unjs/jiti)) with your database credentials — the same trust model as Prisma/Drizzle. Only run `grafeo` in a directory whose config and seed files you control.
+
+### `grafeo generate`
+
+Compiles your SDL to TypeScript types (wraps `generateTypes()` — see [Type Generation](#type-generation) for the programmatic API and the full option list).
+
+```bash
+npx grafeo generate          # one-shot
+npx grafeo generate --watch  # regenerate on schema change
+npx grafeo generate --verify # CI gate: exit 1 if the file on disk is stale
+```
+
+| Flag | Description |
+|---|---|
+| `--schema <path>` | SDL path (overrides config; default `./schema.graphql`) |
+| `--out <path>` | Output path (default `./grafeo.generated.ts`) |
+| `--watch` | Debounced regeneration on change; a failed parse prints the error and keeps watching |
+| `--verify` | Generate in memory, byte-compare against the file on disk, write nothing, exit 1 on drift |
+| `--poll <ms>` | Use polling instead of `fs.watch` (fallback where native watching misfires) |
+
+`--verify` is the CI staleness gate: commit your generated types, then run `grafeo generate --verify` in CI to fail the build if the schema changed without a regeneration.
+
+### `grafeo db push`
+
+Synchronizes the **constraints and indexes** your SDL declares (`@id`/`@unique` → unique constraints, `@fulltext` → fulltext indexes, `@vector` → vector indexes) with the live database. Constraints and indexes only — **not data**. (`db push` is deliberately scoped; use a dedicated migration tool for data.)
+
+```bash
+npx grafeo db push --dry-run          # preview the plan — DO THIS FIRST
+npx grafeo db push                    # apply (additive: creates only what's missing)
+npx grafeo db push --force-drop --yes # also drop orphaned grafeo-managed items
+```
+
+`db push` introspects `SHOW CONSTRAINTS` / `SHOW INDEXES`, diffs against your SDL, and prints a plan in four buckets:
+
+- **create** — declared in SDL, missing in the database
+- **in sync** — already present
+- **orphans** — grafeo-named (`{Label}_{prop}_unique`) constraints no longer in your SDL; **reported and kept** unless you pass `--force-drop`
+- **unmanaged** — constraints/indexes that don't follow grafeo's naming convention (hand-created DBA indexes, etc.); **never touched, never counted as drift**
+
+It is **additive by default** and **idempotent** — a second run with no schema change is a no-op. Dropping orphans is destructive and gated: `--force-drop` lists the exact drops (shown in `--dry-run` too) and requires interactive confirmation, or `--yes` in non-interactive sessions like CI.
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Print the full plan (including the exact Cypher, drops included) and exit without writing |
+| `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes |
+| `--yes` | Confirm destructive drops non-interactively (required with `--force-drop` in CI) |
+| `--schema <path>`, `--uri`, `--username`, `--database` | Schema path and connection overrides |
+
+> **Vector indexes** declare no dimensions in the SDL (the `@vector` directive only names the index and its embedding property), but Neo4j requires them at creation time. Supply them in `vectorIndexes` (keyed by index name) in your config. A `@vector` index without configured dimensions is reported and skipped — never silently created or dropped.
+
+### `grafeo db seed`
+
+Runs your seed script with a constructed, connected `OGM`. It resolves the entry point from config `seed`, then `./seed.ts`, then `./seed.js`. The module's default export receives the OGM; the CLI awaits it and **always closes the driver**, even if the seed throws.
+
+```typescript
+// seed.ts
+import type { OGM } from 'grafeo-ogm';
+
+export default async function seed(ogm: OGM) {
+  const Book = ogm.model('Book');
+  // Prefer upsert over create so repeated seeds converge instead of duplicating data.
+  await Book.upsert({
+    where: { id: '1' },
+    create: { id: '1', title: 'Dune' },
+    update: { title: 'Dune' },
+  });
+}
+```
+
+```bash
+npx grafeo db seed
+```
+
+grafeo does not enforce idempotency — use `upsert` so re-running the seed is safe. Connection and schema resolve exactly as for `db push`.
 
 ---
 
@@ -834,7 +940,7 @@ const deleteResult = await deleteSubgraph(
 
 ### Computed Fields with @cypher
 
-The `@cypher` directive declares a field whose value is produced by a custom Cypher statement at query time. As of v1.6.0, scalar `@cypher` fields are resolved in three scopes — `select` / `selectionSet`, `where`, and `options.sort` — so you can project, filter, and order by them just like stored properties. Pre-1.6.0, references in `select` and `where` silently returned `NULL`.
+The `@cypher` directive declares a field whose value is produced by a custom Cypher statement at query time. Scalar `@cypher` fields are resolved in three scopes — `select` / `selectionSet`, `where`, and `options.sort` — so you can project, filter, and order by them just like stored properties.
 
 #### Declaration
 
@@ -938,11 +1044,9 @@ These are not OGM bugs — they are Cypher-language constraints. Pattern compreh
 
 Each scope (`where`, `select`, sort) emits its own `CALL { WITH n; WITH n AS this; <statement> }` block per `@cypher` field reference. A query that references the same `@cypher` field in all three scopes emits three `CALL` blocks. This is functionally correct and parameter-isolated, but worth knowing if your statement is expensive (multi-hop traversals, aggregations over large fan-outs). For frequently-accessed computed values, consider materializing as a stored property updated on write instead.
 
-### Node-Level Security (Beta)
+### Node-Level Security
 
-> **Beta — install with `npm install grafeo-ogm@beta`.**
-
-Node-Level Security (NLS) is a per-request filter layer that compiles into the existing WHERE pipeline. Policies return `<Node>Where` partials, so every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available inside policies — no new DSL.
+Node-Level Security (NLS) is a per-request filter layer that compiles into the existing WHERE pipeline. It is opt-in: an OGM constructed without the `policies` option emits byte-identical Cypher to a no-policy OGM. Policies return `<Node>Where` partials, so every operator, quantifier, connection filter, and nested traversal already supported by `WhereCompiler` is automatically available inside policies — no new DSL.
 
 #### Declaration
 
@@ -1094,14 +1198,13 @@ When `policies` is configured, every OGM-emitted query attaches transaction meta
 
 Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is intentionally key-only — no ctx values are leaked.
 
-#### Beta limits
+#### Limitations
 
 - **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal.
-- **`upsert`** evaluates create- and update-side policies at the application layer (MERGE has no WHERE). Documented limit; full MERGE-aware enforcement is deferred to v1.7.1.
-- **Restrictives are split into read-side and write-side flavors.** A restrictive's `operations` array determines which `when` signature applies. Read-side ops (`read|delete|aggregate|count`) → `when(ctx)` returns a where-partial or boolean. Write-side ops (`create|update`) → `when(ctx, input)` returns a boolean only. Mixed arrays (e.g. `['read', 'create']`) are rejected at construction time — split into two restrictives. Each flavor is invoked exactly once per query (read-side at compile, write-side at the application layer); the dual-invocation contract bug from earlier beta iterations is fixed. Use `isReadRestrictive` / `isWriteRestrictive` if you need to inspect a policy at runtime.
+- **`upsert`** evaluates create- and update-side policies at the application layer (MERGE has no WHERE). Documented limit; full MERGE-aware enforcement is not yet implemented.
+- **Restrictives are split into read-side and write-side flavors.** A restrictive's `operations` array determines which `when` signature applies. Read-side ops (`read|delete|aggregate|count`) → `when(ctx)` returns a where-partial or boolean. Write-side ops (`create|update`) → `when(ctx, input)` returns a boolean only. Mixed arrays (e.g. `['read', 'create']`) are rejected at construction time — split into two restrictives. Each flavor is invoked exactly once per query (read-side at compile, write-side at the application layer). Use `isReadRestrictive` / `isWriteRestrictive` if you need to inspect a policy at runtime.
 - **InterfaceModel CASE-per-label fallback.** Implementers without a registered policy fall back to interface-level enforcement on their branch. The OGM emits a `logger.warn` at construction time when an interface has policies and one of its implementers does not — silence the warning by registering an explicit policy on each implementer.
-- **AsyncLocalStorage** opt-in is deferred to v1.7.1. Beta is explicit `withContext()` only — create one wrapper per request, discard after.
-- **Live Neo4j integration tests are not part of the beta.** Mock-driver coverage is extensive but a real-DB suite is a `1.7.0` final blocker.
+- **No AsyncLocalStorage integration.** Context is supplied via explicit `withContext()` only — create one wrapper per request, discard after.
 
 ### Raw Cypher
 
@@ -1221,7 +1324,9 @@ type Article @node @vector(indexes: [
 
 ### Creating the index in Neo4j
 
-grafeo-ogm does **not** create vector indexes for you in this release. Run the `CREATE VECTOR INDEX` Cypher yourself as part of your migration:
+The `grafeo db push` CLI creates `@vector` indexes for you — the directive carries no dimensions, so supply them in your config's `vectorIndexes` map (keyed by index name) and `db push` issues the `CREATE VECTOR INDEX`. See the [CLI → `grafeo db push`](#grafeo-db-push) section. The runtime `assertIndexesAndConstraints()` does **not** create vector indexes (only fulltext indexes and unique constraints).
+
+You can also run the Cypher yourself as part of a migration:
 
 ```cypher
 CREATE VECTOR INDEX article_content_idx FOR (n:Article) ON n.embedding
@@ -1323,7 +1428,7 @@ The following were intentionally left out of this release:
 - **`@embedded(from:, using:)` auto-write directive** — automatic embedding on create / update. Requires a pluggable embedder port and peer-dependency adapters.
 - **Third-party embedder SDKs** (`grafeo-ogm/embedders/openai`, etc.) — tracked for a future release with optional peer dependencies.
 - **Relationship-level `@vector` indexes** — the current Neo4j / official spec only supports node vector indexes.
-- **Automatic index creation via `assertIndexesAndConstraints`** — you must run `CREATE VECTOR INDEX` yourself.
+- **Vector index creation via the runtime `assertIndexesAndConstraints`** — that method covers fulltext indexes and unique constraints only. Create vector indexes with the `grafeo db push` CLI (see [CLI](#cli)) or run `CREATE VECTOR INDEX` yourself.
 
 ---
 
@@ -1588,7 +1693,7 @@ Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragme
 
 ### Is grafeo-ogm production-ready?
 
-Yes. The library has 1,093 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
+Yes. The library has over 1,400 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, the CLI, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Does grafeo-ogm work with Neo4j Aura?
 
@@ -1620,7 +1725,7 @@ Negligible. grafeo-ogm compiles each query once per shape (selection sets are ca
 
 ### Is there a CLI / migration tool / studio?
 
-Not yet. The library focuses on the runtime API and type generation. Schema migrations are intentionally out of scope — Neo4j's labels and properties are flexible enough that you typically migrate via Cypher scripts (`MATCH (n:OldLabel) SET n:NewLabel REMOVE n:OldLabel`) which you can run via `ogm.$executeRaw(...)`.
+There is a CLI — the `grafeo` binary ships with the package (`grafeo generate`, `grafeo db push`, `grafeo db seed`). See the [CLI](#cli) section. There is no studio. Data migrations are intentionally out of scope: `db push` syncs SDL-declared constraints and indexes only, never data. Neo4j's labels and properties are flexible enough that you typically migrate data via Cypher scripts (`MATCH (n:OldLabel) SET n:NewLabel REMOVE n:OldLabel`) which you can run via `ogm.$executeRaw(...)`.
 
 ### How do I report a bug or request a feature?
 
