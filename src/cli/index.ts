@@ -6,6 +6,7 @@ import type { CliIO } from './types';
 const HELP = `grafeo — CLI for grafeo-ogm
 
 Usage:
+  grafeo init     [--schema <path>] [--out <path>] [--seed] [--fresh] [--yes] [--force]
   grafeo generate [--schema <path>] [--out <path>] [--watch] [--verify] [--poll <ms>]
   grafeo db push  [--schema <path>] [--dry-run] [--force-drop] [--yes]
                   [--uri <bolt-uri>] [--username <user>] [--database <name>]
@@ -23,6 +24,21 @@ Configuration:
 
 /** Focused per-command help, shown for \`grafeo <command> --help\`. */
 const COMMAND_HELP: Record<string, string> = {
+  init: `grafeo init — scaffold (or auto-detect) a grafeo project
+
+Usage:
+  grafeo init [--schema <path>] [--out <path>] [--seed] [--fresh] [--yes] [--force]
+
+  Detects an existing grafeo schema + generated types and wires grafeo.config.ts
+  to them. With nothing to detect (or --fresh), scaffolds a starter schema
+  (the Neo4j movie example) and config.
+
+  --schema <path>  schema path (skip detection/prompt)
+  --out <path>     generated-types output path
+  --seed           also scaffold a seed.ts stub
+  --fresh          ignore any detected setup and scaffold a new project
+  --yes            non-interactive: accept detected values / defaults, no prompts
+  --force          overwrite an existing grafeo.config.ts / seed.ts`,
   generate: `grafeo generate — generate TypeScript types from your SDL
 
 Usage:
@@ -112,6 +128,11 @@ export async function main(argv: string[], io: CliIO): Promise<number> {
     }
 
     // Commands load lazily so `generate` never pays for neo4j-driver.
+    if (command === 'init') {
+      const { runInit } = await import('./commands/init');
+      return await runInit(commandArgs, io);
+    }
+
     if (command === 'generate') {
       const { runGenerate } = await import('./commands/generate');
       return await runGenerate(commandArgs, io);
@@ -159,6 +180,20 @@ if (typeof require !== 'undefined' && require.main === module) {
       try {
         const answer = await rl.question(`${question} [y/N] `);
         return /^y(es)?$/i.test(answer.trim());
+      } finally {
+        rl.close();
+      }
+    },
+    // Free-text prompt for `grafeo init` (path entry, candidate selection).
+    prompt: async (question, defaultValue) => {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      try {
+        const suffix = defaultValue ? ` (${defaultValue})` : '';
+        const answer = (await rl.question(`${question}${suffix} `)).trim();
+        return answer || defaultValue || '';
       } finally {
         rl.close();
       }

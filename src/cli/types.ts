@@ -70,6 +70,12 @@ export interface CliIO {
   /** Prompt for yes/no confirmation (only called when interactive). */
   confirm?(question: string): Promise<boolean>;
   /**
+   * Prompt for a free-text answer (only called when interactive). Returns the
+   * trimmed input, or `defaultValue` when the user enters nothing. Used by
+   * `grafeo init` for path entry and detected-vs-fresh selection.
+   */
+  prompt?(question: string, defaultValue?: string): Promise<string>;
+  /**
    * Cooperative shutdown for long-running commands (`generate --watch`).
    * The bin runs without one (Ctrl-C kills the process); tests abort it
    * to end the watch loop deterministically.
