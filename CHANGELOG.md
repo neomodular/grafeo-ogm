@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.10.1 (2026-06-13) — neo4j-driver 6 support
+
+> grafeo-ogm now declares compatibility with **neo4j-driver 6** alongside 5 — the peer range widens to `^5.0.0 || ^6.0.0`. **No code or API change.** grafeo never used the accessors driver 6 removed (`Node.identity` / `Relationship.start` / `Relationship.end`), and only touches stable core APIs (`neo4j.driver`, `auth`, `int`, `isInt`, `types.*`), so the full test suite — and the TypeScript type-check — passes unchanged against driver `6.1.0`. v6 users no longer get a spurious peer-dependency warning on install. (Verified at the unit + type level; the session/wire API grafeo uses is stable across the 5→6 boundary.)
+
+---
+
 ## 1.10.0 (2026-06-13) — 🚀 `grafeo init`
 
 > **The fastest way into grafeo.** `grafeo init` sets a project up in one step — and for the *existing* grafeo user adopting the CLI, it auto-wires itself: it finds your schema and your generated types and writes a ready `grafeo.config.ts` pointing at them. Greenfield? It scaffolds a starter schema (the Neo4j movie graph) and config. Either way you get an npm `generate` script. Interactive by default, fully non-interactive (`--yes`) for CI, and non-destructive throughout.
