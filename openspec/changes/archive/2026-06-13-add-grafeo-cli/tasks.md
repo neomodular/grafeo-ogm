@@ -29,7 +29,7 @@
 
 ## 5. Packaging, docs, CI
 
-- [ ] 5.1 Verify the bin works from a packed tarball (`pnpm pack` + `npx` smoke test in a temp project) for both fresh and existing projects
-- [ ] 5.2 README: new "CLI" section, quickstart switched to `npx grafeo generate`, `db push` dry-run-first guidance, seed convention; help text finalized
-- [ ] 5.3 Add `grafeo generate --verify` self-test to repository CI using the examples/ schema
-- [ ] 5.4 Full suite + lint + format gates green (DONE — 1462 tests + eslint + prettier all green); CHANGELOG entry drafted for v1.9.0 (pending)
+- [x] 5.1 Verify the bin works from a packed tarball (`pnpm pack` + `npx` smoke test in a temp project) — fresh-project install of grafeo-ogm-1.9.0.tgz; `grafeo --help` and `grafeo generate` run from the installed bin (jiti pulled in, neo4j-driver not needed)
+- [x] 5.2 README: new "CLI" section, quickstart switched to `npx grafeo generate`, `db push` dry-run-first guidance, seed convention; stale pre-1.7.0 beta cruft removed
+- [x] 5.3 Add `grafeo generate --verify` self-test to repository CI using the examples/ schema (`verify:examples` script + ci.yml step; committed baseline examples/grafeo.generated.ts; fixed invalid `@node implements` ordering in examples/schema.graphql)
+- [x] 5.4 Full suite (1473) + lint + format gates green; CHANGELOG 1.9.0 entry written

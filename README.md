@@ -1187,7 +1187,7 @@ When `policies` is configured, every OGM-emitted query attaches transaction meta
 
 ```typescript
 {
-  ogmPolicySetVersion: '1.7.0-beta.0',
+  ogmPolicySetVersion: '1.7.0',
   ctxFingerprint: '<sha256 of sorted ctx KEYS — never values>',
   modelType: 'Book',
   operation: 'read',

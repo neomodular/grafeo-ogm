@@ -9,7 +9,7 @@ interface Entity @node {
   name: String!
 }
 
-type Author @node implements Entity {
+type Author implements Entity @node {
   id: ID! @id @unique
   name: String!
   bio: String
@@ -44,7 +44,7 @@ type Review @node {
   book: Book! @relationship(type: "HAS_REVIEW", direction: IN)
 }
 
-type Publisher @node implements Entity {
+type Publisher implements Entity @node {
   id: ID! @id @unique
   name: String!
   website: String

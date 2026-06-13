@@ -179,7 +179,7 @@ describe('Audit metadata', () => {
     expect(fp).toMatch(/^[0-9a-f]{16}$/);
   });
 
-  it('ogmPolicySetVersion is set to 1.7.0-beta.0', async () => {
+  it('ogmPolicySetVersion is set to 1.7.0', async () => {
     const recorded: Recorded[] = [];
     const ogm = new OGM({
       typeDefs: schema,
@@ -189,9 +189,7 @@ describe('Audit metadata', () => {
       },
     });
     await ogm.withContext({}).model('Book').find({});
-    expect(recorded[0].config?.metadata?.ogmPolicySetVersion).toBe(
-      '1.7.0-beta.0',
-    );
+    expect(recorded[0].config?.metadata?.ogmPolicySetVersion).toBe('1.7.0');
   });
 
   it('operation tag matches the call', async () => {

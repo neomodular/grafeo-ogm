@@ -43,7 +43,7 @@ import {
 } from './subgraph/types';
 import { deepFreezeSnapshot } from './utils/deep-freeze';
 
-const POLICY_SET_VERSION = '1.7.0-beta.0';
+const POLICY_SET_VERSION = '1.7.0';
 
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,

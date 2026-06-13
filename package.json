@@ -88,6 +88,7 @@
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "verify:examples": "node dist/cjs/cli/index.js generate --verify --schema examples/schema.graphql --out examples/grafeo.generated.ts",
     "bench": "ts-node --project bench/tsconfig.json bench/index.ts",
     "prepublishOnly": "pnpm run build"
   },

@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.9.0 (2026-06-13) — 🚀 the `grafeo` CLI
+
+> **The first developer-facing command-line tool.** Until now grafeo-ogm was a library you imported; the schema-to-types step, the constraint/index provisioning, and seeding were all things you wired up by hand. `1.9.0` ships `grafeo` — a thin, lazy-loaded CLI over machinery the library already had. Three commands: `grafeo generate` (codegen, including a CI staleness gate), `grafeo db push` (declarative constraint/index sync against a live database), and `grafeo db seed` (idempotent project seeding). Config lives in a typed `grafeo.config.ts`. **The CLI adds exactly one runtime dependency (`jiti`), and importing the library doesn't pull it in.** No library API surface changed; existing consumers upgrade transparently.
+
+### ✨ `grafeo generate` — codegen with a CI staleness gate
+
+Wraps the existing `generateTypes()` so the type-emit step is no longer bespoke per project. Three modes:
+
+- **One-shot** (default) — read schema, emit the TypeScript file, exit.
+- **`--watch`** — re-emit on schema change via a debounced `fs.watch`, with a `--poll <ms>` fallback for filesystems where native watch events are unreliable (network mounts, some container bind-mounts).
+- **`--verify`** — emit into memory and byte-compare against the on-disk file. Writes **nothing**; exits `1` on drift. This is the CI gate: a build fails if a committed types file has fallen behind its schema, the same way a `git diff --exit-code` after codegen would, but without a working-tree mutation.
+
+### ✨ `grafeo db push` — declarative constraint & index sync
+
+Diffs the constraints and indexes **declared in your SDL** against what's actually live in the database, then reconciles them. Declarations are derived from directives: `@id`/`@unique` → unique constraints, `@fulltext` → fulltext indexes, `@vector` → vector indexes. The live state is read via `SHOW CONSTRAINTS` / `SHOW INDEXES`.
+
+The planner sorts everything into four buckets and prints them before touching anything:
+
+- **create** — declared in SDL, missing in the DB.
+- **in-sync** — declared and already present.
+- **orphans** — managed-looking artifacts present in the DB but no longer declared in SDL (candidates for removal).
+- **unmanaged** — DB artifacts outside grafeo's naming convention, left strictly untouched (hand-rolled DBA constraints, other tools' indexes).
+
+`push` is **additive-by-default and idempotent** — re-running it is a no-op once in sync, and it never drops anything on the happy path. Destructive orphan drops are gated behind `--force-drop` **and** `--yes` (or an interactive confirmation); `--dry-run` prints the plan and exits without executing. Orphan detection is scoped by naming convention, so DBA-created constraints never even enter the orphan bucket — they land in *unmanaged* and are left alone.
+
+### ✨ `grafeo db seed` — idempotent project seeding
+
+Runs your project's seed script — resolved as config `seed` → `./seed.ts` → `./seed.js` — handing it a fully constructed, **already-connected** OGM so the script doesn't re-derive connection details. The driver is **always closed**, including when the seed script throws, so a failed seed never leaks a live connection. The docs promote `upsert` for seed data specifically because it's idempotent: re-seeding a populated database converges instead of duplicating.
+
+### ✨ Config: `grafeo.config.ts` and connection precedence
+
+Configuration loads from `grafeo.config.ts` / `.js` / `.json`, transpiled on the fly via `jiti` (the single new runtime dependency). A `defineConfig` export gives you full type inference on the config object. Connection settings resolve by precedence: **explicit flag > config file > `NEO4J_*` environment variables**.
+
+One deliberate omission: **the password is never accepted as a CLI flag.** A password passed on the command line leaks into process listings (`ps`), shell history, and CI logs — so it must come from config or the environment. This is a security constraint, not an oversight.
+
+### Lazy loading — `generate` doesn't touch the driver
+
+Commands are loaded lazily so the cheap path stays cheap. `grafeo generate` does pure codegen and **never loads `neo4j-driver`** — only `db push` / `db seed` pull in the driver, and only when invoked. Symmetrically, importing the library from application code does **not** pull in `jiti`; the config loader lives behind the CLI entry point. No bloat leaks in either direction.
+
+### Internal — single source of truth for constraint/index Cypher (no behavior change)
+
+The Cypher that creates constraints and indexes was previously emitted inside `OGM.assertIndexesAndConstraints()`. `db push`'s planner needs the *same* statements to diff against the live DB, so that generation was extracted into one module — `src/schema/index-statements.ts` — now shared by both `assertIndexesAndConstraints()` and the planner. The emitted statement text and ordering are **byte-identical** to 1.8.7; this is a pure refactor with no behavioral effect on existing OGM users.
+
+### SECURITY — orphan `DROP CONSTRAINT` re-validates the introspected name
+
+The orphan-drop path takes a constraint *name read back from the live database* and puts it into a `DROP CONSTRAINT` statement. Constraint names are normally grafeo-generated and safe, but a live database can carry a name with unsafe characters (created by another tool, or maliciously). Before any introspected name enters Cypher, it is now re-validated through `assertSafeIdentifier`. A name that fails validation is **demoted to *unmanaged*** — it is never dropped, and the destructive path never runs against an untrusted identifier. Defense in depth: the drop path treats DB-sourced names with the same suspicion as user input.
+
+### Minor — NLS audit metadata version bump
+
+NLS audit metadata now emits `ogmPolicySetVersion: "1.7.0"`, dropping the stale `-beta.0` pre-release suffix it had been carrying. The policy format reached GA in 1.7.0 and is unchanged — this only corrects the reported version string. If you assert on the exact audit-metadata value, update your expectation from `1.7.0-beta.0` to `1.7.0`.
+
+### Tests
+
+New CLI coverage for all three commands and the config loader: `generate` one-shot/`--watch`/`--verify`-drift, the four-bucket `db push` planner with additive/idempotent/`--dry-run`/`--force-drop` paths and the unsafe-name demotion, `db seed` driver-always-closed-on-failure, and connection precedence. The `index-statements.ts` extraction is pinned by byte-identical statement assertions against the prior `assertIndexesAndConstraints()` output. Full suite green; lint, format, and type-check clean.
+
+---
+
 ## 1.8.7 (2026-06-12) — 🚨 SECURITY + correctness
 
 > **Three HIGH correctness bugs, two subgraph guards, and three security hardenings** from the post-1.8.6 comprehensive audit. Two of the three HIGH bugs are "fixed one site, missed the sibling" regressions of earlier fixes (v1.8.1 and v1.8.3) — sibling-site sweeps are now part of the fix checklist. Upgrade if you use `withContext`, nested relationship updates, union relationship filters, write restrictives, or subgraph operations.
