@@ -235,4 +235,16 @@ describe('grafeo init (cli-init spec)', () => {
     // …never as the raw single-quoted break-out form.
     expect(config).not.toContain(`schema: './${evil}.graphql'`);
   });
+
+  it('shows the logo splash in an interactive terminal', async () => {
+    const io = makeIO({ interactive: true });
+    await runInit([], io);
+    expect(io.stdout.join('\n')).toContain('type-safe ogm for neo4j');
+  });
+
+  it('omits the splash in a non-interactive run (no stdout noise)', async () => {
+    const io = makeIO(); // interactive undefined
+    await runInit([], io);
+    expect(io.stdout.join('\n')).not.toContain('type-safe ogm for neo4j');
+  });
 });

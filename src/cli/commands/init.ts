@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { parseArgs } from 'node:util';
 import { detectProject } from '../detect';
 import { CliError } from '../errors';
+import { printSplash } from '../logo';
 import type { CliIO } from '../types';
 
 interface InitFlags {
@@ -162,6 +163,8 @@ async function chooseSchema(
 
 export async function runInit(argv: string[], io: CliIO): Promise<number> {
   const flags = parseInitFlags(argv);
+  // Decorative wordmark — interactive TTY only, no-op in CI/piped (see logo.ts).
+  printSplash(io);
   const yes = flags.yes === true;
   const force = flags.force === true;
   const canPrompt = io.interactive === true && !yes;
