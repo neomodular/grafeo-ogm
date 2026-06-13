@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.10.0 (2026-06-13) — 🚀 `grafeo init`
+
+> **The fastest way into grafeo.** `grafeo init` sets a project up in one step — and for the *existing* grafeo user adopting the CLI, it auto-wires itself: it finds your schema and your generated types and writes a ready `grafeo.config.ts` pointing at them. Greenfield? It scaffolds a starter schema (the Neo4j movie graph) and config. Either way you get an npm `generate` script. Interactive by default, fully non-interactive (`--yes`) for CI, and non-destructive throughout.
+
+### ✨ `grafeo init` — scaffold, or auto-detect an existing project
+
+- **Autodetection.** In a project that already uses grafeo, `init` locates the SDL schema (by its `@node`/`@relationship` directives — a bare GraphQL file is *not* mistaken for it) and a previously generated types file (by the generator's header line), and pre-fills `grafeo.config.ts` with those paths. Multiple schema candidates → it asks which.
+- **Greenfield scaffold.** With nothing to detect (or `--fresh`), it writes a starter `schema.graphql` — the classic Neo4j movie example (`Movie`/`Person`, `ACTED_IN`/`DIRECTED`) — and a config.
+- **npm script.** Adds `"generate": "grafeo generate"` to `package.json` (an existing `generate` script is preserved, never clobbered).
+- **Optional seed.** `--seed` scaffolds an upsert-based `seed.ts` stub.
+- **Non-destructive.** Never overwrites an existing config/schema/seed without `--force` (or an interactive confirmation); re-running `init` is safe.
+- **No secrets, no new deps.** Connection settings reference `NEO4J_*` env vars (never prompted); prompts use `node:readline/promises`. The runtime footprint is unchanged.
+
+Flags: `--schema`, `--out`, `--seed`, `--fresh`, `--yes`, `--force`. The README quickstart now leads with `npx grafeo init`.
+
+### Tests
+
+New `detect` + `init` coverage (14 cases): autodetection (single/multiple/none, directive-gated, marker-anchored), greenfield scaffold, `--fresh`, non-destructive config/seed writes, npm-script add/preserve, non-interactive `--yes`, no-secret-prompt, and a regression test that a quote-bearing path is safely escaped into the config (no injection). Full suite green; lint, format, type-check clean.
+
+---
+
 ## 1.9.1 (2026-06-13) — 🩹 `grafeo generate` formatting DX
 
 > **A first-run papercut from the 1.9.0 CLI.** Prettier is a *dev* dependency (kept out of the runtime footprint on purpose), so a consumer who runs `grafeo generate` without prettier installed got a terse `Prettier formatting failed; output written without formatting.` — accurate, but unhelpful. The output was always valid TypeScript; only the message was poor. `1.9.1` makes that path friendly and honest.

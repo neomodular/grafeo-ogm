@@ -15,5 +15,5 @@
 
 ## 3. Packaging, docs, CI
 
-- [ ] 3.1 README: lead the quickstart with `npx grafeo init`; document detection behavior and flags
-- [ ] 3.2 CHANGELOG entry; full suite + lint + format gates green
+- [x] 3.1 README: lead the quickstart with `npx grafeo init`; document detection behavior and flags
+- [x] 3.2 CHANGELOG entry; full suite + lint + format gates green

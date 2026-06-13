@@ -128,6 +128,8 @@ yarn add grafeo-ogm neo4j-driver graphql
 
 ### 1. Define your schema
 
+> **Fastest start:** `npx grafeo init` scaffolds a starter `schema.graphql` + `grafeo.config.ts` for you — and auto-detects an existing setup. See [CLI → `grafeo init`](#cli). Prefer to do it by hand? Define a `schema.graphql`:
+
 ```graphql
 # schema.graphql
 type Book @node
@@ -228,6 +230,7 @@ grafeo-ogm ships a `grafeo` binary (installed with the package — no global ins
 
 | Command | Purpose |
 |---|---|
+| `grafeo init` | Scaffold a project — or auto-detect an existing one — wiring config, schema, and an npm script |
 | `grafeo generate` | Generate TypeScript types from your SDL — one-shot, `--watch`, or `--verify` CI gate |
 | `grafeo db push` | Diff SDL-declared constraints/indexes against the live database and apply them |
 | `grafeo db seed` | Run your seed script with a constructed, connected OGM |
@@ -261,6 +264,26 @@ export default defineConfig({
 **Database connection** resolves per setting in precedence order: CLI flag (`--uri`, `--username`, `--database`) > config `database` block > environment (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`). The **password is never accepted as a CLI flag** — argv leaks through process listings and shell history, so it must come from `NEO4J_PASSWORD` or the config file.
 
 > **Config and seed files run as trusted code.** `grafeo.config.ts` and your seed script are executed in-process (via [jiti](https://github.com/unjs/jiti)) with your database credentials — the same trust model as Prisma/Drizzle. Only run `grafeo` in a directory whose config and seed files you control.
+
+### `grafeo init`
+
+Sets up a project in one step. In an **existing** grafeo project it auto-detects your schema (by its `@node`/`@relationship` directives) and a previously generated types file (by the generator's header marker), and writes a `grafeo.config.ts` wired to them. With **nothing to detect** (or `--fresh`), it scaffolds a starter `schema.graphql` — the Neo4j movie example — plus the config. Either way it adds a `"generate": "grafeo generate"` npm script.
+
+```bash
+npx grafeo init          # interactive: detect or scaffold, confirm the paths
+npx grafeo init --yes    # non-interactive: accept detected values / defaults (CI)
+```
+
+| Flag | Description |
+|---|---|
+| `--schema <path>` | schema path (skip detection/prompt) |
+| `--out <path>` | generated-types output path |
+| `--seed` | also scaffold a `seed.ts` upsert stub |
+| `--fresh` | ignore a detected setup and scaffold a new project |
+| `--yes` | non-interactive: detected values / defaults, no prompts |
+| `--force` | overwrite an existing `grafeo.config.ts` / `seed.ts` |
+
+`init` is **non-destructive** — it never overwrites your config, schema, or seed without `--force` (or an interactive confirmation), and connection settings reference `NEO4J_*` env vars (it never prompts for a password).
 
 ### `grafeo generate`
 
