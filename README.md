@@ -285,6 +285,8 @@ npx grafeo init --yes    # non-interactive: accept detected values / defaults (C
 
 `init` is **non-destructive** — it never overwrites your config, schema, or seed without `--force` (or an interactive confirmation), and connection settings reference `NEO4J_*` env vars (it never prompts for a password).
 
+On an interactive run, `init` opens with the grafeo wordmark splash. It's purely decorative and gates on a real terminal: when stdout is piped or redirected (`grafeo init > file`, `grafeo init | tee`), or in CI, the splash is suppressed so captured output stays clean. `NO_COLOR` is honored.
+
 ### `grafeo generate`
 
 Compiles your SDL to TypeScript types (wraps `generateTypes()` — see [Type Generation](#type-generation) for the programmatic API and the full option list).

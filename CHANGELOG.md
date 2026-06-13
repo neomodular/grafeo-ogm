@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.11.0 (2026-06-13) — ✨ `grafeo init` logo splash
+
+> **A little polish on the way in.** An interactive `grafeo init` now opens with the grafeo wordmark — the ANSI Shadow logo in blueprint blue. It's purely decorative and rigorously gated: it appears **only** when stdout is a real terminal, so a piped or redirected run (`grafeo init > file`, `grafeo init | tee`) and any CI run get clean, unadorned output. **No new runtime dependency** — the wordmark is embedded statically (no runtime `figlet`), routed through the existing IO seam, and `NO_COLOR` is honored.
+
+### ✨ Decorative wordmark on interactive `init`
+
+- **TTY-gated on stdout, not stdin.** The splash gates on whether **stdout** is a TTY (`io.stdoutTTY`), distinct from the stdin-based `interactive` flag that gates prompts. This is the correctness fix that matters: redirecting output (`> file`, `| tee`) no longer leaks ANSI art into captured output, even from an interactive shell.
+- **CI-safe.** Suppressed whenever `CI` is set, regardless of TTY state.
+- **`NO_COLOR` honored, by presence.** Any presence of `NO_COLOR` — including an empty string, per [no-color.org](https://no-color.org) — prints the wordmark uncolored.
+- **Zero footprint.** The logo is a static string table; no runtime `figlet` dependency, no change to the published runtime deps (still just `jiti`).
+
+### Tests
+
+New `logo` unit coverage (TTY-on colored, non-TTY no-op, CI no-op, `NO_COLOR` suppression including the empty-string presence case) plus two `init` integration cases (splash shown when stdout is a TTY; suppressed when stdout is redirected even with an interactive stdin). Full suite green (1494); lint, format, and type-check clean.
+
+---
+
 ## 1.10.1 (2026-06-13) — neo4j-driver 6 support
 
 > grafeo-ogm now declares compatibility with **neo4j-driver 6** alongside 5 — the peer range widens to `^5.0.0 || ^6.0.0`. **No code or API change.** grafeo never used the accessors driver 6 removed (`Node.identity` / `Relationship.start` / `Relationship.end`), and only touches stable core APIs (`neo4j.driver`, `auth`, `int`, `isInt`, `types.*`), so the full test suite — and the TypeScript type-check — passes unchanged against driver `6.1.0`. v6 users no longer get a spurious peer-dependency warning on install. (Verified at the unit + type level; the session/wire API grafeo uses is stable across the 5→6 boundary.)

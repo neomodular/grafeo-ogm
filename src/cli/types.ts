@@ -65,8 +65,14 @@ export interface CliIO {
   err(line: string): void;
   /** Injection seam: db commands create their driver through this. */
   driverFactory?(connection: ResolvedConnection): Driver;
-  /** TTY-interactive session? Gates confirmation prompts. */
+  /** TTY-interactive session (stdin is a TTY)? Gates confirmation prompts. */
   interactive?: boolean;
+  /**
+   * Is stdout itself a TTY? Distinct from `interactive` (stdin): decorative
+   * output like the logo splash must gate on THIS so `grafeo init > file` or
+   * `grafeo init | tee` never leak ANSI art into captured output.
+   */
+  stdoutTTY?: boolean;
   /** Prompt for yes/no confirmation (only called when interactive). */
   confirm?(question: string): Promise<boolean>;
   /**

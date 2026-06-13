@@ -169,6 +169,7 @@ if (typeof require !== 'undefined' && require.main === module) {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
     interactive: process.stdin.isTTY === true,
+    stdoutTTY: process.stdout.isTTY === true,
     // Real interactive confirmation for destructive `db push --force-drop`.
     // Without this the prompt branch in confirmDrops was unreachable and a
     // TTY user was wrongly refused unless they passed --yes.

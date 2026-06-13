@@ -12,6 +12,7 @@ interface TestIO extends CliIO {
 
 function makeIO(opts?: {
   interactive?: boolean;
+  stdoutTTY?: boolean;
   confirms?: boolean[];
   prompts?: string[];
 }): TestIO {
@@ -26,6 +27,7 @@ function makeIO(opts?: {
     out: (l) => stdout.push(l),
     err: (l) => stderr.push(l),
     interactive: opts?.interactive,
+    stdoutTTY: opts?.stdoutTTY,
     confirm: async () => confirms.shift() ?? false,
     prompt: async (_q, def) => prompts.shift() ?? def ?? '',
     stdout,
@@ -236,14 +238,15 @@ describe('grafeo init (cli-init spec)', () => {
     expect(config).not.toContain(`schema: './${evil}.graphql'`);
   });
 
-  it('shows the logo splash in an interactive terminal', async () => {
-    const io = makeIO({ interactive: true });
+  it('shows the logo splash when stdout is a TTY', async () => {
+    const io = makeIO({ interactive: true, stdoutTTY: true });
     await runInit([], io);
     expect(io.stdout.join('\n')).toContain('type-safe ogm for neo4j');
   });
 
-  it('omits the splash in a non-interactive run (no stdout noise)', async () => {
-    const io = makeIO(); // interactive undefined
+  it('omits the splash when stdout is redirected (no captured-output noise)', async () => {
+    // interactive stdin but stdout piped to a file — the splash must NOT leak.
+    const io = makeIO({ interactive: true, stdoutTTY: false });
     await runInit([], io);
     expect(io.stdout.join('\n')).not.toContain('type-safe ogm for neo4j');
   });
