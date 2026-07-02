@@ -433,6 +433,35 @@ describe('Model.deleteMany()', () => {
     expect(cypher).not.toContain('OPTIONAL MATCH');
     expect(cypher).toContain('DETACH DELETE n');
   });
+
+  // Prisma semantics: OR with zero effective disjuncts matches NOTHING.
+  // Previously `where: { OR: [] }` compiled identically to no where at
+  // all — an unfiltered `MATCH (n:Book) DETACH DELETE n` full-label wipe.
+  it('should compile where: { OR: [] } to an unsatisfiable WHERE, not a full wipe', async () => {
+    const { mockDriver, mockSession } = createMockDriver();
+    mockSession.run.mockResolvedValueOnce({
+      records: [],
+      summary: {
+        counters: {
+          updates: () => ({
+            nodesCreated: 0,
+            nodesDeleted: 0,
+            relationshipsCreated: 0,
+            relationshipsDeleted: 0,
+            propertiesSet: 0,
+          }),
+        },
+      },
+    });
+
+    const model = new Model(bookNode, schema, mockDriver);
+    const result = await model.deleteMany({ where: { OR: [] } });
+
+    expect(result).toEqual({ count: 0 });
+    const cypher = getCypher(mockSession);
+    expect(cypher).toContain('WHERE false');
+    expect(cypher).toContain('DETACH DELETE n');
+  });
 });
 
 describe('OGM.$transaction() (sequential)', () => {

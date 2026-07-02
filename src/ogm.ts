@@ -104,6 +104,7 @@ export class OGM<
     if (config.features?.filters?.String?.MATCHES === false)
       whereOptions.disabledOperators = new Set(['_MATCHES'] as const);
     if (config.features?.strictWhere === true) whereOptions.strictWhere = true;
+    if (config.logger) whereOptions.logger = config.logger;
 
     const where = new WhereCompiler(this.schema, whereOptions);
     const selection = new SelectionCompiler(this.schema, where);
@@ -114,7 +115,10 @@ export class OGM<
       where,
       selection,
       selectNormalizer: new SelectNormalizer(this.schema),
-      mutation: new MutationCompiler(this.schema),
+      mutation: new MutationCompiler(
+        this.schema,
+        config.logger ? { logger: config.logger } : undefined,
+      ),
       fulltext,
       vector,
     };

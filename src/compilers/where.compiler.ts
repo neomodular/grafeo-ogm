@@ -1,4 +1,5 @@
 import { OGMError } from '../errors';
+import type { OGMLogger } from '../execution/executor';
 import { isReadRestrictive } from '../policy/types';
 import type { PolicyContextBundle } from '../policy/types';
 import {
@@ -128,6 +129,13 @@ export interface WhereCompilerOptions {
    * empty results. Opt in via `OGMConfig.features.strictWhere = true`.
    */
   strictWhere?: boolean;
+  /**
+   * Logger used to surface a `warn` when a logical operator (`AND`/`OR`)
+   * compiles with zero effective conditions — almost always a
+   * dynamically-built filter that received an empty list. The OGM
+   * passes its `config.logger` here.
+   */
+  logger?: OGMLogger;
 }
 
 /**
@@ -136,6 +144,7 @@ export interface WhereCompilerOptions {
 export class WhereCompiler {
   private disabledOperators: Set<OperatorSuffix>;
   private strictWhere: boolean;
+  private logger?: OGMLogger;
 
   constructor(
     private schema: SchemaMetadata,
@@ -143,6 +152,19 @@ export class WhereCompiler {
   ) {
     this.disabledOperators = options?.disabledOperators ?? new Set();
     this.strictWhere = options?.strictWhere ?? false;
+    this.logger = options?.logger;
+  }
+
+  /**
+   * Surface a logical operator that contributed zero effective conditions.
+   * Fires only on the anomalous branch, so the hot path pays nothing.
+   */
+  private warnEmptyLogical(op: 'AND' | 'OR', context: string): void {
+    this.logger?.warn?.(
+      op === 'OR'
+        ? `[OGM] ${context}.OR has zero effective conditions — compiled to \`false\` (matches nothing, per Prisma semantics). Omit the OR key to match everything.`
+        : `[OGM] ${context}.AND has zero effective conditions — no filter emitted (matches everything).`,
+    );
   }
 
   compile(
@@ -513,6 +535,17 @@ export class WhereCompiler {
         }
         if (subClauses.length > 0)
           clauses.push(`(${subClauses.join(` ${key} `)})`);
+        else {
+          this.warnEmptyLogical(key, 'where');
+          // Prisma semantics: an OR with zero effective disjuncts matches
+          // NOTHING (empty disjunction = false). Previously the operator
+          // silently vanished, so `deleteMany({ where: { OR: [] } })`
+          // compiled to an unfiltered DETACH DELETE — a full-label wipe.
+          // `AND: []` stays a no-op (empty conjunction = true), also per
+          // Prisma. Intentional divergence from @neo4j/graphql-ogm, which
+          // treats `OR: []` as match-all.
+          if (key === 'OR') clauses.push('false');
+        }
         continue;
       }
 
@@ -926,6 +959,11 @@ export class WhereCompiler {
             if (r.preludes && r.preludes.length > 0)
               extraPreludes.push(...r.preludes);
           }
+        } else {
+          this.warnEmptyLogical(key, 'connection where');
+          // Prisma semantics: OR with zero effective disjuncts matches
+          // NOTHING — see the same rule in compileConditions.
+          if (key === 'OR') innerClauses.push('false');
         }
         continue;
       }

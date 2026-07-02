@@ -1688,6 +1688,14 @@ These are incremental improvements you can adopt at your own pace:
 - All identifiers are **validated and escaped** -- injection-safe by default
 - Type generation is **modular and driver-free** -- smaller output, faster builds
 
+### ⚠️ Deliberate divergence: `OR: []` matches nothing
+
+This is the **one intentional behavioral difference** from `@neo4j/graphql-ogm`. The deprecated OGM silently dropped empty `OR` arrays from the WHERE clause, so `delete({ where: { OR: [] } })` compiled to an *unfiltered* `MATCH ... DETACH DELETE` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list.
+
+grafeo-ogm follows **Prisma semantics** instead: an `OR` with zero effective disjuncts compiles to `false` and matches **nothing** — at the top level, inside relationship quantifiers (`_SOME`/`_NONE`/...), in connection filters, and in nested `connect`/`disconnect` operations. `AND: []` still matches everything (the empty conjunction is true, also per Prisma). If you relied on `OR: []` behaving as "no filter", pass no `where` (or omit the `OR` key) instead.
+
+When this happens at runtime, the compiler emits a `warn` through your configured `OGMConfig.logger`, so an accidentally empty filter shows up in your logs instead of failing silently.
+
 ---
 
 ## Comparisons

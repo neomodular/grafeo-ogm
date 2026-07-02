@@ -1237,6 +1237,74 @@ describe('MutationCompiler', () => {
       expect(result.cypher).not.toContain('`node`');
     });
 
+    // Empty-OR guard — Prisma semantics (see WhereCompiler): OR with zero
+    // effective disjuncts matches NOTHING. Previously the operator vanished,
+    // so `disconnect: [{ where: { OR: [] } }]` detached EVERY related node
+    // and `connect: [{ where: { OR: [] } }]` connected every candidate.
+    it('compiles OR: [] in nested update.<rel>.disconnect to an unsatisfiable WHERE', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [{ where: { OR: [] } }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toMatch(/WHERE false/);
+    });
+
+    it('compiles OR: [] in nested update.<rel>.connect to an unsatisfiable WHERE', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              connect: [{ where: { OR: [] } }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(result.cypher).toMatch(/WHERE false/);
+    });
+
+    it('warns through the configured logger when a nested disconnect OR is empty', () => {
+      const warn = jest.fn();
+      const loggingCompiler = new MutationCompiler(schema, {
+        logger: { debug: () => {}, warn },
+      });
+
+      loggingCompiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [{ where: { OR: [] } }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('matches nothing'),
+      );
+    });
+
     it('handles connection-shape NOT in nested update.<rel>.connect (v1.8.1)', () => {
       // Mirror of disconnect bug — same broken path existed for nested connect.
       const result = compiler.compileUpdate(

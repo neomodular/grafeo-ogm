@@ -1,4 +1,5 @@
 import { OGMError } from '../errors';
+import type { OGMLogger } from '../execution/executor';
 import {
   NodeDefinition,
   RelationshipDefinition,
@@ -39,7 +40,27 @@ export class MutationCompiler {
    */
   private labelCache = new Map<string, string>();
 
-  constructor(private schema: SchemaMetadata) {}
+  private logger?: OGMLogger;
+
+  constructor(
+    private schema: SchemaMetadata,
+    options?: { logger?: OGMLogger },
+  ) {
+    this.logger = options?.logger;
+  }
+
+  /**
+   * Surface a logical operator that contributed zero effective conditions.
+   * Mirrors WhereCompiler.warnEmptyLogical — fires only on the anomalous
+   * branch, so the hot path pays nothing.
+   */
+  private warnEmptyLogical(op: 'AND' | 'OR', context: string): void {
+    this.logger?.warn?.(
+      op === 'OR'
+        ? `[OGM] ${context}.OR has zero effective conditions — compiled to \`false\` (matches nothing, per Prisma semantics). Omit the OR key to match everything.`
+        : `[OGM] ${context}.AND has zero effective conditions — no filter emitted (matches everything).`,
+    );
+  }
 
   /** Clear internal caches. Useful in tests to prevent cross-test pollution. */
   clearCaches(): void {
@@ -1738,7 +1759,8 @@ export class MutationCompiler {
     }
 
     // AND — all sub-conditions must hold
-    if (Array.isArray(whereSpec.AND))
+    if (Array.isArray(whereSpec.AND)) {
+      const before = conditions.length;
       for (let i = 0; i < whereSpec.AND.length; i++) {
         const sub = this.buildConnectionWhereConditions(
           whereSpec.AND[i] as Record<string, unknown>,
@@ -1749,6 +1771,9 @@ export class MutationCompiler {
         );
         conditions.push(...sub);
       }
+      if (conditions.length === before)
+        this.warnEmptyLogical('AND', 'mutation connection where');
+    }
 
     // OR — any sub-condition must hold
     if (Array.isArray(whereSpec.OR)) {
@@ -1764,6 +1789,13 @@ export class MutationCompiler {
         if (sub.length > 0) orClauses.push(`(${sub.join(' AND ')})`);
       }
       if (orClauses.length > 0) conditions.push(`(${orClauses.join(' OR ')})`);
+      // Prisma semantics: OR with zero effective disjuncts matches NOTHING.
+      // Previously the operator vanished, so `disconnect: [{ where:
+      // { OR: [] } }]` detached EVERY related node instead of none.
+      else {
+        this.warnEmptyLogical('OR', 'mutation connection where');
+        conditions.push('false');
+      }
     }
 
     // Fallback: if no recognized keys, treat the whole spec as node conditions

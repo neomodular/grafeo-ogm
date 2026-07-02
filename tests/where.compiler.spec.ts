@@ -1500,4 +1500,136 @@ describe('WhereCompiler', () => {
       expect(result.cypher).toBe('n.`name` CONTAINS $param0');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Empty logical operators — Prisma semantics
+  //
+  // `OR` with zero effective disjuncts matches NOTHING (empty disjunction =
+  // false); `AND: []` matches everything (empty conjunction = true).
+  // Previously an empty OR silently vanished, so `deleteMany({ where:
+  // { OR: [] } })` compiled to an unfiltered DETACH DELETE. Intentional
+  // divergence from @neo4j/graphql-ogm, which treats `OR: []` as match-all.
+  // ---------------------------------------------------------------------------
+  describe('empty logical operators (Prisma semantics)', () => {
+    it('compiles OR: [] to false (matches nothing)', () => {
+      const result = compiler.compile({ OR: [] }, 'n', bookNode);
+      expect(result.cypher).toBe('false');
+      expect(result.params).toEqual({});
+    });
+
+    it('compiles AND: [] to no condition (matches all)', () => {
+      const result = compiler.compile({ AND: [] }, 'n', bookNode);
+      expect(result.cypher).toBe('');
+    });
+
+    it('compiles OR whose disjuncts all collapse to no-ops to false', () => {
+      expect(compiler.compile({ OR: [{}] }, 'n', bookNode).cypher).toBe(
+        'false',
+      );
+      expect(
+        compiler.compile({ OR: [{ name: undefined }] }, 'n', bookNode).cypher,
+      ).toBe('false');
+    });
+
+    it('drops no-op disjuncts but keeps effective ones', () => {
+      const result = compiler.compile(
+        { OR: [{}, { name: 'x' }] },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('(n.`name` = $param0)');
+      expect(result.params).toEqual({ param0: 'x' });
+    });
+
+    it('AND-stitches false alongside sibling conditions', () => {
+      const result = compiler.compile({ id: 'u1', OR: [] }, 'n', bookNode);
+      expect(result.cypher).toBe('n.`id` = $param0 AND false');
+      expect(result.params).toEqual({ param0: 'u1' });
+    });
+
+    it('compiles NOT: { OR: [] } to NOT (false) (matches all)', () => {
+      const result = compiler.compile({ NOT: { OR: [] } }, 'n', bookNode);
+      expect(result.cypher).toBe('NOT (false)');
+    });
+
+    it('compiles a nested empty OR as a false disjunct inside a non-empty OR', () => {
+      const result = compiler.compile(
+        { OR: [{ OR: [] }, { name: 'x' }] },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('(false OR n.`name` = $param0)');
+    });
+
+    it('compiles OR: [] inside a relationship quantifier to an unsatisfiable EXISTS', () => {
+      const result = compiler.compile(
+        { taggedWith_SOME: { OR: [] } },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toContain('EXISTS {');
+      expect(result.cypher).toContain('false');
+    });
+
+    it('compiles OR: [] inside a connection where to an unsatisfiable EXISTS', () => {
+      const result = compiler.compile(
+        { hasStatusConnection_SOME: { OR: [] } },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toContain('EXISTS {');
+      expect(result.cypher).toContain('false');
+    });
+
+    it('warns through the configured logger when a logical operator is empty', () => {
+      const warn = jest.fn();
+      const loggingCompiler = new WhereCompiler(schema, {
+        logger: { debug: () => {}, warn },
+      });
+
+      loggingCompiler.compile({ OR: [] }, 'n', bookNode);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('matches nothing'),
+      );
+
+      warn.mockClear();
+      loggingCompiler.compile({ AND: [] }, 'n', bookNode);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('matches everything'),
+      );
+
+      // All-no-op disjuncts count as empty too
+      warn.mockClear();
+      loggingCompiler.compile({ OR: [{}] }, 'n', bookNode);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('matches nothing'),
+      );
+
+      warn.mockClear();
+      loggingCompiler.compile(
+        { hasStatusConnection_SOME: { OR: [] } },
+        'n',
+        bookNode,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('matches nothing'),
+      );
+    });
+
+    it('does not warn for effective logical operators or loggers without warn', () => {
+      const warn = jest.fn();
+      const loggingCompiler = new WhereCompiler(schema, {
+        logger: { debug: () => {}, warn },
+      });
+      loggingCompiler.compile({ OR: [{ name: 'x' }] }, 'n', bookNode);
+      loggingCompiler.compile({ AND: [{ name: 'x' }] }, 'n', bookNode);
+      expect(warn).not.toHaveBeenCalled();
+
+      // A logger without `warn` (pre-existing implementations) must not throw
+      const debugOnly = new WhereCompiler(schema, {
+        logger: { debug: () => {} },
+      });
+      expect(debugOnly.compile({ OR: [] }, 'n', bookNode).cypher).toBe('false');
+    });
+  });
 });
