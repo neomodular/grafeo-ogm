@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.12.0 (2026-07-01) — 🛡️ `OR: []` now matches nothing (Prisma semantics)
+
+> **Safety fix, and the one deliberate compat break with `@neo4j/graphql-ogm`.** An empty logical `OR` array used to vanish from the compiled WHERE clause, so `deleteMany({ where: { OR: [] } })` compiled **byte-identical to no `where` at all**: `MATCH (n:Label) DETACH DELETE n` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list. The deprecated `@neo4j/graphql-ogm` (verified against its final release, 5.11.4) has the same behavior, so grafeo was bug-for-bug compatible. We now diverge on purpose.
+
+### 🛡️ Empty `OR` compiles to `false` — everywhere
+
+Per Prisma's documented operator semantics (`OR` with 0 filters → empty result; `AND` with 0 filters → all items), an `OR` with **zero effective disjuncts** now compiles to the literal Cypher clause `false`:
+
+- **Top-level where** — `find` / `findFirst` / `count` / `aggregate` return nothing; `updateMany` / `deleteMany` touch nothing.
+- **All-no-op disjuncts count as empty** — `OR: [{}]` and `OR: [{ name: undefined }]` also compile to `false`, matching Prisma's "effective filter" counting. Mixed arrays keep the effective disjuncts: `OR: [{}, { name: 'x' }]` → `(n.name = $param0)`.
+- **Nested relationship quantifiers** — `posts_SOME: { OR: [] }` compiles to an unsatisfiable `EXISTS { ... WHERE false }` instead of "any related node".
+- **Connection filters** — `postsConnection_SOME: { OR: [] }` likewise.
+- **Nested mutation operations** — `update.<rel>.disconnect[].where: { OR: [] }` used to detach **every** related node (and `connect` to attach every candidate); both now compile an unsatisfiable `WHERE false`.
+
+`AND: []` is unchanged and still matches everything — the empty conjunction is true, also per Prisma. `where: undefined` / `where: {}` remain the explicit, intentional "match all" forms. Fulltext `OR`/`AND` already threw on empty arrays and are unaffected.
+
+### 🔎 Compiler warning on empty logical operators
+
+When a logical operator compiles with zero effective conditions, the compiler now emits a `warn` through your configured `OGMConfig.logger` — `OR` warns "matches nothing", `AND` warns "matches everything" — so a dynamically built filter that received an empty list is visible in your logs instead of silently changing query shape. Fires only on the anomalous branch (zero hot-path cost), no-ops when no logger is configured or the logger has no `warn` method.
+
+### Tests
+
+Regression coverage for the full blast radius: compiler-level (`OR: []`, `AND: []`, all-no-op disjuncts, mixed disjuncts, sibling-condition stitching, `NOT: { OR: [] }`, nested quantifier, connection filter), mutation-level (nested `connect`/`disconnect` with `OR: []`), model-level (`deleteMany({ where: { OR: [] } })` emits `WHERE false`, not a wipe), and warning-level (logger `warn` fired for empty `OR`/`AND`/all-no-op disjuncts, silent for effective operators and `warn`-less loggers). Full suite green (1509); lint, format, and type-check clean.
+
+---
+
 ## 1.11.0 (2026-06-13) — ✨ `grafeo init` logo splash
 
 > **A little polish on the way in.** An interactive `grafeo init` now opens with the grafeo wordmark — the ANSI Shadow logo in blueprint blue. It's purely decorative and rigorously gated: it appears **only** when stdout is a real terminal, so a piped or redirected run (`grafeo init > file`, `grafeo init | tee`) and any CI run get clean, unadorned output. **No new runtime dependency** — the wordmark is embedded statically (no runtime `figlet`), routed through the existing IO seam, and `NO_COLOR` is honored.
