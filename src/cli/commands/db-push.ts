@@ -8,6 +8,7 @@ import {
   resolveConnection,
   resolveSchemaPath,
 } from '../config';
+import { safeDisplay } from '../display';
 import { createDriver } from '../driver';
 import { CliError } from '../errors';
 import { fetchLiveSchema } from '../introspect';
@@ -84,12 +85,15 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
       io.out(
         `Orphans — ${plan.orphans.length} kept (use --force-drop to remove):`,
       );
-      for (const orphan of plan.orphans) io.out(`  - ${orphan.name}`);
+      for (const orphan of plan.orphans)
+        io.out(`  - ${safeDisplay(orphan.name)}`);
     }
 
+  // v1.13.0 — unmanaged names come from live introspection and are exactly
+  // the ones that FAILED identifier validation: sanitize before printing.
   if (plan.unmanaged.length > 0)
     io.out(
-      `Unmanaged — ${plan.unmanaged.length} ignored: ${plan.unmanaged.join(', ')}`,
+      `Unmanaged — ${plan.unmanaged.length} ignored: ${plan.unmanaged.map(safeDisplay).join(', ')}`,
     );
 }
 
@@ -148,7 +152,7 @@ async function applyDrops(
   try {
     for (const orphan of plan.orphans) {
       await session.run(orphan.dropCypher);
-      io.out(`✓ dropped ${orphan.name}`);
+      io.out(`✓ dropped ${safeDisplay(orphan.name)}`);
     }
   } finally {
     await session.close();

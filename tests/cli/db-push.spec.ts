@@ -131,6 +131,31 @@ describe('grafeo db push (cli-db-push spec)', () => {
     expect(wrote(mock.runs)).toHaveLength(0);
   });
 
+  it('sanitizes control characters in live-DB names before printing (v1.13.0)', async () => {
+    // An attacker with schema-write can name a constraint with ANSI escapes;
+    // it must land in `unmanaged` (never dropped) AND print without the raw
+    // escape bytes reaching the terminal.
+    const hostile = 'evil\u001b]0;pwned\u0007constraint';
+    const mock = makeDriver({
+      ...ALL_IN_SYNC,
+      constraints: [
+        ...ALL_IN_SYNC.constraints,
+        { name: hostile, type: 'UNIQUENESS' },
+      ],
+    });
+    const io = makeIO(mock.driver);
+
+    const code = await runDbPush([], io);
+
+    expect(code).toBe(0);
+    const out = io.stdout.join('\n');
+    expect(out).toContain('Unmanaged — 1 ignored');
+    expect(out).not.toContain('\u001b');
+    expect(out).not.toContain('\u0007');
+    expect(out).toContain('evil�]0;pwned�constraint');
+    expect(wrote(mock.runs)).toHaveLength(0);
+  });
+
   it('reports an orphan as kept when --force-drop is not passed', async () => {
     const mock = makeDriver({
       ...ALL_IN_SYNC,
