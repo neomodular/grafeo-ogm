@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.13.0 (2026-07-14) — ✨ `$cloneSubgraph` returns `nodesByLabel`
+
+> **First community-requested feature** ([#1](https://github.com/neomodular/grafeo-ogm/issues/1)). After deep-cloning a content subgraph, a caller often needs to post-process only the nodes of a **specific label** (re-normalize, re-stamp, re-index). Until now `nodeMapping` held every cloned id across all labels, forcing a broad-`IN`-plus-label-filter dance on the caller. The clone already visits every node with its labels in hand — so now it just tells you.
+
+### ✨ `nodesByLabel: Map<label, newId[]>` on the clone result
+
+- **Additive and backwards-compatible** — `clonedRootId` and `nodeMapping` are unchanged; existing callers are unaffected.
+- **Zero extra round-trips** — `labels(output)` is folded into the existing Step-1 `RETURN` of the APOC clone query.
+- **Multi-label nodes appear under each of their labels**, so `nodesByLabel.get('DoseValue')` is exactly the set you post-process.
+- **Consistent by construction** — `nodesByLabel` is built in the same pass as the final `nodeMapping`, so a node dropped during UUID re-assignment is absent from *both* maps: every id in `nodesByLabel` is also a `nodeMapping` value.
+
+```typescript
+const result = await ogm.$cloneSubgraph(rootId, config, tx);
+const doseValueIds = result.nodesByLabel.get('DoseValue') ?? [];
+// target exactly one label — no over-broad IN list
+```
+
+### 🛡️ CLI display hardening — `db push` sanitizes live-DB names
+
+Names introspected from the live database that fail identifier validation are correctly routed to `unmanaged` and never executed as Cypher — but they were printed **raw**. Neo4j allows arbitrary characters in backtick-quoted identifiers, so a hostile constraint/index name could smuggle ANSI/C0 escape sequences into the developer's terminal (title changes, output spoofing). All live-DB names rendered by `db push` (unmanaged, orphan listings, drop confirmations) now pass through a `safeDisplay()` helper that replaces C0/C1 control characters with a visible `�` placeholder. Cypher execution was never affected — this closes the display path.
+
+### 📝 Docs
+
+- Fixed the `cloneSubgraph` README snippet: the result field is `nodeMapping`, not the stale `idMapping`, and the config examples now include the required `maxLevel`.
+
+### Tests
+
+Four new subgraph specs (label grouping, root-label → `clonedRootId` linkage, multi-label fan-out, UUID-failure consistency across both maps) plus a CLI spec proving a hostile constraint name lands in `unmanaged`, prints sanitized, and never reaches a `DROP`. Full suite green (1514); lint, format, and type-check clean.
+
+---
+
 ## 1.12.0 (2026-07-01) — 🛡️ `OR: []` now matches nothing (Prisma semantics)
 
 > **Safety fix, and the one deliberate compat break with `@neo4j/graphql-ogm`.** An empty logical `OR` array used to vanish from the compiled WHERE clause, so `deleteMany({ where: { OR: [] } })` compiled **byte-identical to no `where` at all**: `MATCH (n:Label) DETACH DELETE n` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list. The deprecated `@neo4j/graphql-ogm` (verified against its final release, 5.11.4) has the same behavior, so grafeo was bug-for-bug compatible. We now diverge on purpose.
