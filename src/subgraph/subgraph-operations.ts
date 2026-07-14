@@ -81,7 +81,8 @@ function validateConfig(
  * @param config - Defines which nodes to clone vs reference
  * @param transaction - Caller-managed Neo4j transaction
  * @param logger - Optional logger for debug output
- * @returns The cloned root node id and a mapping of original→cloned node ids
+ * @returns The cloned root node id, a mapping of original→cloned node ids,
+ *          and the cloned node ids grouped by label
  */
 export async function cloneSubgraph(
   sourceRootId: string,
@@ -220,7 +221,7 @@ async function executeApocClone(
     WITH input, output
     MATCH (original) WHERE id(original) = input
     SET output.clonedFromId = original.id
-    RETURN original.id AS originalId, elementId(output) AS cloneElementId
+    RETURN original.id AS originalId, elementId(output) AS cloneElementId, labels(output) AS labels
     `,
     {
       sourceId: sourceRootId,
@@ -232,13 +233,16 @@ async function executeApocClone(
 
   // Build nodeMapping from result records
   const nodeMapping = new Map<string, string>();
+  const elementIdToLabels = new Map<string, string[]>();
   let clonedRootElementId: string | undefined;
 
   for (const record of result.records) {
     const originalId = record.get('originalId') as string;
     const cloneElementId = record.get('cloneElementId') as string;
+    const labels = record.get('labels') as string[] | undefined;
 
     nodeMapping.set(originalId, cloneElementId);
+    elementIdToLabels.set(cloneElementId, labels ?? []);
 
     if (originalId === sourceRootId) clonedRootElementId = cloneElementId;
   }
@@ -270,10 +274,21 @@ async function executeApocClone(
   for (const record of uuidResult.records)
     elementIdToNewUuid.set(record.get('elemId'), record.get('newId'));
 
+  // nodesByLabel is built in the same pass so a node dropped by a failed
+  // UUID assignment is absent from BOTH maps (v1.13.0).
   const finalMapping = new Map<string, string>();
+  const nodesByLabel = new Map<string, string[]>();
   for (const [originalId, elementId] of nodeMapping) {
     const newUuid = elementIdToNewUuid.get(elementId);
-    if (newUuid) finalMapping.set(originalId, newUuid);
+    if (!newUuid) continue;
+
+    finalMapping.set(originalId, newUuid);
+
+    for (const label of elementIdToLabels.get(elementId) ?? []) {
+      const ids = nodesByLabel.get(label);
+      if (ids) ids.push(newUuid);
+      else nodesByLabel.set(label, [newUuid]);
+    }
   }
 
   const finalClonedRootId = elementIdToNewUuid.get(clonedRootElementId);
@@ -294,6 +309,7 @@ async function executeApocClone(
   return {
     clonedRootId: finalClonedRootId,
     nodeMapping: finalMapping,
+    nodesByLabel,
   };
 }
 

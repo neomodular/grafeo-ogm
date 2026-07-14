@@ -106,7 +106,134 @@ describe('cloneSubgraph', () => {
     expect(result.nodeMapping.size).toBe(2);
     expect(result.nodeMapping.get('root-1')).toBe('new-uuid-1');
     expect(result.nodeMapping.get('child-1')).toBe('new-uuid-2');
+    // records without a `labels` entry yield an empty (but present) map
+    expect(result.nodesByLabel.size).toBe(0);
     expect(tx.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('groups cloned nodes by label (v1.13.0 nodesByLabel)', async () => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            originalId: 'root-1',
+            cloneElementId: 'elem-1',
+            labels: ['Post'],
+          }),
+          mockRecord({
+            originalId: 'child-1',
+            cloneElementId: 'elem-2',
+            labels: ['Comment'],
+          }),
+          mockRecord({
+            originalId: 'child-2',
+            cloneElementId: 'elem-3',
+            labels: ['Comment'],
+          }),
+        ],
+      },
+      {
+        records: [
+          mockRecord({ elemId: 'elem-1', newId: 'new-uuid-1' }),
+          mockRecord({ elemId: 'elem-2', newId: 'new-uuid-2' }),
+          mockRecord({ elemId: 'elem-3', newId: 'new-uuid-3' }),
+        ],
+      },
+    ]);
+
+    const result = await cloneSubgraph('root-1', baseConfig, tx);
+
+    const firstQuery = (tx.run as jest.Mock).mock.calls[0][0] as string;
+    expect(firstQuery).toContain('labels(output) AS labels');
+    expect(result.nodesByLabel.get('Post')).toEqual(['new-uuid-1']);
+    expect(result.nodesByLabel.get('Comment')).toEqual([
+      'new-uuid-2',
+      'new-uuid-3',
+    ]);
+  });
+
+  it('maps the root node label to clonedRootId', async () => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            originalId: 'root-1',
+            cloneElementId: 'elem-1',
+            labels: ['Post'],
+          }),
+          mockRecord({
+            originalId: 'child-1',
+            cloneElementId: 'elem-2',
+            labels: ['Comment'],
+          }),
+        ],
+      },
+      {
+        records: [
+          mockRecord({ elemId: 'elem-1', newId: 'new-uuid-1' }),
+          mockRecord({ elemId: 'elem-2', newId: 'new-uuid-2' }),
+        ],
+      },
+    ]);
+
+    const result = await cloneSubgraph('root-1', baseConfig, tx);
+
+    expect(result.nodesByLabel.get('Post')).toContain(result.clonedRootId);
+  });
+
+  it('lists a multi-label node under each of its labels', async () => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            originalId: 'root-1',
+            cloneElementId: 'elem-1',
+            labels: ['Post', 'Draft'],
+          }),
+        ],
+      },
+      {
+        records: [mockRecord({ elemId: 'elem-1', newId: 'new-uuid-1' })],
+      },
+    ]);
+
+    const result = await cloneSubgraph('root-1', baseConfig, tx);
+
+    expect(result.nodesByLabel.get('Post')).toEqual(['new-uuid-1']);
+    expect(result.nodesByLabel.get('Draft')).toEqual(['new-uuid-1']);
+  });
+
+  it('omits UUID-assignment failures from nodeMapping and nodesByLabel alike', async () => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            originalId: 'root-1',
+            cloneElementId: 'elem-1',
+            labels: ['Post'],
+          }),
+          mockRecord({
+            originalId: 'child-1',
+            cloneElementId: 'elem-2',
+            labels: ['Comment'],
+          }),
+        ],
+      },
+      // UUID generation only returns the root — child-1's assignment failed
+      {
+        records: [mockRecord({ elemId: 'elem-1', newId: 'new-uuid-1' })],
+      },
+    ]);
+
+    const result = await cloneSubgraph('root-1', baseConfig, tx);
+
+    expect(result.nodeMapping.size).toBe(1);
+    expect(result.nodeMapping.has('child-1')).toBe(false);
+    expect(result.nodesByLabel.has('Comment')).toBe(false);
+    // every id in nodesByLabel must also be a nodeMapping value
+    const mappedIds = new Set(result.nodeMapping.values());
+    for (const ids of result.nodesByLabel.values())
+      for (const id of ids) expect(mappedIds.has(id)).toBe(true);
   });
 
   it('should reattach reference relationships', async () => {

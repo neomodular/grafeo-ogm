@@ -943,13 +943,21 @@ const cloneResult = await cloneSubgraph(
   {
     ownedLabels: ['Book', 'Chapter', 'Section'],
     ownedRelationships: ['HAS_CHAPTER', 'HAS_SECTION'],
+    maxLevel: 5,
     referenceRelationships: [
       { fromLabel: 'Book', relationshipType: 'WRITTEN_BY', direction: 'OUT' },
     ],
   },
   transaction,
 );
-// cloneResult: { clonedRootId, idMapping: Map<original, cloned> }
+// cloneResult: {
+//   clonedRootId,
+//   nodeMapping: Map<originalId, newId>,
+//   nodesByLabel: Map<label, newId[]>,   // v1.13.0+ — multi-label nodes appear under each label
+// }
+
+// v1.13.0+ — post-process only the nodes of one label, no broad-IN filtering:
+const chapterIds = cloneResult.nodesByLabel.get('Chapter') ?? [];
 
 // Delete a subgraph
 const deleteResult = await deleteSubgraph(
@@ -957,6 +965,7 @@ const deleteResult = await deleteSubgraph(
   {
     ownedLabels: ['Book', 'Chapter'],
     ownedRelationships: ['HAS_CHAPTER'],
+    maxLevel: 5,
     referenceRelationships: [],
   },
   transaction,

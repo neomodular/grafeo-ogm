@@ -16,7 +16,15 @@ export interface SubgraphConfig {
 /** Clone result. */
 export interface SubgraphCloneResult {
   clonedRootId: string;
+  /** originalId → newId for every successfully cloned node. */
   nodeMapping: Map<string, string>;
+  /**
+   * label → newId[] over the successfully cloned nodes (v1.13.0).
+   * A node contributes once per label it carries, so a multi-label node
+   * appears under each of its labels. Every id here is also a value of
+   * `nodeMapping`; the converse holds only for nodes with at least one label.
+   */
+  nodesByLabel: Map<string, string[]>;
 }
 
 /** Delete result. */
