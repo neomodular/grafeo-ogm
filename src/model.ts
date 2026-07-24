@@ -393,7 +393,9 @@ export class Model<
       compilers?.selection ?? new SelectionCompiler(schema, this.whereCompiler);
     this.selectNormalizer =
       compilers?.selectNormalizer ?? new SelectNormalizer(schema);
-    this.mutationCompiler = compilers?.mutation ?? new MutationCompiler(schema);
+    this.mutationCompiler =
+      compilers?.mutation ??
+      new MutationCompiler(schema, { whereCompiler: this.whereCompiler });
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
     this.vectorCompiler = compilers?.vector ?? new VectorCompiler();
     this.executor = new Executor(driver, logger);
@@ -786,6 +788,12 @@ export class Model<
       this.nodeDef,
       whereResult,
       params.labels,
+      'node',
+      // Thread the caller's update bundle + shared param counter so every
+      // connect/disconnect target MATCH AND-stitches the TARGET type's
+      // `read` policy (see MutationCompiler.buildTargetPolicyPredicate).
+      policyContext ?? undefined,
+      paramCounter,
     );
 
     const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
@@ -1321,6 +1329,10 @@ export class Model<
       whereResult,
       params.labels,
       'count',
+      // `data` may still carry nested connect/disconnect ops, so thread the
+      // policy bundle + shared counter for target `read` enforcement.
+      policyContext ?? undefined,
+      paramCounter,
     );
 
     const result = await this.executor.execute(

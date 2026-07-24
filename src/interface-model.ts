@@ -464,6 +464,14 @@ export class InterfaceModel<
     // sort prelude / RETURN. `__typename` must be preserved because it's
     // already in scope and the RETURN re-projects it.
     const selectScope = new CypherFieldScope('n', ['__typename'], '__sel');
+    // v1.8.5 — thread the interface read `policyContext` into the RETURN
+    // projection so nested relationship pattern comprehensions AND-stitch
+    // each projected TARGET type's `'read'` policy (SelectionCompiler reads
+    // only `resolveForType`/`ctx`/`defaults`, so the interface bundle's
+    // `resolveForType` resolves the same target policies the concrete path
+    // does). Mirrors `Model.find`'s 9th positional argument. When no policy
+    // layer is active `policyContext` is `null`, matching the compile
+    // signature default — the emitted projection is byte-identical.
     const returnClause = this.selectionCompiler.compile(
       selection,
       'n',
@@ -473,6 +481,7 @@ export class InterfaceModel<
       allParams,
       paramCounter,
       selectScope,
+      policyContext,
     );
     // Inject __typename into the projection: "n { .id, .name }" → "n { .id, .name, __typename: __typename }"
     const injected = returnClause.replace(/\}$/, ', __typename: __typename }');

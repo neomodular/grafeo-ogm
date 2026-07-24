@@ -281,4 +281,81 @@ describe('Interface inheritance', () => {
     });
     expect(warn).not.toHaveBeenCalled();
   });
+
+  // Regression — nested-selection read-policy on InterfaceModel reads. The
+  // interface source-side CASE clause and the WHERE-side traversal policy
+  // were applied, but the RETURN projection was compiled without a
+  // policyContext, so a relationship field projected the target type's rows
+  // with NO `'read'` policy — leaking every related node across every row
+  // the interface query returned. The fix threads the read policyContext
+  // into `SelectionCompiler.compile`, exactly as the concrete `Model.find`
+  // path does.
+  const relSchema = `
+interface Content {
+  id: ID!
+  author: User @relationship(type: "AUTHORED_BY", direction: OUT)
+}
+type Article implements Content @node(labels: ["Content", "Article"]) {
+  id: ID! @id @unique
+  author: User @relationship(type: "AUTHORED_BY", direction: OUT)
+}
+type Video implements Content @node(labels: ["Content", "Video"]) {
+  id: ID! @id @unique
+  author: User @relationship(type: "AUTHORED_BY", direction: OUT)
+}
+type User @node {
+  id: ID! @id @unique
+  email: String
+  ownerId: String
+}
+`;
+
+  it('InterfaceModel.find injects the projected relationship target type read policy into the RETURN projection', async () => {
+    const recorded: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs: relSchema,
+      driver: createMockDriver(recorded),
+      policies: {
+        Content: [permissive({ operations: ['read'], when: () => ({}) })],
+        Article: [permissive({ operations: ['read'], when: () => ({}) })],
+        Video: [permissive({ operations: ['read'], when: () => ({}) })],
+        // Target type read policy — limits which authors are visible.
+        User: [
+          permissive({ operations: ['read'], when: () => ({ ownerId: 'u' }) }),
+        ],
+      },
+    });
+    await ogm
+      .withContext({})
+      .interfaceModel('Content')
+      .find({ selectionSet: '{ id author { id email } }' });
+
+    // The `author` relationship must be projected via a pattern comprehension.
+    expect(recorded[0].cypher).toContain('AUTHORED_BY');
+    // `ownerId` is NOT in the selection set, so its only possible source is
+    // the User `read` policy AND-stitched into the `author` comprehension's
+    // WHERE. Before the fix the projection carried no policy and this failed.
+    expect(recorded[0].cypher).toContain('ownerId');
+  });
+
+  it('InterfaceModel.find leaves the projection unchanged when no policy layer is active', async () => {
+    const recorded: Recorded[] = [];
+    // No `policies` → the base-OGM interface model carries no policy binding,
+    // so `policyContext` is null and the compile signature default applies.
+    const ogm = new OGM({
+      typeDefs: relSchema,
+      driver: createMockDriver(recorded),
+    });
+    await ogm
+      .interfaceModel('Content')
+      .find({ selectionSet: '{ id author { id email } }' });
+
+    // Author projection still present, unchanged: the pattern pipes straight
+    // to its map projection with NO policy WHERE stitched in between (the only
+    // `WHERE` in the query belongs to the unrelated `__typename` list
+    // comprehension).
+    expect(recorded[0].cypher).toContain('(n0:`User`) | n0 {');
+    // No policy layer → no `ownerId` policy predicate leaks in.
+    expect(recorded[0].cypher).not.toContain('ownerId');
+  });
 });

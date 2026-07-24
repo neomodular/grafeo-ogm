@@ -115,10 +115,12 @@ export class OGM<
       where,
       selection,
       selectNormalizer: new SelectNormalizer(this.schema),
-      mutation: new MutationCompiler(
-        this.schema,
-        config.logger ? { logger: config.logger } : undefined,
-      ),
+      mutation: new MutationCompiler(this.schema, {
+        ...(config.logger ? { logger: config.logger } : {}),
+        // Share the user-configured WhereCompiler so connect/disconnect
+        // target policy predicates compile identically to the read paths.
+        whereCompiler: where,
+      }),
       fulltext,
       vector,
     };

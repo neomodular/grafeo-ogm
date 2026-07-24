@@ -1,5 +1,6 @@
 import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
+import type { PolicyContextBundle } from '../policy/types';
 import {
   NodeDefinition,
   RelationshipDefinition,
@@ -17,6 +18,7 @@ import {
   escapeIdentifier,
   mergeParams,
 } from '../utils/validation';
+import { WhereCompiler } from './where.compiler';
 
 /**
  * Relationship filter suffixes that require EXISTS subquery patterns.
@@ -42,11 +44,94 @@ export class MutationCompiler {
 
   private logger?: OGMLogger;
 
+  /**
+   * WhereCompiler used ONLY to compile a relationship TARGET type's
+   * `read` policy predicate for connect/disconnect target MATCHes,
+   * mirroring the read paths (`WhereCompiler`/`SelectionCompiler`).
+   * Injected by the OGM so it shares the user's compiler options;
+   * lazily constructed with default options otherwise.
+   */
+  private policyWhereCompiler?: WhereCompiler;
+
   constructor(
     private schema: SchemaMetadata,
-    options?: { logger?: OGMLogger },
+    options?: { logger?: OGMLogger; whereCompiler?: WhereCompiler },
   ) {
     this.logger = options?.logger;
+    this.policyWhereCompiler = options?.whereCompiler;
+  }
+
+  /**
+   * Resolve and compile the TARGET type's `read` policy predicate for a
+   * connect/disconnect target MATCH, mirroring the read path
+   * (`WhereCompiler.buildTargetBundle` + `WhereCompiler.compile`). You
+   * must be allowed to SEE a node to link/unlink it, so linking to an
+   * unreadable node is the IDOR this closes; the codebase models the
+   * row-level write gate for `update`/`delete` targets as `read`
+   * ReadRestrictive policies (see policy/types.ts), so `read` is both
+   * necessary and the semantically correct operation here.
+   *
+   * Returns `null` — leaving the emitted Cypher BYTE-IDENTICAL — when:
+   *   - no policy context is threaded (no policy bound / bypass active), OR
+   *   - no `paramCounter` is available to allocate policy params, OR
+   *   - the target type has no policy applicable to `read`, OR
+   *   - the resolved policy is `overridden` (compiles to nothing).
+   *
+   * When a target policy resolves, the compiled predicate is returned and
+   * its bound params are merged into `params`. Policy params use the
+   * shared `paramCounter` (`param<N>`), continuing the sequence started by
+   * the top-level WHERE, so they can never collide with the
+   * connect/disconnect `where` params (prefix-named, e.g.
+   * `connect_<field>_<prop>`) or the selection's params (allocated later
+   * from the same counter).
+   */
+  private buildTargetPolicyPredicate(
+    targetNodeDef: NodeDefinition,
+    targetVar: string,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+  ): string | null {
+    if (!policyContext || !paramCounter) return null;
+
+    const targetPolicy = policyContext.resolveForType(
+      targetNodeDef.typeName,
+      'read',
+    );
+    if (!targetPolicy) return null;
+
+    const targetBundle: PolicyContextBundle = {
+      ctx: policyContext.ctx,
+      operation: 'read',
+      resolved: targetPolicy,
+      resolveForType: policyContext.resolveForType,
+      defaults: policyContext.defaults,
+    };
+
+    const compiled = this.getPolicyWhereCompiler().compile(
+      undefined,
+      targetVar,
+      targetNodeDef,
+      paramCounter,
+      { policyContext: targetBundle },
+    );
+
+    if (compiled.preludes && compiled.preludes.length > 0)
+      throw new OGMError(
+        `Policy on "${targetNodeDef.typeName}" requires @cypher field ` +
+          `projection, which is not supported inside connect/disconnect ` +
+          `target filters. Refactor the policy to use stored properties.`,
+      );
+
+    if (!compiled.cypher) return null;
+    mergeParams(params, compiled.params);
+    return compiled.cypher;
+  }
+
+  private getPolicyWhereCompiler(): WhereCompiler {
+    if (!this.policyWhereCompiler)
+      this.policyWhereCompiler = new WhereCompiler(this.schema);
+    return this.policyWhereCompiler;
   }
 
   /**
@@ -117,6 +202,11 @@ export class MutationCompiler {
         prefix,
         params,
         createdVars.slice(0, -1), // ancestors = all vars before current
+        // No policy context is threaded on the create path: `create`'s
+        // nested connect enforcement is out of scope for this fix, so
+        // the emitted create Cypher stays byte-identical.
+        undefined,
+        undefined,
       );
       lines.push(...relLines);
     }
@@ -149,6 +239,20 @@ export class MutationCompiler {
     },
     labels?: string[],
     returnMode: 'node' | 'count' = 'node',
+    /**
+     * The caller's resolved policy bundle for this mutation (the SOURCE
+     * type's `update` bundle). Its `resolveForType` is used to resolve
+     * each connect/disconnect TARGET type's `read` policy. `undefined`
+     * when no policy is bound or a bypass is active — in which case the
+     * emitted Cypher is byte-identical to before this enforcement.
+     */
+    policyContext?: PolicyContextBundle,
+    /**
+     * Shared `param<N>` counter, continued from the top-level WHERE
+     * compile so target-policy params never collide with connect/
+     * disconnect `where` params or the selection's params.
+     */
+    paramCounter?: { count: number },
   ): MutationResult {
     this.relFilterCounter = 0;
     const labelStr = this.getCachedLabelString(nodeDef);
@@ -190,6 +294,10 @@ export class MutationCompiler {
         'n',
         'update',
         params,
+        0,
+        [],
+        policyContext,
+        paramCounter,
       );
       lines.push(...relLines);
     }
@@ -201,13 +309,21 @@ export class MutationCompiler {
         disconnect,
         nodeDef,
         params,
+        policyContext,
+        paramCounter,
       );
       lines.push(...disconnectLines);
     }
 
     // Connect relationships (top-level)
     if (connect) {
-      const connectLines = this.buildConnects(connect, nodeDef, params);
+      const connectLines = this.buildConnects(
+        connect,
+        nodeDef,
+        params,
+        policyContext,
+        paramCounter,
+      );
       lines.push(...connectLines);
     }
 
@@ -559,6 +675,8 @@ export class MutationCompiler {
     prefix: string,
     params: Record<string, unknown>,
     ancestorVars: string[] = [],
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): string[] {
     const lines: string[] = [];
     let nestedCounter = 0;
@@ -598,6 +716,8 @@ export class MutationCompiler {
             allVars,
             withClause,
             nestedCounter,
+            policyContext,
+            paramCounter,
           );
           nestedCounter += memberLines.counterUsed;
           lines.push(...memberLines.lines);
@@ -618,6 +738,8 @@ export class MutationCompiler {
         allVars,
         withClause,
         nestedCounter,
+        policyContext,
+        paramCounter,
       );
       nestedCounter += resultLines.counterUsed;
       lines.push(...resultLines.lines);
@@ -640,6 +762,8 @@ export class MutationCompiler {
     allVars: string[],
     withClause: string,
     startCounter: number,
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): { lines: string[]; counterUsed: number } {
     const lines: string[] = [];
     let counter = 0;
@@ -676,6 +800,8 @@ export class MutationCompiler {
           `${prefix}_create${ci}`,
           params,
           allVars,
+          policyContext,
+          paramCounter,
         );
 
         const propsClause =
@@ -772,8 +898,18 @@ export class MutationCompiler {
           params,
           targetNodeDef,
         );
-        if (conditions.length > 0)
-          lines.push(`WHERE ${conditions.join(' AND ')}`);
+        const policyPredicate = this.buildTargetPolicyPredicate(
+          targetNodeDef,
+          connectVar,
+          params,
+          policyContext,
+          paramCounter,
+        );
+        const connectConditions = policyPredicate
+          ? [...conditions, policyPredicate]
+          : conditions;
+        if (connectConditions.length > 0)
+          lines.push(`WHERE ${connectConditions.join(' AND ')}`);
 
         if (edgeInput && Object.keys(edgeInput).length > 0) {
           // Use bare target var (no label) since connectVar is already bound by MATCH.
@@ -818,6 +954,8 @@ export class MutationCompiler {
     connect: Record<string, unknown>,
     nodeDef: NodeDefinition,
     params: Record<string, unknown>,
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): string[] {
     const lines: string[] = [];
 
@@ -868,8 +1006,18 @@ export class MutationCompiler {
               params,
               targetNodeDef,
             );
-            if (conditions.length > 0)
-              lines.push(`WHERE ${conditions.join(' AND ')}`);
+            const policyPredicate = this.buildTargetPolicyPredicate(
+              targetNodeDef,
+              connectVar,
+              params,
+              policyContext,
+              paramCounter,
+            );
+            const connectConditions = policyPredicate
+              ? [...conditions, policyPredicate]
+              : conditions;
+            if (connectConditions.length > 0)
+              lines.push(`WHERE ${connectConditions.join(' AND ')}`);
 
             if (edgeInput && Object.keys(edgeInput).length > 0) {
               assertSafeIdentifier(relDef.type, 'relationship type');
@@ -952,8 +1100,18 @@ export class MutationCompiler {
             'target',
             'connItem',
           );
-          if (whereConditions.length > 0)
-            lines.push(`WHERE ${whereConditions.join(' AND ')}`);
+          const policyPredicate = this.buildTargetPolicyPredicate(
+            targetNodeDef,
+            'target',
+            params,
+            policyContext,
+            paramCounter,
+          );
+          const unwindConditions = policyPredicate
+            ? [...whereConditions, policyPredicate]
+            : whereConditions;
+          if (unwindConditions.length > 0)
+            lines.push(`WHERE ${unwindConditions.join(' AND ')}`);
 
           const mergePattern = buildRelPattern({
             sourceVar: 'n',
@@ -1000,8 +1158,18 @@ export class MutationCompiler {
           targetNodeDef,
         );
 
-        if (matchConditions.length > 0)
-          lines.push(`WHERE ${matchConditions.join(' AND ')}`);
+        const policyPredicate = this.buildTargetPolicyPredicate(
+          targetNodeDef,
+          'target',
+          params,
+          policyContext,
+          paramCounter,
+        );
+        const singleConnectConditions = policyPredicate
+          ? [...matchConditions, policyPredicate]
+          : matchConditions;
+        if (singleConnectConditions.length > 0)
+          lines.push(`WHERE ${singleConnectConditions.join(' AND ')}`);
 
         if (edgeInput && Object.keys(edgeInput).length > 0) {
           // Use bare target var (no label) since target is already bound by MATCH
@@ -1038,6 +1206,8 @@ export class MutationCompiler {
     disconnect: Record<string, unknown>,
     nodeDef: NodeDefinition,
     params: Record<string, unknown>,
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): string[] {
     const lines: string[] = [];
 
@@ -1096,8 +1266,20 @@ export class MutationCompiler {
             targetNodeDef,
           );
 
-          if (conditions.length > 0)
-            lines.push(`WHERE ${conditions.join(' AND ')}`);
+          const policyPredicate = targetNodeDef
+            ? this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                targetVar,
+                params,
+                policyContext,
+                paramCounter,
+              )
+            : null;
+          const disconnectConditions = policyPredicate
+            ? [...conditions, policyPredicate]
+            : conditions;
+          if (disconnectConditions.length > 0)
+            lines.push(`WHERE ${disconnectConditions.join(' AND ')}`);
 
           lines.push(`DELETE ${relVar}`);
         }
@@ -1122,6 +1304,8 @@ export class MutationCompiler {
     params: Record<string, unknown>,
     depth: number,
     ancestorVars: string[],
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): string[] {
     const unionMembers = this.schema.unions!.get(relDef.target)!;
     const lines: string[] = [];
@@ -1153,6 +1337,8 @@ export class MutationCompiler {
           params,
           depth + 1,
           ancestorVars,
+          policyContext,
+          paramCounter,
         ),
       );
     }
@@ -1172,6 +1358,8 @@ export class MutationCompiler {
     params: Record<string, unknown>,
     depth: number = 0,
     ancestorVars: string[] = [],
+    policyContext?: PolicyContextBundle,
+    paramCounter?: { count: number },
   ): string[] {
     if (depth > 5)
       throw new OGMError(
@@ -1206,6 +1394,8 @@ export class MutationCompiler {
             params,
             depth,
             ancestorVars,
+            policyContext,
+            paramCounter,
           ),
         );
         continue;
@@ -1317,6 +1507,8 @@ export class MutationCompiler {
               `${itemPrefix}_create${ci}`,
               params,
               allVars,
+              policyContext,
+              paramCounter,
             );
 
             const propsClause =
@@ -1405,8 +1597,18 @@ export class MutationCompiler {
                 targetNodeDef,
               );
 
-              if (conditions.length > 0)
-                lines.push(`WHERE ${conditions.join(' AND ')}`);
+              const policyPredicate = this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                discTarget,
+                params,
+                policyContext,
+                paramCounter,
+              );
+              const nestedDiscConditions = policyPredicate
+                ? [...conditions, policyPredicate]
+                : conditions;
+              if (nestedDiscConditions.length > 0)
+                lines.push(`WHERE ${nestedDiscConditions.join(' AND ')}`);
 
               lines.push(`DELETE ${relVar}`);
             }
@@ -1452,8 +1654,18 @@ export class MutationCompiler {
               params,
               targetNodeDef,
             );
-            if (conditions.length > 0)
-              lines.push(`WHERE ${conditions.join(' AND ')}`);
+            const policyPredicate = this.buildTargetPolicyPredicate(
+              targetNodeDef,
+              connectVar,
+              params,
+              policyContext,
+              paramCounter,
+            );
+            const nestedConnConditions = policyPredicate
+              ? [...conditions, policyPredicate]
+              : conditions;
+            if (nestedConnConditions.length > 0)
+              lines.push(`WHERE ${nestedConnConditions.join(' AND ')}`);
 
             if (edgeInput && Object.keys(edgeInput).length > 0) {
               // Use bare target var (no label) since connectVar is already bound by MATCH
@@ -1542,6 +1754,8 @@ export class MutationCompiler {
             nestedParams,
             depth + 1,
             allVars,
+            policyContext,
+            paramCounter,
           );
 
           // Only emit the MATCH block if there's actual work to do
