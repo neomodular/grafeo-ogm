@@ -17,6 +17,7 @@ import { CypherFieldScope } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
   assertSafeKey,
+  assertSafeRegexPattern,
   escapeIdentifier,
   isPlainObject,
   mergeParams,
@@ -1454,6 +1455,14 @@ export class WhereCompiler {
 
     const opDef = OPERATOR_MAP.get(operator);
     if (!opDef) throw new OGMError(`Unknown operator: ${operator}`);
+
+    // ReDoS guard: `_MATCHES` forwards its value into Neo4j's backtracking
+    // `=~` engine. Refuse any pattern not provably free of catastrophic
+    // backtracking before it can reach the server. The value is already
+    // parameterized — this is a semantic guard on the operator, not
+    // injection defense. Non-string values fall through untouched.
+    if (operator === '_MATCHES' && typeof value === 'string')
+      assertSafeRegexPattern(value, 'where clause');
 
     const ci = caseInsensitive && opDef.ciAware;
     const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;

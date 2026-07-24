@@ -267,15 +267,15 @@ describe('WhereCompiler', () => {
     expect(result.params).toEqual({ param0: '2024' });
   });
 
-  // 7. _MATCHES operator
+  // 7. _MATCHES operator (a provably-safe pattern; `(?i)` inline flag supported)
   it('should compile _MATCHES operator', () => {
     const result = compiler.compile(
-      { name_MATCHES: '(?i).*x.*' },
+      { name_MATCHES: '(?i)^[a-z]+$' },
       'n',
       bookNode,
     );
     expect(result.cypher).toBe('n.`name` =~ $param0');
-    expect(result.params).toEqual({ param0: '(?i).*x.*' });
+    expect(result.params).toEqual({ param0: '(?i)^[a-z]+$' });
   });
 
   // Additional: _GT, _LT, _STARTS_WITH, _ENDS_WITH
@@ -301,6 +301,44 @@ describe('WhereCompiler', () => {
     const result = compiler.compile({ name_ENDS_WITH: 'Z' }, 'n', bookNode);
     expect(result.cypher).toBe('n.`name` ENDS WITH $param0');
     expect(result.params).toEqual({ param0: 'Z' });
+  });
+
+  describe('_MATCHES ReDoS guard', () => {
+    it('compiles a provably-safe pattern to `=~` unchanged', () => {
+      const result = compiler.compile(
+        { name_MATCHES: '^foo.*bar$' },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('n.`name` =~ $param0');
+      expect(result.params).toEqual({ param0: '^foo.*bar$' });
+    });
+
+    it('rejects a catastrophic-backtracking pattern before it reaches Neo4j', () => {
+      expect(() =>
+        compiler.compile({ name_MATCHES: '([a-z]+)+$' }, 'n', bookNode),
+      ).toThrow(/ReDoS/);
+    });
+
+    it('guards nested relationship `_MATCHES` filters too', () => {
+      expect(() =>
+        compiler.compile(
+          { hasStatus_SOME: { name_MATCHES: '(a+)+$' } },
+          'n',
+          bookNode,
+        ),
+      ).toThrow(/ReDoS/);
+    });
+
+    it('leaves non-string `_MATCHES` values untouched', () => {
+      const result = compiler.compile(
+        { name_MATCHES: 123 as unknown as string },
+        'n',
+        bookNode,
+      );
+      expect(result.cypher).toBe('n.`name` =~ $param0');
+      expect(result.params).toEqual({ param0: 123 });
+    });
   });
 
   // 8. Multiple conditions (implicit AND)
@@ -1406,12 +1444,12 @@ describe('WhereCompiler', () => {
 
     it('should NOT affect _MATCHES when mode is insensitive', () => {
       const result = compiler.compile(
-        { name_MATCHES: '.*test.*', mode: 'insensitive' },
+        { name_MATCHES: '[a-z]+', mode: 'insensitive' },
         'n',
         bookNode,
       );
       expect(result.cypher).toBe('n.`name` =~ $param0');
-      expect(result.params).toEqual({ param0: '.*test.*' });
+      expect(result.params).toEqual({ param0: '[a-z]+' });
     });
 
     it('should NOT wrap in toLower() without mode (backward compatible)', () => {
@@ -1469,7 +1507,7 @@ describe('WhereCompiler', () => {
     it('should allow _MATCHES when no options are provided (backward compat)', () => {
       const defaultCompiler = new WhereCompiler(schema);
       const result = defaultCompiler.compile(
-        { name_MATCHES: '(?i).*x.*' },
+        { name_MATCHES: '(?i)[a-z]+' },
         'n',
         bookNode,
       );
