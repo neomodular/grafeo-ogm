@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.14.0 (2026-07-24) — 🛡️ Security release: NLS enforcement on interface reads & relationship writes, and a `_MATCHES` ReDoS guard
+
+> **Three security fixes.** Two are object-level authorization gaps: grafeo's node-level-security (NLS) policies were threaded correctly through the concrete-model read and write paths, but two paths silently skipped the **target type's** policy — nested relationship projections on **interface** reads, and **connect/disconnect** relationship writes — so a caller whose own access was correctly scoped could still read, or link/unlink, related nodes their policy forbids. The third hardens the `_MATCHES` filter operator against server-side ReDoS. If you use `policies` with interface models or nested `connect`/`disconnect`, or expose `_MATCHES` to untrusted input, upgrade.
+
+### 🛡️ Interface reads now apply the target type's `read` policy to nested projections
+
+`InterfaceModel.find` (and its `findFirst` / `findUnique` / `*OrThrow` siblings, which all route through it) applied the interface's source-side policy and the WHERE-side traversal policy — but compiled the **RETURN projection** without the read `policyContext` that `Model.find` passes. Every nested relationship pattern comprehension was therefore emitted with **no target-type policy**, so an interface query could project fields of related, policy-protected node types (e.g. another tenant's `author { email }`) that the target type's `read` policy is meant to filter out. The leak was silent and spanned every row the interface query returned.
+
+The fix threads the resolved read `policyContext` into the interface selection compile, exactly as the concrete-model path already does, so every nested projection AND-stitches the target type's read policy — including union and connection branches. **When no policy layer is configured the emitted Cypher is byte-identical** to before; the guard engages only when a policy actually resolves for the projected type.
+
+### 🛡️ Nested `connect` / `disconnect` now enforce the target type's `read` policy
+
+`MutationCompiler` was policy-unaware: the target `MATCH` emitted for a nested `connect` (MERGE) or `disconnect` selected the target node by the caller's `where` alone, with no policy. A caller operating under a bound `withContext(ctx)` — whose *source* node was correctly policy-filtered — could therefore link or unlink relationships to arbitrary target nodes their policy should forbid (cross-tenant / cross-owner relationship writes):
+
+```typescript
+// `Book` has a read policy scoped to the owner. Previously this linked a
+// foreign Book anyway — the target MATCH carried no Book policy. Now it
+// AND-stitches the Book read policy, so an unreadable target fails to
+// match and the MERGE is a no-op.
+ogm.withContext({ uid }).model('User').update({
+  where: { id: myId },
+  connect: { ownedBooks: { where: { id: someBookId } } },
+});
+```
+
+The fix threads the resolved policy context into `MutationCompiler` and AND-stitches the target type's `read` policy into every connect/disconnect target `MATCH` — all seven sites (single / array / `UNWIND` connect, specific disconnect, nested-in-update connect and disconnect, union targets), reached from both `update` and `updateMany`. `read` is the correct gate: row-level target visibility is expressed as the `read` policy, while `create`/`update` restrictives are WITH-CHECK predicates over a mutation-input bag that a referenced existing node has none of. **No-policy, bypass (`unsafe.bypassPolicies`), and no-target-policy paths stay byte-identical**; `create` and `upsert` (which never emits a relationship `MATCH`) are untouched. Policy predicates use the mutation's shared, monotonic parameter counter, so they never collide with the caller's `connect`/`disconnect` `where` params.
+
+### 🛡️ `_MATCHES` is now guarded against catastrophic-backtracking regexes (ReDoS)
+
+The `_MATCHES` filter operator forwards its value into a Neo4j `=~` predicate, which the server evaluates with Java's **backtracking** regex engine. An attacker able to influence a `where` filter could supply a catastrophic pattern (e.g. `(a+)+$`, `([a-z]+)+$`, `(a?)+$`) and pin shared Neo4j CPU — a server-side ReDoS ([CWE-1333](https://cwe.mitre.org/data/definitions/1333.html)). Parameterization stops injection but not this: the payload *is* the regex.
+
+Every `_MATCHES` value is now validated at compile time by a **sound-by-construction** guard. Rather than blocklisting known-bad shapes (always incomplete), it accepts a pattern **only when it can prove the pattern is linear**, and refuses everything it cannot model — alternation, quantified groups, lookaround, backreferences, unsupported escapes. The check is single-pass and bounded, so it cannot itself become a DoS vector, and Java-flavor divergences are modeled soundly (`\v` is the vertical-whitespace class; `\0`/octal escapes are refused; only inline flags that don't change the analysis — `i`/`m`/`s`/`d` — are honored, so `(?x)` COMMENTS mode and `(?u)`/`(?U)` Unicode widening are refused).
+
+- **Precision cost (intended, fail-closed).** Some linear-but-unprovable patterns are refused — notably **all alternation** (`(cat|dog)`) and **contains-style** `.*x.*` shapes. Reach for the dedicated, always-safe operators (`_CONTAINS` / `_STARTS_WITH` / `_ENDS_WITH` / `_IN`), simplify the pattern, or disable `_MATCHES` entirely via `features.filters.String.MATCHES` if you must run arbitrary regexes and accept the risk. The refusal error names these options.
+- **Common patterns keep working** — anchors, character classes, single wildcards (`^foo.*bar$`, `[A-Za-z0-9_]+`, `\d{3}-\d{4}`), fenced quantifiers (`[a-z]+@[a-z]+\.[a-z]+`), and inline-flag prefixes (`(?i)…`).
+
+### Tests
+
+Interface-read policy: two specs asserting the nested projection now carries the target `read` predicate for interface reads, and that the no-policy path stays byte-identical. Connect/disconnect policy: six specs covering connect and disconnect target MATCHes carrying the target `read` policy, the update-op-not-stitched case, byte-identical no-policy/bypass Cypher, and non-colliding parameter numbering. ReDoS guard: a 100+-case battery covering every known catastrophic family (nested quantifiers, nullable/overlapping alternation under repeat, custom-class and nested-group bases, unrolled adjacent optionals), fail-closed refusal of unmodeled constructs, acceptance of provably-linear patterns, and the three Java-flavor soundness regressions found and closed during adversarial review (`(?x)`, `\v`, `\0`). Full suite green (1629); lint and format clean.
+
+---
+
 ## 1.13.0 (2026-07-14) — ✨ `$cloneSubgraph` returns `nodesByLabel`
 
 > **First community-requested feature** ([#1](https://github.com/neomodular/grafeo-ogm/issues/1)). After deep-cloning a content subgraph, a caller often needs to post-process only the nodes of a **specific label** (re-normalize, re-stamp, re-index). Until now `nodeMapping` held every cloned id across all labels, forcing a broad-`IN`-plus-label-filter dance on the caller. The clone already visits every node with its labels in hand — so now it just tells you.
