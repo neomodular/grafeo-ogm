@@ -23,6 +23,26 @@ export type MakeEmpty<
   T extends { [key: string]: unknown },
   K extends keyof T,
 > = { [_ in K]?: never };
+/**
+ * Narrows an all-optional map to "exactly one key present".
+ *
+ * Used where the runtime reads a single key and a second one would be silently
+ * dropped. Both such surfaces have a dedicated way to say "more than one":
+ *
+ * ```ts
+ * // <Type>Sort — precedence comes from ARRAY POSITION
+ * sort: [{ a: "ASC" }, { b: "DESC" }]        // ok -> ORDER BY n.a ASC, n.b DESC
+ * sort: [{ a: "ASC", b: "DESC" }]            // error
+ *
+ * // <Type>FulltextLeaf — combine indexes with AND / OR
+ * fulltext: { AND: [{ IdxA: {...} }, { IdxB: {...} }] }   // ok
+ * fulltext: { IdxA: {...}, IdxB: {...} }                  // error
+ * ```
+ */
+export type ExactlyOneKey<T> = {
+  [K in keyof Required<T>]: Pick<Required<T>, K> &
+    Partial<Record<Exclude<keyof T, K>, never>>;
+}[keyof Required<T>];
 export type Incremental<T> =
   | T
   | {
@@ -995,12 +1015,12 @@ export type EntityDeleteInput = {
   Author?: InputMaybe<Array<AuthorDeleteInput>>;
 };
 
-export type AuthorSort = {
+export type AuthorSort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   name?: InputMaybe<SortDirection>;
   bio?: InputMaybe<SortDirection>;
   bornYear?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type AuthorOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1008,7 +1028,7 @@ export type AuthorOptions = {
   sort?: InputMaybe<Array<AuthorSort>>;
 };
 
-export type BookSort = {
+export type BookSort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   title?: InputMaybe<SortDirection>;
   isbn?: InputMaybe<SortDirection>;
@@ -1016,7 +1036,7 @@ export type BookSort = {
   price?: InputMaybe<SortDirection>;
   published?: InputMaybe<SortDirection>;
   status?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type BookOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1024,10 +1044,10 @@ export type BookOptions = {
   sort?: InputMaybe<Array<BookSort>>;
 };
 
-export type CategorySort = {
+export type CategorySort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   name?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type CategoryOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1035,11 +1055,11 @@ export type CategoryOptions = {
   sort?: InputMaybe<Array<CategorySort>>;
 };
 
-export type PublisherSort = {
+export type PublisherSort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   name?: InputMaybe<SortDirection>;
   website?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type PublisherOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1047,11 +1067,11 @@ export type PublisherOptions = {
   sort?: InputMaybe<Array<PublisherSort>>;
 };
 
-export type ReviewSort = {
+export type ReviewSort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   rating?: InputMaybe<SortDirection>;
   comment?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type ReviewOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1059,10 +1079,10 @@ export type ReviewOptions = {
   sort?: InputMaybe<Array<ReviewSort>>;
 };
 
-export type EntitySort = {
+export type EntitySort = ExactlyOneKey<{
   id?: InputMaybe<SortDirection>;
   name?: InputMaybe<SortDirection>;
-};
+}>;
 
 export type EntityOptions = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1519,15 +1539,15 @@ export type BookFulltextSort = {
   book?: InputMaybe<BookSort>;
 };
 
-export type BookFulltextLeaf = {
+export type BookFulltextLeaf = ExactlyOneKey<{
   BookSearch?: FulltextIndexEntry;
-};
+}>;
 
 export type BookFulltextInput =
   | BookFulltextLeaf
-  | { OR: BookFulltextInput[] }
-  | { AND: BookFulltextInput[] }
-  | { NOT: BookFulltextInput };
+  | { OR: BookFulltextInput[]; AND?: never; NOT?: never }
+  | { AND: BookFulltextInput[]; OR?: never; NOT?: never }
+  | { NOT: BookFulltextInput; OR?: never; AND?: never };
 
 export type AuthorBooksEdgeSelectFields = {
   role?: boolean;
