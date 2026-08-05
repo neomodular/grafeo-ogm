@@ -7,7 +7,10 @@ import {
 } from '../model';
 import { FulltextIndex, NodeDefinition, SchemaMetadata } from '../schema/types';
 import {
+  assertPlainObject,
   assertSafeIdentifier,
+  assertSingleFulltextKey,
+  assertSingleFulltextOperator,
   escapeIdentifier,
   mergeParams,
 } from '../utils/validation';
@@ -96,15 +99,20 @@ export class FulltextCompiler {
   ): FulltextResult {
     assertSafeIdentifier(relVar, 'relationship variable');
 
-    const keys = Object.keys(fulltext);
-    if (keys.length === 0)
+    assertPlainObject(fulltext, 'Relationship fulltext input');
+
+    const entries = Object.entries(fulltext);
+    if (entries.length === 0)
       throw new OGMError(
         'Fulltext input must contain at least one index entry',
       );
+    // Validate every key, not just the surviving one, so the arity error only
+    // ever interpolates identifier-shaped strings.
+    for (const [key] of entries)
+      assertSafeIdentifier(key, 'fulltext index name');
+    assertSingleFulltextKey(entries, 'Relationship fulltext input');
 
-    const indexName = keys[0];
-    assertSafeIdentifier(indexName, 'fulltext index name');
-    const input = fulltext[indexName];
+    const [indexName, input] = entries[0];
 
     assertValidFulltextPhrase(input.phrase);
 
@@ -147,6 +155,13 @@ export class FulltextCompiler {
       throw new OGMError(
         `Fulltext logical nesting exceeds maximum depth of ${MAX_DEPTH}`,
       );
+    // Guarded here rather than in `compile()` so it also covers every branch
+    // reached through OR / AND / NOT recursion, e.g. `{ OR: [null] }`.
+    assertPlainObject(input, 'Fulltext input');
+    // The operator dispatch below returns on its first hit, so anything
+    // alongside OR / AND / NOT would be dropped without a word.
+    assertSingleFulltextOperator(Object.keys(input));
+
     if (isFulltextLeaf(input))
       return this.compileLeaf(input, nodeDef, nodeVar, paramCounter);
 
@@ -191,14 +206,19 @@ export class FulltextCompiler {
     nodeVar: string,
     paramCounter: { count: number },
   ): FulltextResult {
-    const keys = Object.keys(leaf);
-    if (keys.length === 0)
+    const entries = Object.entries(leaf);
+    if (entries.length === 0)
       throw new OGMError(
         'Fulltext input must contain at least one index entry',
       );
+    for (const [k] of entries)
+      assertSafeIdentifier(k, 'fulltext index or relationship name');
+    assertSingleFulltextKey(entries, 'Fulltext leaf');
 
-    const key = keys[0];
-    assertSafeIdentifier(key, 'fulltext index or relationship name');
+    const key = entries[0][0];
+    // `isFulltextIndexEntry` uses the `in` operator, which throws a bare
+    // TypeError on a non-object (e.g. `{ BookSearch: null }`).
+    assertPlainObject(leaf[key], `Fulltext entry "${key}"`);
     const value = leaf[key] as
       | FulltextIndexEntry
       | Record<string, FulltextIndexEntry>;
@@ -287,15 +307,19 @@ export class FulltextCompiler {
         `@relationshipProperties type "${relDef.properties}" not found`,
       );
 
-    const innerKeys = Object.keys(inner);
-    if (innerKeys.length === 0)
+    const innerEntries = Object.entries(inner);
+    if (innerEntries.length === 0)
       throw new OGMError(
         'Relationship fulltext entry must contain an index name',
       );
+    for (const [key] of innerEntries)
+      assertSafeIdentifier(key, 'fulltext index name');
+    assertSingleFulltextKey(
+      innerEntries,
+      `Relationship fulltext entry for "${relFieldName}"`,
+    );
 
-    const indexName = innerKeys[0];
-    assertSafeIdentifier(indexName, 'fulltext index name');
-    const input = inner[indexName];
+    const [indexName, input] = innerEntries[0];
 
     const ftIndex = (relProps.fulltextIndexes ?? []).find(
       (idx) => idx.name === indexName,

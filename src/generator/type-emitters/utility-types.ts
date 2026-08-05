@@ -52,6 +52,26 @@ export type MakeEmpty<
   T extends { [key: string]: unknown },
   K extends keyof T
 > = { [_ in K]?: never };
+/**
+ * Narrows an all-optional map to "exactly one key present".
+ *
+ * Used where the runtime reads a single key and a second one would be silently
+ * dropped. Both such surfaces have a dedicated way to say "more than one":
+ *
+ * \`\`\`ts
+ * // <Type>Sort — precedence comes from ARRAY POSITION
+ * sort: [{ a: "ASC" }, { b: "DESC" }]        // ok -> ORDER BY n.a ASC, n.b DESC
+ * sort: [{ a: "ASC", b: "DESC" }]            // error
+ *
+ * // <Type>FulltextLeaf — combine indexes with AND / OR
+ * fulltext: { AND: [{ IdxA: {...} }, { IdxB: {...} }] }   // ok
+ * fulltext: { IdxA: {...}, IdxB: {...} }                  // error
+ * \`\`\`
+ */
+export type ExactlyOneKey<T> = {
+  [K in keyof Required<T>]: Pick<Required<T>, K> &
+    Partial<Record<Exclude<keyof T, K>, never>>;
+}[keyof Required<T>];
 export type Incremental<T> =
   | T
   | {

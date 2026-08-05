@@ -169,7 +169,7 @@ describe('emitFulltextTypes — per-node typed inputs', () => {
 
     const output = emitFulltextTypes(schema);
 
-    expect(output).toContain('export type DrugFulltextLeaf = {');
+    expect(output).toContain('export type DrugFulltextLeaf = ExactlyOneKey<{');
     expect(output).toContain('IndicationsFullSearch?: FulltextIndexEntry;');
     expect(output).toContain('DrugNameSearch?: FulltextIndexEntry;');
   });
@@ -190,9 +190,15 @@ describe('emitFulltextTypes — per-node typed inputs', () => {
 
     expect(output).toContain('export type DrugFulltextInput =');
     expect(output).toContain('| DrugFulltextLeaf');
-    expect(output).toContain('| { OR: DrugFulltextInput[] }');
-    expect(output).toContain('| { AND: DrugFulltextInput[] }');
-    expect(output).toContain('| { NOT: DrugFulltextInput };');
+    expect(output).toContain(
+      '| { OR: DrugFulltextInput[]; AND?: never; NOT?: never }',
+    );
+    expect(output).toContain(
+      '| { AND: DrugFulltextInput[]; OR?: never; NOT?: never }',
+    );
+    expect(output).toContain(
+      '| { NOT: DrugFulltextInput; OR?: never; AND?: never };',
+    );
   });
 
   it('emits the shared FulltextIndexEntry type once', () => {
@@ -239,9 +245,11 @@ describe('emitFulltextTypes — per-node typed inputs', () => {
 
     const output = emitFulltextTypes(schema);
 
-    expect(output).toContain('export type ArticleFulltextLeaf = {');
     expect(output).toContain(
-      'categories?: { CategoryLabelSearch?: FulltextIndexEntry };',
+      'export type ArticleFulltextLeaf = ExactlyOneKey<{',
+    );
+    expect(output).toContain(
+      'categories?: ExactlyOneKey<{ CategoryLabelSearch?: FulltextIndexEntry }>;',
     );
     expect(output).toContain('export type ArticleFulltextInput =');
   });
@@ -270,11 +278,98 @@ describe('emitFulltextTypes — per-node typed inputs', () => {
     // No node-level index → no ArticleFulltextResult
     expect(output).not.toContain('ArticleFulltextResult');
     // But we DO emit the input types so find() gets typed autocomplete.
-    expect(output).toContain('export type ArticleFulltextLeaf = {');
+    expect(output).toContain(
+      'export type ArticleFulltextLeaf = ExactlyOneKey<{',
+    );
     expect(output).toContain('export type ArticleFulltextInput =');
     expect(output).toContain(
-      'categories?: { CategoryLabelSearch?: FulltextIndexEntry };',
+      'categories?: ExactlyOneKey<{ CategoryLabelSearch?: FulltextIndexEntry }>;',
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // Fulltext leaf arity — v2.0.0
+  // -------------------------------------------------------------------------
+  describe('ExactlyOneKey wrapping', () => {
+    it('closes the leaf wrapper so the emitted type parses', () => {
+      const schema = makeSchema(
+        new Map([
+          [
+            'Drug',
+            makeNodeDef('Drug', [
+              { name: 'IndicationsFullSearch', fields: ['indications'] },
+              { name: 'DrugNameSearch', fields: ['name'] },
+            ]),
+          ],
+        ]),
+      );
+
+      const output = emitFulltextTypes(schema);
+
+      expect(output).toContain(
+        [
+          'export type DrugFulltextLeaf = ExactlyOneKey<{',
+          '  IndicationsFullSearch?: FulltextIndexEntry;',
+          '  DrugNameSearch?: FulltextIndexEntry;',
+          '}>;',
+        ].join('\n'),
+      );
+    });
+
+    it('wraps the nested relationship object too', () => {
+      // `compileRelationshipIndex` also reads a single key, so the inner
+      // object needs the same narrowing as the leaf itself.
+      const relationships = new Map<string, RelationshipDefinition>([
+        ['categories', makeRel('categories', 'Category', 'InCategory')],
+      ]);
+      const schema = makeSchema(
+        new Map([
+          ['Article', makeNodeDef('Article', [], relationships)],
+          ['Category', makeNodeDef('Category')],
+        ]),
+        new Map([
+          [
+            'InCategory',
+            makeRelProps('InCategory', [
+              { name: 'CategoryLabelSearch', fields: ['label'] },
+              { name: 'CategoryNoteSearch', fields: ['note'] },
+            ]),
+          ],
+        ]),
+      );
+
+      const output = emitFulltextTypes(schema);
+
+      expect(output).toContain(
+        'categories?: ExactlyOneKey<{ CategoryLabelSearch?: FulltextIndexEntry; CategoryNoteSearch?: FulltextIndexEntry }>;',
+      );
+    });
+
+    it('keeps the leaf as a member and makes each operator exclusive', () => {
+      // AND / OR remain the way to express more than one index — but only one
+      // operator per object, since `compileNode` returns at the first hit.
+      const schema = makeSchema(
+        new Map([
+          [
+            'Drug',
+            makeNodeDef('Drug', [{ name: 'DrugNameSearch', fields: ['name'] }]),
+          ],
+        ]),
+      );
+
+      const output = emitFulltextTypes(schema);
+
+      expect(output).toContain('| DrugFulltextLeaf');
+      expect(output).toContain(
+        '| { AND: DrugFulltextInput[]; OR?: never; NOT?: never }',
+      );
+      expect(output).toContain(
+        '| { OR: DrugFulltextInput[]; AND?: never; NOT?: never }',
+      );
+      expect(output).toContain(
+        '| { NOT: DrugFulltextInput; OR?: never; AND?: never };',
+      );
+    });
   });
 
   it('omits emission entirely for nodes with no node-level or relationship-level fulltext', () => {

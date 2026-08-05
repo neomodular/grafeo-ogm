@@ -213,24 +213,40 @@ function emitFulltextLeaf(
     const indexKeys = (props.fulltextIndexes ?? [])
       .map((idx) => `${formatObjectKey(idx.name)}?: FulltextIndexEntry`)
       .join('; ');
-    return `  ${key}?: { ${indexKeys} };`;
+    // The nested object is read by `compileRelationshipIndex`, which also
+    // consumes a single key — so it needs the same narrowing as the leaf.
+    return `  ${key}?: ExactlyOneKey<{ ${indexKeys} }>;`;
   });
 
   const body = [...nodeLevelKeys, ...relKeys].join('\n');
 
-  return `export type ${node.typeName}FulltextLeaf = {
+  // `compileLeaf` reads exactly one key off the leaf; a second index would be
+  // silently dropped, so the type admits only one. Multiple indexes are
+  // expressed through the AND / OR members of `<Node>FulltextInput`.
+  return `export type ${node.typeName}FulltextLeaf = ExactlyOneKey<{
 ${body}
-};`;
+}>;`;
 }
 
 /**
  * Emits `<Node>FulltextInput` — the top-level union accepted by `find()` et
  * al. Includes the leaf and the three logical composition operators.
+ *
+ * Each operator member marks the other two `?: never`. `compileNode` dispatches
+ * on `OR`, then `AND`, then `NOT`, returning at the first hit — so stacking two
+ * operators in one object silently discarded one of them. `{ NOT, AND }` was
+ * the worst case: `AND` won and the exclusion vanished entirely.
+ *
+ * This closes operator-vs-operator at compile time. It does NOT close operator
+ * mixed with a bare index key (`{ OR: [...], SomeIndex: {...} }`) — TypeScript
+ * permits a literal property that exists on ANY member of the union — so
+ * `assertSingleFulltextOperator` still backs this at runtime.
  */
 function emitFulltextInput(node: NodeDefinition): string {
-  return `export type ${node.typeName}FulltextInput =
-  | ${node.typeName}FulltextLeaf
-  | { OR: ${node.typeName}FulltextInput[] }
-  | { AND: ${node.typeName}FulltextInput[] }
-  | { NOT: ${node.typeName}FulltextInput };`;
+  const t = node.typeName;
+  return `export type ${t}FulltextInput =
+  | ${t}FulltextLeaf
+  | { OR: ${t}FulltextInput[]; AND?: never; NOT?: never }
+  | { AND: ${t}FulltextInput[]; OR?: never; NOT?: never }
+  | { NOT: ${t}FulltextInput; OR?: never; AND?: never };`;
 }

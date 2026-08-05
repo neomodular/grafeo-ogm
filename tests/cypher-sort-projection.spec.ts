@@ -1,4 +1,5 @@
 import { compileSortClause } from '../src/utils/cypher-sort-projection';
+import { OGMError } from '../src/errors';
 import type { PropertyDefinition } from '../src/schema/types';
 
 function storedProp(name: string, type = 'String'): PropertyDefinition {
@@ -227,5 +228,193 @@ describe('compileSortClause', () => {
 
     expect(result.pre).toBe('');
     expect(result.orderBy).toBe('');
+  });
+
+  // -------------------------------------------------------------------------
+  // Multi-key entry arity — issue #4
+  //
+  // Pre-2.0.0 a multi-key entry compiled to ORDER BY with only its FIRST key
+  // and no error, so `[{ isUrgent: 'DESC', position: 'ASC' }]` silently
+  // returned rows ordered by something other than what was asked for.
+  // -------------------------------------------------------------------------
+  describe('sort entry arity', () => {
+    it('throws when one entry carries more than one ordering key', () => {
+      const props = new Map([
+        ['isUrgent', storedProp('isUrgent', 'Boolean')],
+        ['position', storedProp('position', 'Int')],
+      ]);
+
+      expect(() =>
+        compileSortClause({
+          sort: [{ isUrgent: 'DESC', position: 'ASC' }],
+          nodeVar: 'n',
+          propertyLookup: lookupFromMap(props),
+        }),
+      ).toThrow(OGMError);
+    });
+
+    it('names the offending keys and shows the one-entry-per-key form', () => {
+      expect(() =>
+        compileSortClause({
+          sort: [{ isUrgent: 'DESC', position: 'ASC' }],
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(
+        /Sort entry has 2 keys \(isUrgent, position\).*\[\{ isUrgent: 'DESC' \}, \{ position: 'ASC' \}\]/s,
+      );
+    });
+
+    it('reports arity for entries with three or more keys', () => {
+      expect(() =>
+        compileSortClause({
+          sort: [{ a: 'ASC', b: 'DESC', c: 'ASC' }],
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(/Sort entry has 3 keys \(a, b, c\)/);
+    });
+
+    it('throws on a multi-key entry even when it is not the first entry', () => {
+      expect(() =>
+        compileSortClause({
+          sort: [{ title: 'ASC' }, { isUrgent: 'DESC', position: 'ASC' }],
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(/Sort entry has 2 keys/);
+    });
+
+    it('throws for multi-key @cypher entries too, before emitting any CALL', () => {
+      const props = new Map([
+        ['lname', cypherProp('lname', 'RETURN toLower(this.name) AS lname')],
+        ['title', storedProp('title')],
+      ]);
+
+      expect(() =>
+        compileSortClause({
+          sort: [{ lname: 'ASC', title: 'DESC' }],
+          nodeVar: 'n',
+          propertyLookup: lookupFromMap(props),
+        }),
+      ).toThrow(/Sort entry has 2 keys/);
+    });
+
+    it('does not echo an unrecognised direction into the error message', () => {
+      // Directions are unvalidated at the point the arity error is built, so
+      // only 'ASC'/'DESC' may be interpolated — anything else renders as '...'.
+      expect(() =>
+        compileSortClause({
+          sort: [{ a: 'ASC', b: '\n\n[forged log line]' }],
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(/\{ a: 'ASC' \}, \{ b: \.\.\. \}/);
+    });
+
+    it('rejects an unsafe identifier in a non-surviving key', () => {
+      // Every key is identifier-checked, not just entries[0].
+      expect(() =>
+        compileSortClause({
+          sort: [{ title: 'ASC', 'name); DROP --': 'DESC' }],
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(/sort field/i);
+    });
+
+    it('still accepts the documented one-key-per-entry form', () => {
+      const props = new Map([
+        ['isUrgent', storedProp('isUrgent', 'Boolean')],
+        ['position', storedProp('position', 'Int')],
+      ]);
+
+      const result = compileSortClause({
+        sort: [{ isUrgent: 'DESC' }, { position: 'ASC' }],
+        nodeVar: 'n',
+        propertyLookup: lookupFromMap(props),
+      });
+
+      expect(result.orderBy).toBe(
+        'ORDER BY n.`isUrgent` DESC, n.`position` ASC',
+      );
+    });
+
+    it('keeps skipping zero-key entries', () => {
+      // A zero-key entry contributes no ordering rather than a wrong one, so
+      // it stays a silent skip — unchanged from pre-2.0.0.
+      const result = compileSortClause({
+        sort: [{}, { title: 'ASC' }, {}],
+        nodeVar: 'n',
+        propertyLookup: () => storedProp('title'),
+      });
+
+      expect(result.orderBy).toBe('ORDER BY n.`title` ASC');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Non-object sort entries — v2.0.0
+  //
+  // Pre-2.0.0 these escaped as a bare `TypeError` from inside `Object.entries`,
+  // so `catch (e) { if (e instanceof OGMError) ... }` missed them even though
+  // every other malformed input on this path is an OGMError.
+  // -------------------------------------------------------------------------
+  describe('non-object sort entries', () => {
+    const cases: Array<[string, unknown, string]> = [
+      ['null', null, 'null'],
+      ['undefined', undefined, 'undefined'],
+      ['an array', ['title', 'ASC'], 'an array'],
+      ['a string', 'title ASC', 'a string'],
+      ['a number', 42, 'a number'],
+    ];
+
+    it.each(cases)('rejects %s with an OGMError', (_label, value, kind) => {
+      expect(() =>
+        compileSortClause({
+          sort: [value] as unknown as Array<Record<string, unknown>>,
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(OGMError);
+
+      expect(() =>
+        compileSortClause({
+          sort: [value] as unknown as Array<Record<string, unknown>>,
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        }),
+      ).toThrow(`Sort entry must be an object, got ${kind}.`);
+    });
+
+    it('never echoes the offending value into the message', () => {
+      let message = '';
+      try {
+        compileSortClause({
+          sort: ['\n\n[forged log line]'] as unknown as Array<
+            Record<string, unknown>
+          >,
+          nodeVar: 'n',
+          propertyLookup: () => undefined,
+        });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+
+      expect(message).toContain('got a string');
+      expect(message).not.toContain('forged log line');
+    });
+
+    it('rejects a bad entry that is not the first', () => {
+      expect(() =>
+        compileSortClause({
+          sort: [{ title: 'ASC' }, null] as unknown as Array<
+            Record<string, unknown>
+          >,
+          nodeVar: 'n',
+          propertyLookup: () => storedProp('title'),
+        }),
+      ).toThrow(OGMError);
+    });
   });
 });

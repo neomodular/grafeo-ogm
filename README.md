@@ -732,6 +732,36 @@ const books = await Book.find({
     offset: 40,
   },
 });
+// ORDER BY n.title ASC, n.published DESC
+```
+
+**Each sort entry carries exactly one ordering key.** `ORDER BY` precedence
+comes from an entry's position in the array, never from key order inside an
+object:
+
+```typescript
+// ✅ correct — precedence is unambiguous
+sort: [{ title: 'ASC' }, { published: 'DESC' }];
+
+// ❌ rejected — compile error, and throws at runtime
+sort: [{ title: 'ASC', published: 'DESC' }];
+```
+
+Why not just honour both keys? Because object key order is not a reliable
+carrier for precedence. When sort input arrives through a GraphQL layer,
+`graphql-js` rebuilds input objects by iterating the schema's field
+definitions, so the order a client wrote is already gone before the OGM sees
+it. Array position survives that trip; key order does not.
+
+Building a sort list conditionally works the same way — push entries rather
+than assembling one object:
+
+```typescript
+const sort: BookSort[] = [];
+if (byTitle) sort.push({ title: 'ASC' });
+if (byDate) sort.push({ published: 'DESC' });
+
+await Book.find({ options: { sort } });
 ```
 
 ---
@@ -929,6 +959,46 @@ await Book.find({ fulltext: { BookSearch: { phrase: 'graph' } } });
 ```
 
 The runtime compiler is unchanged; this is a purely ergonomic type-level improvement. The global `FulltextInput`, `FulltextLeaf`, and `FulltextIndexEntry` exports remain for writing generic helpers across models.
+
+**One index per leaf (v2.0.0+).** A fulltext leaf references exactly one index. To search several, compose them with `AND` / `OR` — which is what those operators are for:
+
+```typescript
+// ✅ correct — both indexes are searched
+fulltext: {
+  AND: [
+    { BookSearch: { phrase: 'graph' } },
+    { BlurbSearch: { phrase: 'neo4j' } },
+  ],
+}
+
+// ❌ rejected — compile error, and throws at runtime
+fulltext: {
+  BookSearch: { phrase: 'graph' },
+  BlurbSearch: { phrase: 'neo4j' },
+}
+```
+
+Before v2.0.0 the second form compiled to a search of `BookSearch` **only**; `BlurbSearch` and its phrase were dropped with no error, so the query returned a strictly *wider* result set than intended. `AND` compiles to correlated subqueries, `OR` to a `UNION` with `max(score)` deduplication.
+
+**One operator per object (v2.0.0+).** The same rule applies to `AND` / `OR` / `NOT` — they nest, they don't stack:
+
+```typescript
+// ✅ correct — nest to combine
+fulltext: {
+  AND: [
+    { OR: [{ BookSearch: { phrase: 'graph' } }, { BookSearch: { phrase: 'db' } }] },
+    { NOT: { BlurbSearch: { phrase: 'draft' } } },
+  ],
+}
+
+// ❌ rejected — two operators in one object
+fulltext: {
+  OR: [{ BookSearch: { phrase: 'graph' } }],
+  AND: [{ BlurbSearch: { phrase: 'neo4j' } }],
+}
+```
+
+The compiler reads `OR`, then `AND`, then `NOT`, and stops at the first one it finds. Before v2.0.0 the rest were dropped silently — and because `AND` is checked before `NOT`, writing `{ NOT: …, AND: … }` compiled the `AND` alone and **discarded the exclusion entirely**. Mixing an operator with a bare index key (`{ OR: [...], BookSearch: {...} }`) is rejected at runtime; TypeScript can't express that one.
 
 ### Subgraph Operations
 

@@ -8,7 +8,8 @@ import type {
 /**
  * For each node and interface in the schema, emits:
  * - `<Type>Sort` — one optional `SortDirection` field per sortable scalar
- *   (stored scalars + scalar-returning `@cypher` fields)
+ *   (stored scalars + scalar-returning `@cypher` fields), wrapped in
+ *   `ExactlyOneKey` so a single entry can only carry one ordering key
  * - `<Type>Options` — `limit`, `offset`, `sort` for use in find params
  */
 export function emitSortOptions(schema: SchemaMetadata): string {
@@ -57,11 +58,16 @@ function emitSortAndOptionsBlock(
   typeName: string,
   sortFields: string[],
 ): string {
-  const sortMembers = sortFields
-    .map((name) => `  ${name}?: InputMaybe<SortDirection>;`)
-    .join('\n');
-
-  const sortType = `export type ${typeName}Sort = {\n${sortMembers}\n};`;
+  const sortType = sortFields.length
+    ? // `ExactlyOneKey` makes a two-key entry a compile error. ORDER BY
+      // precedence comes from array position, so one entry may only carry one
+      // key; see `assertSingleSortKey` for the matching runtime guard.
+      `export type ${typeName}Sort = ExactlyOneKey<{\n${sortFields
+        .map((name) => `  ${name}?: InputMaybe<SortDirection>;`)
+        .join('\n')}\n}>;`
+    : // Nothing sortable on this type — admit no keys at all rather than
+      // widening to `{}`, which would accept any object.
+      `export type ${typeName}Sort = Record<string, never>;`;
 
   const optionsType = `export type ${typeName}Options = {
   limit?: InputMaybe<Scalars["Int"]["input"]>;

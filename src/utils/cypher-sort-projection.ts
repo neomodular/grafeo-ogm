@@ -1,6 +1,8 @@
 import type { PropertyDefinition } from '../schema/types';
 import {
+  assertPlainObject,
   assertSafeIdentifier,
+  assertSingleSortKey,
   assertSortDirection,
   escapeIdentifier,
 } from './validation';
@@ -49,6 +51,9 @@ export function buildCypherSortProjection(
  *
  * The returned `pre` string is intended to be appended BEFORE the `RETURN`,
  * and `orderBy` to be appended AFTER it.
+ *
+ * Each entry must carry exactly ONE ordering key — precedence comes from the
+ * entry's position in the array. Multi-key entries throw (`assertSingleSortKey`).
  */
 export function compileSortClause(args: {
   sort: ReadonlyArray<Record<string, unknown>>;
@@ -62,10 +67,20 @@ export function compileSortClause(args: {
   const carriedAliases: string[] = [];
 
   for (const sortObj of sort) {
+    // `Object.entries(null)` is a bare TypeError from inside the compiler;
+    // callers expect OGMError for every malformed input on this path.
+    assertPlainObject(sortObj, 'Sort entry');
+
     const entries = Object.entries(sortObj as Record<string, string>);
+    // A zero-key entry contributes no ordering (rather than a wrong one), so
+    // it stays a silent skip. A multi-key entry is always a mistake.
     if (entries.length === 0) continue;
+    // Validate every key, not just the surviving one, so `assertSingleSortKey`
+    // only ever interpolates identifier-shaped strings into its message.
+    for (const [key] of entries) assertSafeIdentifier(key, 'sort field');
+    assertSingleSortKey(entries);
+
     const [field, direction] = entries[0];
-    assertSafeIdentifier(field, 'sort field');
     const validDirection = assertSortDirection(direction);
 
     const propDef = propertyLookup(field);

@@ -1,5 +1,184 @@
 # Changelog
 
+## 2.0.0 (2026-08-04) — 💥 Inputs that were silently truncated are now rejected
+
+> **A major release with one theme: grafeo used to read the first key of certain input objects and throw the rest away without a word.** `sort` entries, fulltext leaves, and fulltext logical operators all did it. Every one produced a *successful* query answering a different question than the caller asked — no exception, no log, nothing in the Cypher to suggest anything was missing.
+>
+> **This is a major version because the fix is a behavior change on inputs that previously "worked."** Code that relied on the truncated shapes now throws at runtime, and regenerating types turns most of those shapes into compile errors. If your `sort` arrays and `fulltext` inputs already carry one key per object — the documented form throughout — **you are unaffected and can upgrade directly**.
+
+### 💥 Breaking changes at a glance
+
+| Shape | Before | Now |
+| --- | --- | --- |
+| `sort: [{ a: 'ASC', b: 'DESC' }]` | `ORDER BY n.a ASC` — `b` dropped | throws; compile error after regen |
+| `fulltext: { IdxA: {…}, IdxB: {…} }` | searched `IdxA` only | throws; compile error after regen |
+| `fulltext: { OR: […], AND: […] }` | `OR` only | throws; compile error after regen |
+| `fulltext: { NOT: {…}, AND: […] }` | **`AND` only — exclusion lost** | throws; compile error after regen |
+| `fulltext: { OR: […], IdxA: {…} }` | `OR` only | throws at runtime |
+| `sort: [null]`, `fulltext: null` | bare `TypeError` | `OGMError` |
+| `const s: XSort = {}; s.a = 'ASC'` | compiled | compile error — push array entries |
+
+Migration for each is mechanical and shown in the sections below. The short version: **one key per object; use the array (`sort`) or the `AND`/`OR` operators (`fulltext`) to express more than one.**
+
+> **Origin.** Reported by the community ([#4](https://github.com/neomodular/grafeo-ogm/issues/4)) against `sort`, found in production where an admin-curated `position` column had been silently ignored for every client. Auditing for the same defect class turned up three more sites in `FulltextCompiler`, and reviewing *that* fix turned up a fourth at the operator dispatch.
+
+### 🐛 A sort entry must now carry exactly one ordering key
+
+`ORDER BY` precedence comes from an entry's **position in the array**, never from key order inside an object. The documented form was always correct and is unchanged:
+
+```typescript
+// ✅ ORDER BY n.isUrgent DESC, n.position ASC
+sort: [{ isUrgent: 'DESC' }, { position: 'ASC' }];
+
+// ❌ compile error, and throws at runtime
+sort: [{ isUrgent: 'DESC', position: 'ASC' }];
+```
+
+**Why reject rather than honour every key?** Because object key order is not a reliable carrier for precedence at a transport boundary. `graphql-js` `coerceInputValue` rebuilds input objects by iterating the **schema's** field definitions, not the order the client wrote them — so a client sending `{ position: ASC, isUrgent: DESC }` hands the resolver `{ isUrgent, position }` in SDL declaration order. Honouring both keys would have traded one silent wrong-order bug for another that only reproduces behind a GraphQL layer, and would have looked correct in direct TypeScript use. Array position survives that trip; key order does not.
+
+### 🐛 A fulltext leaf must now reference exactly one index
+
+The same defect lived at three sites in `FulltextCompiler` — `compileLeaf`, `compileRelationshipIndex`, and `compileRelationship` — each guarding the empty case and then reading `Object.keys(input)[0]`:
+
+```typescript
+// ❌ before: searched CategoryNameIndex only, dropped CategoryBlurbIndex
+//    → CALL db.index.fulltext.queryNodes('CategoryNameIndex', $ft_phrase)
+//    → params: { ft_phrase: 'graph' }        // 'neo4j' gone entirely
+fulltext: {
+  CategoryNameIndex: { phrase: 'graph' },
+  CategoryBlurbIndex: { phrase: 'neo4j' },
+}
+
+// ✅ AND / OR already existed for this, and compile correctly
+fulltext: {
+  AND: [
+    { CategoryNameIndex: { phrase: 'graph' } },
+    { CategoryBlurbIndex: { phrase: 'neo4j' } },
+  ],
+}
+```
+
+**This one is more serious than the sort defect.** A dropped sort key returns the right rows in the wrong order; a dropped *search term* returns the **wrong rows** — a strictly wider result set, because one index was searched instead of two. A filter that silently stops filtering.
+
+Phrase values are never echoed into the error message: they are user data and may carry control characters or sensitive content. Only index names — already identifier-validated — appear.
+
+> **Note:** a characterization test, `should only use the first index when multiple are provided`, previously pinned the dropping behaviour. It described the defect rather than defending it (no rationale, while the sibling `SelectNormalizer` throws for the identical situation), and has been replaced with specs asserting rejection.
+
+### 🐛 `AND` / `OR` / `NOT` must each be the only key in their object
+
+Reviewing the leaf fix surfaced the same defect one level up, in the operator dispatch. `compileNode` tests `OR`, then `AND`, then `NOT`, and returns at the first hit — so anything else in the object was discarded without a word:
+
+| Input | Compiled | Effect |
+| --- | --- | --- |
+| `{ OR: […], AND: […] }` | `OR` only | a filter disappears |
+| `{ OR: […], SomeIndex: {…} }` | `OR` only | a filter disappears |
+| `{ NOT: {…}, AND: […] }` | **`AND` only** | **the exclusion disappears** |
+
+The third row is the dangerous one. `AND` is tested before `NOT`, so a `NOT` written alongside it vanished completely — the caller asked to *exclude* something and got no exclusion at all. That inverts intent rather than merely widening the result set.
+
+Operators nest; they do not stack:
+
+```typescript
+// ✅ correct
+fulltext: { AND: [{ OR: [ /* … */ ] }, { CategoryBlurbIndex: { phrase: 'x' } }] }
+
+// ❌ rejected
+fulltext: { OR: [ /* … */ ], AND: [ /* … */ ] }
+```
+
+Sibling keys are **counted, never echoed** — unlike leaf index names they have not been identifier-validated at dispatch time, so interpolating them could forge log lines.
+
+### 💥 BREAKING — generated `<Type>Sort` and `<Type>FulltextLeaf` types are now single-key
+
+Both are wrapped in a new `ExactlyOneKey<T>` utility type, so a two-key entry is a **compile error** rather than a silent truncation. Unknown fields and invalid directions are rejected as before.
+
+```typescript
+export type SafedoseCategorySort = ExactlyOneKey<{
+  isUrgent?: InputMaybe<SortDirection>;
+  position?: InputMaybe<SortDirection>;
+}>;
+
+export type SafedoseCategoryFulltextLeaf = ExactlyOneKey<{
+  CategoryNameIndex?: FulltextIndexEntry;
+  CategoryBlurbIndex?: FulltextIndexEntry;
+}>;
+```
+
+Nested relationship index objects are wrapped too, since `compileRelationshipIndex` reads a single key as well.
+
+`<Node>FulltextInput` keeps its `leaf | OR | AND | NOT` shape, but each operator member now marks the other two `?: never`:
+
+```typescript
+export type SafedoseCategoryFulltextInput =
+  | SafedoseCategoryFulltextLeaf
+  | { OR: SafedoseCategoryFulltextInput[]; AND?: never; NOT?: never }
+  | { AND: SafedoseCategoryFulltextInput[]; OR?: never; NOT?: never }
+  | { NOT: SafedoseCategoryFulltextInput; OR?: never; AND?: never };
+```
+
+This closes operator-vs-operator stacking at compile time. It deliberately does **not** close an operator mixed with a bare index key (`{ OR: [...], SomeIndex: {...} }`) — TypeScript permits a literal property that exists on any member of a union, so that shape stays a runtime rejection.
+
+This lands when you **regenerate types**, and it breaks conditional sort building from an empty object literal. Push entries instead:
+
+```typescript
+// before — no longer compiles
+const s: BookSort = {};
+if (byTitle) s.title = 'ASC';
+
+// after
+const sort: BookSort[] = [];
+if (byTitle) sort.push({ title: 'ASC' });
+```
+
+Types with no sortable fields emit `Record<string, never>` rather than collapsing to `never`. `<Type>Options` is unchanged.
+
+### 🛡️ Runtime guards for the paths types cannot reach
+
+Types alone are not sufficient, so every surface validates arity at compile time too — `compileSortClause` via `assertSingleSortKey`, the three `FulltextCompiler` leaf sites via `assertSingleFulltextKey`, and the operator dispatch via `assertSingleFulltextOperator` — alongside the `assertSafeIdentifier` checks already in those loops. This matters because `FindOptions<TSort>` defaults to `Record<string, 'ASC' | 'DESC'>` — an index signature — so the untyped `ogm.model('X')` path admits multi-key entries regardless, and "exactly one arbitrary key" is not expressible over an open record. The GraphQL-resolver path erases the types too, and operator-plus-index-key is not expressible in the union at all. The errors name the offending keys and show the correct form:
+
+```
+Sort entry has 2 keys (isUrgent, position); each sort entry must carry exactly
+one ordering key, because ORDER BY precedence comes from array position and not
+object key order. Use one entry per key: [{ isUrgent: 'DESC' }, { position: 'ASC' }].
+
+Fulltext leaf has 2 keys (CategoryNameIndex, CategoryBlurbIndex); a fulltext entry
+must reference exactly one index. Combine indexes with the AND / OR operators
+instead: { AND: [{ CategoryNameIndex: … }, { CategoryBlurbIndex: … }] }.
+
+Fulltext input carries AND + NOT; AND / OR / NOT must each be the only key in
+their object, because the compiler reads the first one and ignores the rest.
+Nest them instead: { AND: [{ OR: [...] }, { ... }] }.
+```
+
+Every key is identifier-validated (not just the first), so an unsafe identifier in a non-surviving key is now caught too. Only recognised sort directions are echoed into the error string, and fulltext phrases never are. **Zero-key sort entries (`{}`) keep their existing runtime skip** — they contribute no ordering rather than a wrong one, so there is no silent-wrong-answer to close, though the new types do reject the literal. Empty fulltext inputs still throw, unchanged.
+
+### 🛡️ Malformed inputs now throw `OGMError` instead of a bare `TypeError`
+
+`sort: [null]` surfaced as `TypeError: Cannot convert undefined or null to object` thrown from inside `Object.entries`, and fulltext inputs failed the same way on `Object.keys(input)` / `'OR' in input`. Both escaped `catch (e) { if (e instanceof OGMError) … }`, even though every other malformed input on those paths was already an `OGMError`.
+
+A new `assertPlainObject` guards each enumeration point: sort entries, fulltext inputs (in `compileNode`, so operator recursion such as `{ OR: [null] }` is covered too), index entry values (`{ BookSearch: null }`), and the standalone relationship fulltext entry. Only the value's **kind** is reported — never the value:
+
+```
+Sort entry must be an object, got null.
+Fulltext entry "BookTitleSearch" must be an object, got null.
+```
+
+### Tests
+
+Nine compiler specs covering multi-key rejection, the error's key list and suggested form, three-key arity, a multi-key entry in a non-first position, multi-key `@cypher` entries failing before any `CALL` is emitted, unsafe identifiers in non-surviving keys, refusal to echo unrecognised directions, the documented form still compiling to both `ORDER BY` terms, and zero-key entries still skipped.
+
+Eight **integration** specs (`tests/sort-entry-arity.spec.ts`) drive the public API rather than the compiler, proving the guard is actually reached from `Model.find` / `Model.findFirst` / `InterfaceModel.find` — and that it fires **before any query reaches the driver**, so there is no round-trip returning wrongly-ordered rows. Verified as genuine regression coverage: with the guard disabled, exactly the 11 arity specs fail and every pre-existing sort spec still passes.
+
+Eight non-object specs guard the `OGMError` contract — five sort-entry kinds (`null`, `undefined`, array, string, number), a bad entry in a non-first position, and refusal to echo the offending value; plus four on the fulltext side covering a non-object top level, one nested inside an `OR` branch, a non-object index entry value, and kind-without-value reporting.
+
+Fourteen fulltext compiler specs: four on leaf arity (rejection, the AND/OR remedy appearing while phrases never do, both indexes compiling under `AND`, single-index leaves unchanged) and six on operator arity (two stacked operators, `NOT` alongside `AND`, an operator mixed with a bare index key, sibling keys counted rather than echoed, a single operator unchanged, and properly nested operators). Disabling either guard fails exactly its own specs and no others.
+
+Seven emitter specs cover the `ExactlyOneKey` wrapper for node and interface `Sort` types, the no-sortable-fields fallback, `<Type>Options` referencing `<Type>Sort` unchanged, the fulltext leaf wrapper, the nested relationship index wrapper, and the mutually-exclusive operator members on `<Node>FulltextInput`.
+
+Generated output was additionally verified end-to-end under `tsc --strict` against a schema carrying an interface, a `@cypher` sort field, two fulltext indexes, and a relationship-only type. Failing to compile: the reported sort shape, multi-key `@cypher` entries, three-key entries, multi-key interface entries, unknown sort fields, invalid directions, empty entries, sorting an unsortable type, two-index fulltext leaves, unknown index names, `OR` + `AND`, and `NOT` + `AND`. Compiling cleanly: the documented sort form, `@cypher` and interface sorts, incremental array building, single-index leaves, scores, `AND` / `OR` / `NOT` composition — and, as documented above, operator-plus-index-key, which the runtime rejects instead. Full suite green (1673); lint and format clean.
+
+---
+
 ## 1.14.0 (2026-07-24) — 🛡️ Security release: NLS enforcement on interface reads & relationship writes, and a `_MATCHES` ReDoS guard
 
 > **Three security fixes.** Two are object-level authorization gaps: grafeo's node-level-security (NLS) policies were threaded correctly through the concrete-model read and write paths, but two paths silently skipped the **target type's** policy — nested relationship projections on **interface** reads, and **connect/disconnect** relationship writes — so a caller whose own access was correctly scoped could still read, or link/unlink, related nodes their policy forbids. The third hardens the `_MATCHES` filter operator against server-side ReDoS. If you use `policies` with interface models or nested `connect`/`disconnect`, or expose `_MATCHES` to untrusted input, upgrade.

@@ -85,6 +85,132 @@ export function assertSortDirection(direction: string): 'ASC' | 'DESC' {
 }
 
 /**
+ * Shared opening clause for "this object may carry only one key" violations.
+ *
+ * Keys are interpolated verbatim, so every caller must have run
+ * `assertSafeIdentifier` over ALL of them first — never just the surviving one.
+ */
+function singleKeyPrefix(
+  entries: ReadonlyArray<[string, unknown]>,
+  subject: string,
+): string {
+  const keys = entries.map(([key]) => key);
+  return `${subject} has ${entries.length} keys (${keys.join(', ')}); `;
+}
+
+/**
+ * Assert that a single `sort` array entry carries exactly one ordering key.
+ *
+ * v2.0.0 — pre-2.0.0 `compileSortClause` read only `Object.entries(entry)[0]`
+ * and silently discarded the rest, so `[{ a: 'ASC', b: 'DESC' }]` compiled to
+ * `ORDER BY n.a ASC` with no error and no log: a successful query answering a
+ * different question. Which key survived depended purely on source insertion
+ * order.
+ *
+ * Ordering precedence must be carried by ARRAY POSITION, never by object key
+ * order. Honoring every key would only move the bug: graphql-js
+ * `coerceInputValue` rebuilds input objects by iterating the schema's field
+ * definitions, so the key order a client wrote is already gone by the time the
+ * object reaches the OGM.
+ *
+ * Callers must validate each key with `assertSafeIdentifier` BEFORE calling
+ * this, so the keys interpolated into the message are known-safe.
+ */
+export function assertSingleSortKey(
+  entries: ReadonlyArray<[string, unknown]>,
+): void {
+  if (entries.length <= 1) return;
+
+  // Only echo directions we recognise — an unvalidated value must never reach
+  // an error string that may be logged.
+  const suggestion = entries
+    .map(
+      ([key, value]) =>
+        `{ ${key}: ${value === 'ASC' || value === 'DESC' ? `'${value}'` : '...'} }`,
+    )
+    .join(', ');
+
+  throw new OGMError(
+    singleKeyPrefix(entries, 'Sort entry') +
+      `each sort entry must carry exactly one ordering key, because ORDER BY ` +
+      `precedence comes from array position and not object key order. ` +
+      `Use one entry per key: [${suggestion}].`,
+  );
+}
+
+/**
+ * Assert that a fulltext input object references exactly one index.
+ *
+ * v2.0.0 — the same silent-truncation defect fixed for `sort` (see
+ * `assertSingleSortKey`) also lived in `FulltextCompiler`, at three sites that
+ * each guarded the empty case and then read `Object.keys(input)[0]`. A leaf
+ * naming two indexes searched only the first and dropped the second with no
+ * error, so the query returned a strictly WIDER result set than asked for — a
+ * filter that silently stops filtering.
+ *
+ * Multiple indexes are expressed with the existing `AND` / `OR` combinators,
+ * which compile to correlated subqueries and `UNION` respectively.
+ *
+ * Phrase values are never echoed: they are user data and may carry control
+ * characters or sensitive content. Callers must validate each key with
+ * `assertSafeIdentifier` BEFORE calling this.
+ */
+export function assertSingleFulltextKey(
+  entries: ReadonlyArray<[string, unknown]>,
+  subject: string,
+): void {
+  if (entries.length <= 1) return;
+
+  const suggestion = entries.map(([key]) => `{ ${key}: … }`).join(', ');
+
+  throw new OGMError(
+    singleKeyPrefix(entries, subject) +
+      `a fulltext entry must reference exactly one index. Combine indexes with ` +
+      `the AND / OR operators instead: { AND: [${suggestion}] }.`,
+  );
+}
+
+/** The logical operators a fulltext input may carry, each exclusive. */
+const FULLTEXT_OPERATORS = ['OR', 'AND', 'NOT'] as const;
+
+/**
+ * Assert that a fulltext input carrying `OR` / `AND` / `NOT` carries nothing
+ * else alongside it.
+ *
+ * v2.0.0 — the dispatch in `FulltextCompiler.compileNode` tests the operators
+ * in order (`OR`, then `AND`, then `NOT`) and returns on the first hit, so any
+ * remaining top-level key was silently discarded:
+ *
+ * - `{ OR: [...], AND: [...] }` compiled the OR branch only.
+ * - `{ OR: [...], SomeIndex: {...} }` compiled the OR branch only.
+ * - `{ NOT: {...}, AND: [...] }` compiled the AND branch only — an exclusion
+ *   filter vanished entirely, which inverts the caller's intent rather than
+ *   merely widening the result set.
+ *
+ * Operators nest instead of stacking: `{ AND: [{ OR: [...] }, { ... }] }`.
+ *
+ * Only the recognised operator names — fixed literals — are interpolated into
+ * the message. Sibling keys are counted, never echoed, because they have not
+ * been identifier-validated at this point in the pipeline.
+ */
+export function assertSingleFulltextOperator(keys: readonly string[]): void {
+  const operators = FULLTEXT_OPERATORS.filter((op) => keys.includes(op));
+  // No operator → a plain leaf, whose arity `assertSingleFulltextKey` owns.
+  if (operators.length === 0) return;
+  if (keys.length === 1) return;
+
+  const others = keys.length - operators.length;
+  const alongside = others > 0 ? ` and ${others} other top-level key(s)` : '';
+
+  throw new OGMError(
+    `Fulltext input carries ${operators.join(' + ')}${alongside}; ` +
+      `AND / OR / NOT must each be the only key in their object, because the ` +
+      `compiler reads the first one and ignores the rest. ` +
+      `Nest them instead: { AND: [{ OR: [...] }, { ... }] }.`,
+  );
+}
+
+/**
  * Type guard that narrows an unknown value to a plain object.
  * Returns false for null, arrays, and non-object primitives.
  */
@@ -92,6 +218,36 @@ export function isPlainObject(
   value: unknown,
 ): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Assert that a value the compilers are about to enumerate — with
+ * `Object.entries`, `Object.keys`, or the `in` operator — is a plain object.
+ *
+ * v2.0.0 — without this, `sort: [null]` surfaced as a bare
+ * `TypeError: Cannot convert undefined or null to object` thrown from deep
+ * inside the compiler, and fulltext inputs failed similarly on `'OR' in input`.
+ * Both escaped `catch (e) { if (e instanceof OGMError) … }`, even though every
+ * other malformed input on those paths is an `OGMError`.
+ *
+ * Only the value's KIND is reported, never the value itself — the caller may
+ * have handed us anything.
+ */
+export function assertPlainObject(value: unknown, subject: string): void {
+  if (isPlainObject(value)) return;
+
+  const kind =
+    value === null
+      ? 'null'
+      : value === undefined
+        ? 'undefined'
+        : Array.isArray(value)
+          ? 'an array'
+          : // Every remaining `typeof` result is consonant-initial, so a plain
+            // "a" article reads correctly here.
+            `a ${typeof value}`;
+
+  throw new OGMError(`${subject} must be an object, got ${kind}.`);
 }
 
 /**

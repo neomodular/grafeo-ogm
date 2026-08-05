@@ -76,7 +76,7 @@ describe('emitSortOptions', () => {
 
     const out = emitSortOptions(schema);
 
-    expect(out).toContain('export type DrugSort = {');
+    expect(out).toContain('export type DrugSort = ExactlyOneKey<{');
     expect(out).toContain('id?: InputMaybe<SortDirection>;');
     expect(out).toContain('drugName?: InputMaybe<SortDirection>;');
   });
@@ -199,9 +199,70 @@ describe('emitSortOptions', () => {
 
     const out = emitSortOptions(schema);
 
-    expect(out).toContain('export type EntitySort = {');
+    expect(out).toContain('export type EntitySort = ExactlyOneKey<{');
     expect(out).toContain('id?: InputMaybe<SortDirection>;');
     expect(out).toContain('lname?: InputMaybe<SortDirection>;');
     expect(out).toContain('export type EntityOptions = {');
+  });
+
+  // -------------------------------------------------------------------------
+  // Sort entry arity — issue #4
+  // -------------------------------------------------------------------------
+  describe('ExactlyOneKey wrapping', () => {
+    it('closes the <Type>Sort wrapper so the emitted type parses', () => {
+      const schema = makeSchema([
+        makeNode('Drug', [makeProp('id', 'ID'), makeProp('drugName')]),
+      ]);
+
+      const out = emitSortOptions(schema);
+
+      expect(out).toContain(
+        [
+          'export type DrugSort = ExactlyOneKey<{',
+          '  id?: InputMaybe<SortDirection>;',
+          '  drugName?: InputMaybe<SortDirection>;',
+          '}>;',
+        ].join('\n'),
+      );
+    });
+
+    it('wraps interface Sort types the same way', () => {
+      const schema = makeSchema(
+        [],
+        [makeIface('Entity', [makeProp('id', 'ID')])],
+      );
+
+      const out = emitSortOptions(schema);
+
+      expect(out).toContain(
+        'export type EntitySort = ExactlyOneKey<{\n  id?: InputMaybe<SortDirection>;\n}>;',
+      );
+    });
+
+    it('emits Record<string, never> when a type has no sortable fields', () => {
+      // ExactlyOneKey<{}> would collapse to `never`, which reads badly in
+      // `Array<never>`. An explicit empty record says "nothing to sort by".
+      const schema = makeSchema([
+        makeNode('Blob', [
+          makeProp('shape', 'Point', {
+            isCypher: true,
+            cypherStatement: 'RETURN this.location AS shape',
+          }),
+        ]),
+      ]);
+
+      const out = emitSortOptions(schema);
+
+      expect(out).toContain('export type BlobSort = Record<string, never>;');
+      expect(out).not.toContain('BlobSort = ExactlyOneKey');
+    });
+
+    it('still references <Type>Sort from <Type>Options unchanged', () => {
+      const schema = makeSchema([makeNode('Drug', [makeProp('id', 'ID')])]);
+
+      const out = emitSortOptions(schema);
+
+      expect(out).toContain('sort?: InputMaybe<Array<DrugSort>>;');
+    });
   });
 });
