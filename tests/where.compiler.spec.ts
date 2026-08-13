@@ -442,8 +442,10 @@ describe('WhereCompiler', () => {
       'n',
       bookNode,
     );
+    // DateTime-typed edge props get the temporal constructor wrapper so
+    // string params compare against natively-stored temporals.
     expect(result.cypher).toBe(
-      'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE e0.`endDate` >= $param1 }',
+      'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE e0.`endDate` >= datetime($param1) }',
     );
     expect(result.params).toEqual({ param1: '2024' });
   });
@@ -461,7 +463,7 @@ describe('WhereCompiler', () => {
       bookNode,
     );
     expect(result.cypher).toBe(
-      'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE r0.`name` = $param1 AND e0.`endDate` >= $param2 }',
+      'EXISTS { MATCH (n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE r0.`name` = $param1 AND e0.`endDate` >= datetime($param2) }',
     );
     expect(result.params).toEqual({ param1: 'Active', param2: '2024' });
   });
@@ -686,7 +688,7 @@ describe('WhereCompiler', () => {
     expect(result.cypher).toContain('NOT EXISTS');
     expect(result.cypher).toContain('WHERE NOT (');
     expect(result.cypher).toContain('r0.`name` = $param1');
-    expect(result.cypher).toContain('e0.`endDate` >= $param2');
+    expect(result.cypher).toContain('e0.`endDate` >= datetime($param2)');
     expect(result.params).toEqual({ param1: 'Active', param2: '2024' });
   });
 

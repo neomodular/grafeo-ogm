@@ -1,3 +1,4 @@
+import neo4j from 'neo4j-driver';
 import { WhereCompiler } from '../src/compilers/where.compiler';
 import {
   SelectionCompiler,
@@ -210,7 +211,10 @@ describe('WhereCompiler — edge cases', () => {
       bookNode,
     );
 
-    expect(result.cypher).toBe('n.`createdAt` > $param0');
+    // ISO-string params on DateTime fields are wrapped in datetime() so
+    // the comparison hits natively-stored temporals instead of silently
+    // evaluating to NULL (cross-type comparison).
+    expect(result.cypher).toBe('n.`createdAt` > datetime($param0)');
     expect(result.params).toEqual({ param0: '2024-01-01T00:00:00Z' });
   });
 });
@@ -486,7 +490,8 @@ describe('MutationCompiler — edge cases', () => {
     );
 
     expect(result.params).toHaveProperty('create0_isActive', false);
-    expect(result.params).toHaveProperty('create0_position', 0);
+    // Zero must survive as a bound param — now as Integer(0) (issue #5)
+    expect(result.params).toHaveProperty('create0_position', neo4j.int(0));
     expect(result.cypher).toContain('`isActive`: $create0_isActive');
     expect(result.cypher).toContain('`position`: $create0_position');
   });

@@ -92,7 +92,7 @@ export type Scalars = {
   /** A date and time, represented as an ISO-8601 string */
   DateTime: { input: any; output: any };
   /** A 64-bit integer, represented as a string to avoid precision loss */
-  BigInt: { input: string; output: string };
+  BigInt: { input: string | number | bigint; output: number | bigint };
   /** A date without time, represented as an ISO-8601 date string (e.g. "2024-01-15") */
   Date: { input: string; output: string };
   /** A time with UTC offset, represented as an ISO-8601 time string (e.g. "12:30:00Z") */

@@ -22,6 +22,7 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
+import { wrapTemporalWhereParam } from '../utils/write-coercion';
 
 export interface WhereResult {
   cypher: string;
@@ -1437,16 +1438,31 @@ export class WhereCompiler {
       propsHolder,
       scope,
     );
-    const rawParamRef = `$${paramName}`;
+    // Temporal fields: with properties stored as native temporals (the
+    // mutation compiler wraps ISO-string writes in datetime()/date()/...),
+    // comparing them against a raw string param is a cross-type
+    // comparison — Neo4j evaluates it to NULL and silently drops the row.
+    // Wrap the param in the field's temporal constructor for
+    // comparison-shaped operators. A wrapped param is no longer a string,
+    // so case-insensitive toLower() must not apply to either side.
+    const rawParamRef = wrapTemporalWhereParam(
+      `$${paramName}`,
+      value,
+      propsHolder?.properties.get(fieldName),
+      operator ?? '',
+    );
+    const temporalWrapped = rawParamRef !== `$${paramName}`;
 
     if (operator === null) {
       // Exact match — always CI-aware
-      const fieldRef = caseInsensitive
-        ? `toLower(${rawFieldRef})`
-        : rawFieldRef;
-      const paramRef = caseInsensitive
-        ? `toLower(${rawParamRef})`
-        : rawParamRef;
+      const fieldRef =
+        caseInsensitive && !temporalWrapped
+          ? `toLower(${rawFieldRef})`
+          : rawFieldRef;
+      const paramRef =
+        caseInsensitive && !temporalWrapped
+          ? `toLower(${rawParamRef})`
+          : rawParamRef;
       return {
         cypher: `${fieldRef} = ${paramRef}`,
         params: { [paramName]: value },
@@ -1464,7 +1480,7 @@ export class WhereCompiler {
     if (operator === '_MATCHES' && typeof value === 'string')
       assertSafeRegexPattern(value, 'where clause');
 
-    const ci = caseInsensitive && opDef.ciAware;
+    const ci = caseInsensitive && opDef.ciAware && !temporalWrapped;
     const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;
     const paramRef = ci ? `toLower(${rawParamRef})` : rawParamRef;
 

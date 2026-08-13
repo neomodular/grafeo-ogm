@@ -1,3 +1,4 @@
+import neo4j from 'neo4j-driver';
 import { MutationCompiler } from '../src/compilers/mutation.compiler';
 import {
   NodeDefinition,
@@ -539,7 +540,8 @@ describe('MutationCompiler', () => {
       );
       expect(result.params).toMatchObject({
         connect_shelfRows_id: 'row1',
-        connect_shelfRows_edge_position: 3,
+        // Int-typed edge props are bound as Neo4j Integer (issue #5)
+        connect_shelfRows_edge_position: neo4j.int(3),
       });
     });
 
@@ -567,8 +569,19 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain(
         'SET r.\`position\` = connItem.edge.position',
       );
+      // Int-typed edge props inside the UNWIND param are bound as Neo4j
+      // Integer (issue #5); where values are passed through untouched.
       expect(result.params).toMatchObject({
-        connect_shelfRows: connectItems,
+        connect_shelfRows: [
+          {
+            where: { node: { id: 'row1' } },
+            edge: { position: neo4j.int(0) },
+          },
+          {
+            where: { node: { id: 'row2' } },
+            edge: { position: neo4j.int(1) },
+          },
+        ],
       });
     });
 
@@ -593,7 +606,7 @@ describe('MutationCompiler', () => {
       );
       expect(result.cypher).not.toContain('optionalProp');
       expect(result.params).toMatchObject({
-        connect_shelfRows_edge_position: 3,
+        connect_shelfRows_edge_position: neo4j.int(3),
       });
       expect(result.params).not.toHaveProperty(
         'connect_shelfRows_edge_optionalProp',
@@ -1015,7 +1028,7 @@ describe('MutationCompiler', () => {
       );
       expect(result.params).toMatchObject({
         update_shelfRows_0_where_id: 'row1',
-        update_shelfRows_0_edge_position: 5,
+        update_shelfRows_0_edge_position: neo4j.int(5),
       });
       // Should NOT set edge as a node property
       expect(result.cypher).not.toContain('n_u0.edge');
@@ -1051,7 +1064,7 @@ describe('MutationCompiler', () => {
         'SET r_shelfRows_0.\`position\` = $update_shelfRows_0_edge_position',
       );
       expect(result.params).toMatchObject({
-        update_shelfRows_0_edge_position: 3,
+        update_shelfRows_0_edge_position: neo4j.int(3),
       });
       // undefined properties should not appear
       expect(result.cypher).not.toContain('description');
@@ -1095,7 +1108,7 @@ describe('MutationCompiler', () => {
       );
       expect(result.params).toMatchObject({
         update_shelfRows_0_set_label: 'Updated Row',
-        update_shelfRows_0_edge_position: 10,
+        update_shelfRows_0_edge_position: neo4j.int(10),
       });
     });
 

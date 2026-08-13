@@ -3,6 +3,7 @@ import type { OGMLogger } from '../execution/executor';
 import type { PolicyContextBundle } from '../policy/types';
 import {
   NodeDefinition,
+  PropertyDefinition,
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
@@ -18,6 +19,13 @@ import {
   escapeIdentifier,
   mergeParams,
 } from '../utils/validation';
+import {
+  coerceWriteValue,
+  resolveDefaultWriteValue,
+  wrapTemporalListItemExpr,
+  wrapTemporalWhereParam,
+  wrapTemporalWriteExpr,
+} from '../utils/write-coercion';
 import { WhereCompiler } from './where.compiler';
 
 /**
@@ -281,9 +289,15 @@ export class MutationCompiler {
         if (nodeDef.relationships.has(key)) continue;
         if (value === undefined) continue;
         assertSafePropertyName(key, 'update property');
+        const propDef = nodeDef.properties.get(key);
         const paramName = `update_${key}`;
-        setClauses.push(`n.${escapeIdentifier(key)} = $${paramName}`);
-        params[paramName] = value;
+        const valueExpr = wrapTemporalWriteExpr(
+          `$${paramName}`,
+          value,
+          propDef,
+        );
+        setClauses.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
+        params[paramName] = coerceWriteValue(value, propDef);
       }
       if (setClauses.length > 0) lines.push(`SET ${setClauses.join(', ')}`);
 
@@ -407,10 +421,12 @@ export class MutationCompiler {
       if (key === 'AND' || key === 'OR' || key === 'NOT') continue;
       if (key.includes('_') && !nodeDef.properties.has(key)) continue;
       assertSafePropertyName(key, 'merge key');
+      const propDef = nodeDef.properties.get(key);
       const paramName = `merge_${key}`;
-      mergeProps.push(`${escapeIdentifier(key)}: $${paramName}`);
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      mergeProps.push(`${escapeIdentifier(key)}: ${valueExpr}`);
       mergeKeyNames.push(key);
-      params[paramName] = value;
+      params[paramName] = coerceWriteValue(value, propDef);
     }
 
     if (mergeProps.length === 0)
@@ -452,9 +468,25 @@ export class MutationCompiler {
       if (value === undefined) continue;
       if (nodeDef.relationships.has(key)) continue;
       assertSafePropertyName(key, 'create property');
+      const propDef = nodeDef.properties.get(key);
       const paramName = `onCreate_${key}`;
-      createSets.push(`n.${escapeIdentifier(key)} = $${paramName}`);
-      params[paramName] = value;
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      createSets.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
+      params[paramName] = coerceWriteValue(value, propDef);
+    }
+    // `@default` values apply to the ON CREATE branch — a defaulted
+    // property not supplied in `create` and not already fixed by the
+    // MERGE key gets its default, mirroring create().
+    for (const [, propDef] of nodeDef.properties) {
+      if (propDef.defaultValue === undefined) continue;
+      if (propDef.isGenerated || propDef.isCypher) continue;
+      if (create[propDef.name] !== undefined) continue;
+      if (mergeKeyNames.includes(propDef.name)) continue;
+      const paramName = `onCreate_${propDef.name}`;
+      const bound = resolveDefaultWriteValue(propDef);
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, bound, propDef);
+      createSets.push(`n.${escapeIdentifier(propDef.name)} = ${valueExpr}`);
+      params[paramName] = bound;
     }
     if (createSets.length > 0)
       lines.push(`ON CREATE SET ${createSets.join(', ')}`);
@@ -465,9 +497,11 @@ export class MutationCompiler {
       if (value === undefined) continue;
       if (nodeDef.relationships.has(key)) continue;
       assertSafePropertyName(key, 'update property');
+      const propDef = nodeDef.properties.get(key);
       const paramName = `onMatch_${key}`;
-      updateSets.push(`n.${escapeIdentifier(key)} = $${paramName}`);
-      params[paramName] = value;
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      updateSets.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
+      params[paramName] = coerceWriteValue(value, propDef);
     }
     if (updateSets.length > 0)
       lines.push(`ON MATCH SET ${updateSets.join(', ')}`);
@@ -572,11 +606,30 @@ export class MutationCompiler {
       if (propDef.isGenerated && !scalarKeys.includes(propDef.name))
         generatedFields.push(propDef.name);
 
+    // Whole-column `@default`s: applied only when NO item supplies the
+    // field. Per-item gaps inside a provided column stay null — one
+    // createMany batch shares a single Cypher text, and a per-item
+    // default would need coalesce(), which would also override explicit
+    // nulls.
+    const defaultedProps: PropertyDefinition[] = [];
+    for (const [, propDef] of nodeDef.properties)
+      if (
+        propDef.defaultValue !== undefined &&
+        !propDef.isGenerated &&
+        !propDef.isCypher &&
+        !scalarKeys.includes(propDef.name)
+      )
+        defaultedProps.push(propDef);
+
     // Build sanitized items (strip undefined values)
     const sanitizedItems = data.map((item) => {
       const sanitized: Record<string, unknown> = {};
       for (const key of scalarKeys)
-        if (item[key] !== undefined) sanitized[key] = item[key];
+        if (item[key] !== undefined)
+          sanitized[key] = coerceWriteValue(
+            item[key],
+            nodeDef.properties.get(key),
+          );
       return sanitized;
     });
     params.items = sanitizedItems;
@@ -599,7 +652,14 @@ export class MutationCompiler {
 
       // MERGE on unique key(s)
       const mergeProps = mergeKeys
-        .map((k) => `${escapeIdentifier(k)}: item.${escapeIdentifier(k)}`)
+        .map(
+          (k) =>
+            `${escapeIdentifier(k)}: ${wrapTemporalListItemExpr(
+              `item.${escapeIdentifier(k)}`,
+              data.map((d) => d[k]),
+              nodeDef.properties.get(k),
+            )}`,
+        )
         .join(', ');
       lines.push(`MERGE (n:${labelStr} { ${mergeProps} })`);
 
@@ -608,11 +668,28 @@ export class MutationCompiler {
       for (const key of scalarKeys)
         if (!mergeKeys.includes(key))
           onCreateSets.push(
-            `n.${escapeIdentifier(key)} = item.${escapeIdentifier(key)}`,
+            `n.${escapeIdentifier(key)} = ${wrapTemporalListItemExpr(
+              `item.${escapeIdentifier(key)}`,
+              data.map((d) => d[key]),
+              nodeDef.properties.get(key),
+            )}`,
           );
 
       for (const field of generatedFields)
         onCreateSets.push(`n.${escapeIdentifier(field)} = randomUUID()`);
+
+      for (const propDef of defaultedProps) {
+        const paramName = `default_${propDef.name}`;
+        const bound = resolveDefaultWriteValue(propDef);
+        onCreateSets.push(
+          `n.${escapeIdentifier(propDef.name)} = ${wrapTemporalWriteExpr(
+            `$${paramName}`,
+            bound,
+            propDef,
+          )}`,
+        );
+        params[paramName] = bound;
+      }
 
       if (onCreateSets.length > 0)
         lines.push(`ON CREATE SET ${onCreateSets.join(', ')}`);
@@ -623,8 +700,25 @@ export class MutationCompiler {
         propParts.push(`${escapeIdentifier(field)}: randomUUID()`);
       for (const key of scalarKeys)
         propParts.push(
-          `${escapeIdentifier(key)}: item.${escapeIdentifier(key)}`,
+          `${escapeIdentifier(key)}: ${wrapTemporalListItemExpr(
+            `item.${escapeIdentifier(key)}`,
+            data.map((d) => d[key]),
+            nodeDef.properties.get(key),
+          )}`,
         );
+
+      for (const propDef of defaultedProps) {
+        const paramName = `default_${propDef.name}`;
+        const bound = resolveDefaultWriteValue(propDef);
+        propParts.push(
+          `${escapeIdentifier(propDef.name)}: ${wrapTemporalWriteExpr(
+            `$${paramName}`,
+            bound,
+            propDef,
+          )}`,
+        );
+        params[paramName] = bound;
+      }
 
       lines.push(`CREATE (n:${labelStr} { ${propParts.join(', ')} })`);
     }
@@ -641,6 +735,22 @@ export class MutationCompiler {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────
+
+  /**
+   * Resolve the PropertyDefinition of an edge (relationship) property so
+   * Int/BigInt edge writes get the same Integer coercion as node writes.
+   * Returns undefined when the relationship declares no properties type
+   * (the coercion then passes the value through untouched).
+   */
+  private getEdgePropDef(
+    relDef: RelationshipDefinition,
+    propName: string,
+  ): PropertyDefinition | undefined {
+    if (!relDef.properties) return undefined;
+    return this.schema.relationshipProperties
+      .get(relDef.properties)
+      ?.properties.get(propName);
+  }
 
   private buildCreateProperties(
     input: Record<string, unknown>,
@@ -660,9 +770,26 @@ export class MutationCompiler {
       if (nodeDef.relationships.has(key)) continue;
       if (value === undefined) continue;
       assertSafePropertyName(key, 'create property');
+      const propDef = nodeDef.properties.get(key);
       const paramName = `${prefix}_${key}`;
-      parts.push(`${escapeIdentifier(key)}: $${paramName}`);
-      propParams[paramName] = value;
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      parts.push(`${escapeIdentifier(key)}: ${valueExpr}`);
+      propParams[paramName] = coerceWriteValue(value, propDef);
+    }
+
+    // `@default` values — applied for any property with a default that the
+    // input leaves undefined. Explicit null is respected as null: the user
+    // asked for null, a default would override intent. Generated (@id) and
+    // @cypher (computed, not stored) properties never take defaults.
+    for (const [, propDef] of nodeDef.properties) {
+      if (propDef.defaultValue === undefined) continue;
+      if (propDef.isGenerated || propDef.isCypher) continue;
+      if (input[propDef.name] !== undefined) continue;
+      const paramName = `${prefix}_${propDef.name}`;
+      const bound = resolveDefaultWriteValue(propDef);
+      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, bound, propDef);
+      parts.push(`${escapeIdentifier(propDef.name)}: ${valueExpr}`);
+      propParams[paramName] = bound;
     }
 
     return { propString: parts.join(', '), propParams };
@@ -849,11 +976,16 @@ export class MutationCompiler {
           for (const [prop, val] of Object.entries(edgeInput)) {
             if (val === undefined) continue;
             assertSafePropertyName(prop, 'edge property');
+            const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `${prefix}_create${ci}_edge_${prop}`;
             setItems.push(
-              `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
+              `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                `$${paramName}`,
+                val,
+                edgePropDef,
+              )}`,
             );
-            params[paramName] = val;
+            params[paramName] = coerceWriteValue(val, edgePropDef);
           }
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         }
@@ -926,11 +1058,16 @@ export class MutationCompiler {
           for (const [prop, val] of Object.entries(edgeInput)) {
             if (val === undefined) continue;
             assertSafePropertyName(prop, 'edge property');
+            const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `${prefix}_conn${ci}_edge_${prop}`;
             setItems.push(
-              `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = $${paramName}`,
+              `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                `$${paramName}`,
+                val,
+                edgePropDef,
+              )}`,
             );
-            params[paramName] = val;
+            params[paramName] = coerceWriteValue(val, edgePropDef);
           }
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         } else {
@@ -1032,11 +1169,16 @@ export class MutationCompiler {
               for (const [prop, val] of Object.entries(edgeInput)) {
                 if (val === undefined) continue;
                 assertSafePropertyName(prop, 'edge property');
+                const edgePropDef = this.getEdgePropDef(relDef, prop);
                 const paramName = `connect_${fieldName}_${ci}_edge_${prop}`;
                 setItems.push(
-                  `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
+                  `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                    `$${paramName}`,
+                    val,
+                    edgePropDef,
+                  )}`,
                 );
-                params[paramName] = val;
+                params[paramName] = coerceWriteValue(val, edgePropDef);
               }
               if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
             } else {
@@ -1062,7 +1204,11 @@ export class MutationCompiler {
               if (!edge) return item;
               const cleaned: Record<string, unknown> = {};
               for (const [k, v] of Object.entries(edge))
-                if (v !== undefined) cleaned[k] = v;
+                if (v !== undefined)
+                  cleaned[k] = coerceWriteValue(
+                    v,
+                    this.getEdgePropDef(relDef, k),
+                  );
 
               return { ...item, edge: cleaned };
             },
@@ -1099,6 +1245,7 @@ export class MutationCompiler {
             firstItem,
             'target',
             'connItem',
+            targetNodeDef,
           );
           const policyPredicate = this.buildTargetPolicyPredicate(
             targetNodeDef,
@@ -1134,7 +1281,15 @@ export class MutationCompiler {
             lines[lines.length - 1] = `MERGE ${mergeWithVar}`;
             // r.prop is relationship property (escape), connItem.edge.prop is parameter map (no escape)
             const setItems = edgeProps.map(
-              (p) => `r.${escapeIdentifier(p)} = connItem.edge.${p}`,
+              (p) =>
+                `r.${escapeIdentifier(p)} = ${wrapTemporalListItemExpr(
+                  `connItem.edge.${p}`,
+                  (spec as Record<string, unknown>[]).map(
+                    (it) =>
+                      (it.edge as Record<string, unknown> | undefined)?.[p],
+                  ),
+                  this.getEdgePropDef(relDef, p),
+                )}`,
             );
             lines.push(`SET ${setItems.join(', ')}`);
           }
@@ -1183,9 +1338,16 @@ export class MutationCompiler {
           const setItems: string[] = [];
           for (const [prop, val] of Object.entries(edgeInput)) {
             if (val === undefined) continue;
+            const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `connect_${fieldName}_edge_${prop}`;
-            setItems.push(`r.${escapeIdentifier(prop)} = $${paramName}`);
-            params[paramName] = val;
+            setItems.push(
+              `r.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                `$${paramName}`,
+                val,
+                edgePropDef,
+              )}`,
+            );
+            params[paramName] = coerceWriteValue(val, edgePropDef);
           }
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         } else {
@@ -1681,11 +1843,16 @@ export class MutationCompiler {
               for (const [prop, val] of Object.entries(edgeInput)) {
                 if (val === undefined) continue;
                 assertSafePropertyName(prop, 'edge property');
+                const edgePropDef = this.getEdgePropDef(relDef, prop);
                 const paramName = `${itemPrefix}_conn${ci}_edge_${prop}`;
                 setItems.push(
-                  `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = $${paramName}`,
+                  `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                    `$${paramName}`,
+                    val,
+                    edgePropDef,
+                  )}`,
                 );
-                params[paramName] = val;
+                params[paramName] = coerceWriteValue(val, edgePropDef);
               }
               if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
             } else {
@@ -1723,11 +1890,16 @@ export class MutationCompiler {
             if (targetNodeDef.relationships.has(prop)) continue;
             if (val === undefined) continue;
             assertSafePropertyName(prop, 'nested update property');
+            const nodePropDef = targetNodeDef.properties.get(prop);
             const paramName = `${itemPrefix}_set_${prop}`;
             setClauses.push(
-              `${updateVar}.${escapeIdentifier(prop)} = $${paramName}`,
+              `${updateVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                `$${paramName}`,
+                val,
+                nodePropDef,
+              )}`,
             );
-            setParams[paramName] = val;
+            setParams[paramName] = coerceWriteValue(val, nodePropDef);
           }
 
           // Pre-compute SET clauses for edge (relationship) properties
@@ -1737,11 +1909,16 @@ export class MutationCompiler {
             for (const [prop, val] of Object.entries(edgeUpdate)) {
               if (val === undefined) continue;
               assertSafePropertyName(prop, 'edge update property');
+              const edgePropDef = this.getEdgePropDef(relDef, prop);
               const paramName = `${itemPrefix}_edge_${prop}`;
               edgeClauses.push(
-                `${relVar}.${escapeIdentifier(prop)} = $${paramName}`,
+                `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                  `$${paramName}`,
+                  val,
+                  edgePropDef,
+                )}`,
               );
-              edgeParams[paramName] = val;
+              edgeParams[paramName] = coerceWriteValue(val, edgePropDef);
             }
 
           // Pre-compute nested relationship operations
@@ -1886,15 +2063,21 @@ export class MutationCompiler {
           assertSafePropertyName(baseProp, 'where property');
           const paramName = `${prefix}_NOT_${notProp}`;
           const escapedProp = escapeIdentifier(baseProp);
+          const paramRef = wrapTemporalWhereParam(
+            `$${paramName}`,
+            notVal,
+            targetNodeDef?.properties.get(baseProp),
+            notProp.slice(baseProp.length),
+          );
           let expr: string;
           if (template === '%v = $%p')
             // Simple equality → negate to <>
-            expr = `${targetVar}.${escapedProp} <> $${paramName}`;
+            expr = `${targetVar}.${escapedProp} <> ${paramRef}`;
           else {
             // Operator suffix — wrap with NOT if not already negated
             const resolved = template
               .replace('%v', `${targetVar}.${escapedProp}`)
-              .replace('$%p', `$${paramName}`);
+              .replace('$%p', paramRef);
             expr = resolved.startsWith('NOT ') ? resolved : `NOT ${resolved}`;
           }
           conditions.push(expr);
@@ -1918,10 +2101,16 @@ export class MutationCompiler {
         const { baseProp, template } = this.parseOperatorSuffix(prop);
         assertSafePropertyName(baseProp, 'where property');
         const paramName = `${prefix}_${prop}`;
+        const paramRef = wrapTemporalWhereParam(
+          `$${paramName}`,
+          val,
+          targetNodeDef?.properties.get(baseProp),
+          prop.slice(baseProp.length),
+        );
         conditions.push(
           template
             .replace('%v', `${targetVar}.${escapeIdentifier(baseProp)}`)
-            .replace('$%p', `$${paramName}`),
+            .replace('$%p', paramRef),
         );
         params[paramName] = val;
       }
@@ -2174,6 +2363,7 @@ export class MutationCompiler {
     item: Record<string, unknown>,
     targetVar: string,
     itemVar: string,
+    targetNodeDef?: NodeDefinition,
   ): string[] {
     const conditions: string[] = [];
     const whereSpec = item.where as Record<string, unknown> | undefined;
@@ -2185,7 +2375,14 @@ export class MutationCompiler {
       assertSafePropertyName(baseProp, 'connect where property');
       // Replace template placeholders with dynamic UNWIND references
       // Note: itemVar map access is NOT escaped (parameter map keys, not Cypher identifiers)
-      const valueRef = `${itemVar}.where.node.${key}`;
+      // Temporal wrap keys off the FIRST item's value type — the UNWIND
+      // fast path already requires shape-homogeneous items.
+      const valueRef = wrapTemporalWhereParam(
+        `${itemVar}.where.node.${key}`,
+        nodeWhere[key],
+        targetNodeDef?.properties.get(baseProp),
+        key.slice(baseProp.length),
+      );
       conditions.push(
         template
           .replace('%v', `${targetVar}.${escapeIdentifier(baseProp)}`)
