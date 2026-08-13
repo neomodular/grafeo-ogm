@@ -1,5 +1,82 @@
 # Changelog
 
+## 2.1.0 (2026-08-13) — 🧭 Writes now store what the schema declares
+
+> **Every write path now binds values as the Neo4j type the schema promises.** Until now the compilers bound raw JS values and left the rest to the driver — and the driver packs every JS `number` as a Bolt FLOAT64 and every string as a String. So `Int`/`BigInt` fields landed as **Doubles** ([#5](https://github.com/neomodular/grafeo-ogm/issues/5)), the six temporal types landed as **Strings**, and `BigInt`'s documented string input landed as a **String** — while reads converted every native value back to a JS primitive, so the corruption was invisible until something type-sensitive touched the property. `@default` rode along: parsed, documented in the README, and applied nowhere.
+>
+> **This is a minor version because behavior changes on inputs that previously "worked":** `position: 1.5` and `plays: 'abc'` now throw instead of silently storing the wrong type, schemas that declare `@default` now actually receive defaults on create, and the generated `BigInt` scalar changes shape. If your inputs already match the documented contract you can upgrade and regenerate directly — but read the **migration note** below if you have data written through the OGM before 2.1.0.
+
+### 🐛 `Int` / `BigInt` writes are bound as Neo4j Integer ([#5](https://github.com/neomodular/grafeo-ogm/issues/5))
+
+The driver packs every JS `number` as FLOAT64 — `disableLosslessIntegers` only affects reads — so every OGM-written `Int` property landed as a Double. Once a field held a mixed Long/Double population (OGM writes vs seed/raw-Cypher writes), Long-typed consumers crashed:
+
+```
+Failed to invoke function `apoc.coll.sortMulti`:
+java.lang.ClassCastException: class java.lang.Double cannot be cast to class java.lang.Long
+```
+
+Every mutation binding site — create, update, upsert (MERGE key, `ON CREATE SET`, `ON MATCH SET`), `createMany` items, and all edge-property paths through connect and nested updates (**14 sites** in total; the report named 5) — now binds `Int`/`BigInt` values through `neo4j.int()`. Numbers, bigints, integer strings, and pre-built `Integer` instances are all accepted; `null` clears as before.
+
+**Rejected, not truncated:** a non-integral number (`1.5`) or a non-integer string (`'abc'`) for an integer field now throws `OGMError`. Coercing would silently truncate; binding raw would silently store the wrong type — both are the defect class 2.0.0 exists to reject.
+
+### 🐛 Temporal writes are stored as native temporal types
+
+`DateTime`, `Date`, `Time`, `LocalTime`, `LocalDateTime`, and `Duration` fields were stored as **String** properties — the write path had no temporal conversion at all, while the README's scalar table promised native storage and reads converted native temporals to ISO strings. Against natively-typed rows (seed, APOC, raw Cypher), `WHERE n.createdAt > $param` with a string param is a cross-type comparison: Neo4j evaluates it to `NULL` and **silently drops the row**.
+
+ISO-string writes are now wrapped in the field's Cypher constructor — the parameter stays a string and Neo4j does the parsing, which preserves nanosecond precision and bracket timezones (`2024-01-15T10:30:00[America/New_York]`) that a JS `Date` round-trip would destroy:
+
+```cypher
+CREATE (n:`Event` { `startsAt`: datetime($create0_startsAt) })
+SET n.`day` = date($update_day)
+// list fields wrap element-wise:
+`slots`: [wc_t IN $create0_slots | datetime(wc_t)]
+```
+
+The same wrapping applies to WHERE params for comparison-shaped operators (`=`, `_NOT`, `_GT`/`_GTE`/`_LT`/`_LTE`, `_IN`/`_NOT_IN`) across the main where compiler and the connect/disconnect where paths, so filters keep matching the natively-stored values. String operators (`_CONTAINS`, `_MATCHES`, …) are untouched. Driver temporal objects still bind raw — only strings are wrapped. Batched paths (`createMany`, array connect) share one Cypher expression per field, so a column mixing ISO strings with driver objects throws instead of guessing.
+
+### 🐛 `BigInt` honours its generated contract in both directions
+
+The generated scalar declared `BigInt: { input: string; output: string }` — but a string input sailed through to a **String property**, and reads returned `number` (or `bigint` above 2⁵³), never `string`. Integer strings now coerce through `neo4j.int()` (for `Int` fields too), and the scalar tells the truth:
+
+```typescript
+BigInt: { input: string | number | bigint; output: number | bigint };
+```
+
+Regenerate your types to pick this up. If you annotated variables with the old `string` output type, those annotations were already wrong at runtime — the regen turns them into compile errors you can fix.
+
+### 🐛 `@default` is now applied on create
+
+`@default` was parsed into schema metadata and consumed by **nothing** — a documented silent no-op. It now applies wherever a node is created:
+
+- `create` (nested relationship creates included)
+- `upsert` — `ON CREATE SET` branch only, never `ON MATCH`, and never for MERGE-key fields
+- `createMany` — as a whole-column default when **no** item supplies the field (per-item gaps inside a provided column stay `null`: every batch shares one Cypher text, and `coalesce()` would also override explicit nulls)
+
+Defaults convert by declared type — `@default(value: "5")` on an `Int` binds an Integer, `Boolean` binds `true`/`false`, temporal defaults get their constructor wrapper. **A provided value always wins, and an explicit `null` stays `null`** — the user asked for null; a default overriding it would betray intent.
+
+### ⚠️ Migrating data written before 2.1.0
+
+Properties written through the OGM before this release carry the old storage types. New writes and filters use native types, so mixed populations should be migrated once, per affected field:
+
+```cypher
+// String-stored temporals → native (repeat per temporal field/label)
+MATCH (n:Event) WHERE valueType(n.startsAt) STARTS WITH 'STRING'
+SET n.startsAt = datetime(n.startsAt);
+
+// Double-stored Ints → Long (only needed for Long-sensitive consumers,
+// e.g. apoc.coll.sortMulti — Cypher numeric comparisons already match)
+MATCH (n:ShelfRow) WHERE valueType(n.position) = 'FLOAT'
+SET n.position = toInteger(n.position);
+```
+
+Until the temporal migration runs, WHERE filters on temporal fields will not match old String-stored rows (they compare as cross-type → `NULL`).
+
+### Tests
+
+- `tests/int-write-coercion.spec.ts` — 14 tests pinning Integer coercion across every mutation path.
+- `tests/type-faithful-writes.spec.ts` — 24 tests pinning temporal wrapping (writes + WHERE), integer-string coercion, and `@default` semantics.
+- 12 existing assertions that pinned the old behavior (raw-number edge params, unwrapped temporal comparisons, `DateTime` strings passed verbatim) updated to the corrected contract.
+
 ## 2.0.0 (2026-08-04) — 💥 Inputs that were silently truncated are now rejected
 
 > **A major release with one theme: grafeo used to read the first key of certain input objects and throw the rest away without a word.** `sort` entries, fulltext leaves, and fulltext logical operators all did it. Every one produced a *successful* query answering a different question than the caller asked — no exception, no log, nothing in the Cypher to suggest anything was missing.
