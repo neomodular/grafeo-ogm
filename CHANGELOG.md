@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.1.1 (2026-08-13) — 📍 Point fields round-trip
+
+> **The last member of the 2.1.0 type-faithfulness family.** Reads flatten a native Point into a plain `{ x, y[, z], srid }` object — but writing that object back bound it as a map property value, which Neo4j rejects at runtime ("Property values can only be of primitive types or arrays thereof"). A `Point` read through the OGM could not be written back through the OGM.
+>
+> **Pure patch:** nothing that previously worked changes behavior. Plain point writes previously failed loudly at the database; they now succeed as the README's scalar table always promised.
+
+### 🐛 Plain point objects are wrapped in `point()`
+
+`Point` / `CartesianPoint` writes now wrap the parameter in Cypher's `point()` constructor whenever the value is a plain point-shaped object — cartesian (`x`/`y`) or geographic (`longitude`/`latitude`). `point()` accepts the read shape back verbatim, `srid` included, so the read → write round-trip is exact:
+
+```cypher
+CREATE (n:`Event` { `location`: point($create0_location) })
+// list fields wrap element-wise:
+`route`: [wc_t IN $create0_route | point(wc_t)]
+```
+
+WHERE equality and `_IN`/`_NOT_IN` params wrap the same way, so filters match natively-stored points instead of silently comparing a map against a POINT (`NULL` → row dropped). Driver `Point` instances still bind raw.
+
+Unlike the temporal constructors, `point()` rejects an already-native POINT argument — so a list or batch column mixing plain maps with driver `Point` instances throws a clear `OGMError` at compile time, where it previously died as an opaque database error.
+
+### 🔧 Internal
+
+The write-constructor helpers are no longer temporal-specific and were renamed accordingly (`wrapWriteExpr`, `wrapListItemExpr`, `wrapWhereParam`); each constructor family now carries an explicit list rule (`arrayMode: 'any'` for temporals — `datetime(datetime)` is legal Cypher — vs `'all'` for points). 2.1.0 temporal behavior is byte-identical.
+
+### Tests
+
+- 7 new tests in `tests/type-faithful-writes.spec.ts` covering create/update wrapping, geographic + `CartesianPoint` input, driver-instance passthrough, list + mixed-list handling, WHERE `=`/`_IN`, and `createMany` columns.
+
 ## 2.1.0 (2026-08-13) — 🧭 Writes now store what the schema declares
 
 > **Every write path now binds values as the Neo4j type the schema promises.** Until now the compilers bound raw JS values and left the rest to the driver — and the driver packs every JS `number` as a Bolt FLOAT64 and every string as a String. So `Int`/`BigInt` fields landed as **Doubles** ([#5](https://github.com/neomodular/grafeo-ogm/issues/5)), the six temporal types landed as **Strings**, and `BigInt`'s documented string input landed as a **String** — while reads converted every native value back to a JS primitive, so the corruption was invisible until something type-sensitive touched the property. `@default` rode along: parsed, documented in the README, and applied nowhere.
