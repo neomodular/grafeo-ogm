@@ -84,6 +84,9 @@ const eventNode = nodeDef(
     prop('slots', { type: 'DateTime', isArray: true }),
     prop('plays', { type: 'BigInt' }),
     prop('position', { type: 'Int' }),
+    prop('location', { type: 'Point' }),
+    prop('origin', { type: 'CartesianPoint' }),
+    prop('route', { type: 'Point', isArray: true }),
   ],
   [
     rel('sessions', 'HAS_SESSION', 'Session', {
@@ -455,6 +458,106 @@ describe('type-faithful writes (temporal, BigInt strings, @default)', () => {
         defaultedNode,
       );
       expect(result.params).not.toHaveProperty('default_status');
+    });
+  });
+
+  describe('Point round-trip writes', () => {
+    const flatPoint = { x: 1.5, y: 2.5, srid: 7203 };
+
+    it('wraps plain point objects in point() on create and update', () => {
+      const created = compiler.compileCreate(
+        [{ location: flatPoint }],
+        eventNode,
+      );
+      expect(created.cypher).toContain('`location`: point($create0_location)');
+      expect(created.params.create0_location).toBe(flatPoint);
+
+      const updated = compiler.compileUpdate(
+        {},
+        { location: flatPoint },
+        undefined,
+        undefined,
+        eventNode,
+        emptyWhere,
+      );
+      expect(updated.cypher).toContain(
+        'n.`location` = point($update_location)',
+      );
+    });
+
+    it('wraps geographic input and CartesianPoint fields', () => {
+      const result = compiler.compileCreate(
+        [
+          {
+            location: { longitude: -103.4, latitude: 20.6 },
+            origin: { x: 0, y: 0 },
+          },
+        ],
+        eventNode,
+      );
+      expect(result.cypher).toContain('`location`: point($create0_location)');
+      expect(result.cypher).toContain('`origin`: point($create0_origin)');
+    });
+
+    it('binds driver Point instances raw', () => {
+      const native = new neo4j.types.Point(4326, 1, 2);
+      const result = compiler.compileCreate([{ location: native }], eventNode);
+      expect(result.cypher).toContain('`location`: $create0_location');
+      expect(result.cypher).not.toContain('point(');
+      expect(result.params.create0_location).toBe(native);
+    });
+
+    it('wraps Point list fields element-wise and rejects mixed lists', () => {
+      const wrapped = compiler.compileCreate(
+        [{ route: [flatPoint, { x: 3, y: 4 }] }],
+        eventNode,
+      );
+      expect(wrapped.cypher).toContain(
+        '`route`: [wc_t IN $create0_route | point(wc_t)]',
+      );
+
+      const native = new neo4j.types.Point(4326, 1, 2);
+      expect(() =>
+        compiler.compileCreate([{ route: [flatPoint, native] }], eventNode),
+      ).toThrow(OGMError);
+    });
+
+    it('wraps WHERE equality and _IN params for Point fields', () => {
+      const eq = whereCompiler.compile({ location: flatPoint }, 'n', eventNode);
+      expect(eq.cypher).toContain('n.`location` = point($param0)');
+
+      const inList = whereCompiler.compile(
+        { location_IN: [flatPoint, { x: 9, y: 9 }] },
+        'n',
+        eventNode,
+      );
+      expect(inList.cypher).toContain(
+        'n.`location` IN [wc_t IN $param0 | point(wc_t)]',
+      );
+    });
+
+    it('wraps createMany point columns and rejects mixed columns', () => {
+      const result = compiler.compileCreateMany(
+        [{ location: flatPoint }, { location: { x: 3, y: 4 } }],
+        eventNode,
+      );
+      expect(result.cypher).toContain('`location`: point(item.`location`)');
+
+      const native = new neo4j.types.Point(4326, 1, 2);
+      expect(() =>
+        compiler.compileCreateMany(
+          [{ location: flatPoint }, { location: native }],
+          eventNode,
+        ),
+      ).toThrow(OGMError);
+    });
+
+    it('leaves non-point-shaped objects on Point fields unwrapped', () => {
+      const result = compiler.compileCreate(
+        [{ location: { foo: 1 } }],
+        eventNode,
+      );
+      expect(result.cypher).toContain('`location`: $create0_location');
     });
   });
 });

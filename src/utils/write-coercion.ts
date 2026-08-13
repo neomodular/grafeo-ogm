@@ -1,4 +1,4 @@
-import { int, isInt } from 'neo4j-driver';
+import { int, isInt, isPoint } from 'neo4j-driver';
 import { OGMError } from '../errors';
 import type { PropertyDefinition } from '../schema/types';
 
@@ -25,13 +25,22 @@ const TEMPORAL_CONSTRUCTORS: Record<string, string> = {
 };
 
 /**
- * Where-operator suffixes whose parameter is compared against the field
- * value (`''` = plain equality) and therefore needs the same temporal
- * constructor treatment as writes. String operators (`_CONTAINS`,
- * `_STARTS_WITH`, `_MATCHES`, ...) are excluded — their params are
- * strings by definition.
+ * Spatial scalar types → Cypher's `point()` constructor. Reads flatten a
+ * native Point into a plain `{ x, y[, z], srid }` object (ResultMapper),
+ * and `point()` accepts exactly that map back — `srid` key included — so
+ * wrapping makes the read → write round-trip exact. Without the wrapper
+ * the plain object is bound as a map property value, which Neo4j rejects
+ * at runtime ("Property values can only be of primitive types...").
  */
-const TEMPORAL_COMPARABLE_SUFFIXES = new Set([
+const POINT_SCALAR_TYPES = new Set(['Point', 'CartesianPoint']);
+
+/**
+ * Where-operator suffixes whose parameter is compared against the field
+ * value (`''` = plain equality) and therefore needs the same constructor
+ * treatment as writes. String operators (`_CONTAINS`, `_STARTS_WITH`,
+ * `_MATCHES`, ...) are excluded — their params are strings by definition.
+ */
+const COMPARABLE_SUFFIXES = new Set([
   '',
   '_NOT',
   '_GT',
@@ -41,6 +50,85 @@ const TEMPORAL_COMPARABLE_SUFFIXES = new Set([
   '_IN',
   '_NOT_IN',
 ]);
+
+/**
+ * A Cypher constructor that turns a plain JS input into the native Neo4j
+ * value the schema declares for a field.
+ */
+interface WriteConstructor {
+  /** Cypher function name (`datetime`, `point`, ...). */
+  fn: string;
+  /** Whether a JS value is constructor INPUT (vs already driver-native). */
+  wraps(value: unknown): boolean;
+  /**
+   * Element rule for lists. Temporal constructors accept already-native
+   * temporal values (`datetime(datetime)` is legal Cypher), so a mixed
+   * list can be wrapped wholesale (`'any'`). `point()` REJECTS a POINT
+   * argument, so a mixed list has no single correct expression —
+   * `'all'` wraps only uniform lists and throws on a mix.
+   */
+  arrayMode: 'any' | 'all';
+}
+
+function isTemporalStringInput(value: unknown): boolean {
+  return typeof value === 'string';
+}
+
+/**
+ * A plain object shaped like `point()` input: cartesian (`x`/`y`) or
+ * geographic (`longitude`/`latitude`), optionally with `z`/`height` and
+ * `srid`/`crs`. Driver Point instances are NOT inputs — they pack
+ * natively and `point()` would reject them.
+ */
+function isPointWriteInput(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false;
+  if (isPoint(value) || isInt(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  const cartesian =
+    typeof candidate.x === 'number' && typeof candidate.y === 'number';
+  const geographic =
+    typeof candidate.longitude === 'number' &&
+    typeof candidate.latitude === 'number';
+  return cartesian || geographic;
+}
+
+function resolveWriteConstructor(
+  propDef: PropertyDefinition,
+): WriteConstructor | undefined {
+  const temporal = TEMPORAL_CONSTRUCTORS[propDef.type];
+  if (temporal !== undefined)
+    return { fn: temporal, wraps: isTemporalStringInput, arrayMode: 'any' };
+  if (POINT_SCALAR_TYPES.has(propDef.type))
+    return { fn: 'point', wraps: isPointWriteInput, arrayMode: 'all' };
+  return undefined;
+}
+
+/**
+ * Decide whether a list of element values should be wrapped element-wise.
+ * `'any'` mode wraps as soon as one element is constructor input; `'all'`
+ * mode requires uniformity and throws on a mix, because the constructor
+ * cannot be applied to the already-native elements.
+ */
+function decideElementsWrap(
+  elements: unknown[],
+  ctor: WriteConstructor,
+  propDef: PropertyDefinition,
+): boolean {
+  const defined = elements.filter((el) => el !== null && el !== undefined);
+  if (defined.length === 0) return false;
+  const matches = defined.filter((el) => ctor.wraps(el)).length;
+  if (matches === 0) return false;
+  if (ctor.arrayMode === 'any') return true;
+  if (matches !== defined.length)
+    throw new OGMError(
+      `Mixed input representations for ${propDef.type} field "${propDef.name}": ` +
+        `some values are plain ${ctor.fn}() inputs, others are driver-native values. ` +
+        `${ctor.fn}() cannot be applied to an already-native value, so every value ` +
+        `must use the same representation.`,
+    );
+  return true;
+}
 
 /**
  * Coerce a JS write value bound for an `Int`/`BigInt`-typed schema field
@@ -115,91 +203,95 @@ function coerceIntegerElement(
 
 /**
  * Wrap a write RHS expression (`$param`, or an UNWIND item reference) in
- * the field's temporal Cypher constructor, so ISO-string inputs are
- * stored as native temporal properties instead of Strings. Reads convert
- * native temporals → ISO strings (ResultMapper), so this is the write
- * half of the same round-trip symmetry issue #5 fixed for integers.
+ * the field's Cypher constructor — temporal (`datetime()`, ...) for
+ * ISO-string inputs, `point()` for plain point maps — so the stored
+ * property is the native type the schema declares. Reads convert native
+ * values to plain JS (ResultMapper); this is the write half of the same
+ * round-trip symmetry issue #5 fixed for integers.
  *
- * Only string values are wrapped — a driver temporal object already
- * packs natively and binds raw. Temporal LIST fields wrap element-wise
- * via a list comprehension when any element is a string.
+ * Driver-native values (temporal instances, Point instances) bind raw.
+ * List fields wrap element-wise via a list comprehension, following the
+ * constructor's element rule (see WriteConstructor.arrayMode).
  */
-export function wrapTemporalWriteExpr(
+export function wrapWriteExpr(
   expr: string,
   value: unknown,
   propDef: PropertyDefinition | undefined,
 ): string {
   if (propDef === undefined) return expr;
-  const ctor = TEMPORAL_CONSTRUCTORS[propDef.type];
+  const ctor = resolveWriteConstructor(propDef);
   if (ctor === undefined) return expr;
   if (propDef.isArray) {
-    if (!Array.isArray(value) || !value.some((el) => typeof el === 'string'))
-      return expr;
-    return `[wc_t IN ${expr} | ${ctor}(wc_t)]`;
+    if (!Array.isArray(value)) return expr;
+    if (!decideElementsWrap(value, ctor, propDef)) return expr;
+    return `[wc_t IN ${expr} | ${ctor.fn}(wc_t)]`;
   }
-  if (typeof value !== 'string') return expr;
-  return `${ctor}(${expr})`;
+  if (!ctor.wraps(value)) return expr;
+  return `${ctor.fn}(${expr})`;
 }
 
 /**
- * Temporal wrapping for UNWIND item references (`item.prop`,
+ * Constructor wrapping for UNWIND item references (`item.prop`,
  * `connItem.edge.prop`), where ONE Cypher expression serves EVERY item in
  * the batch: the wrap decision must hold for all items' values for the
- * key. A mixed string/non-string column throws — a single expression
- * cannot be correct for both representations.
+ * key. A column mixing constructor inputs with driver-native values
+ * throws — a single expression cannot be correct for both.
  */
-export function wrapTemporalListItemExpr(
+export function wrapListItemExpr(
   expr: string,
   values: unknown[],
   propDef: PropertyDefinition | undefined,
 ): string {
   if (propDef === undefined) return expr;
-  const ctor = TEMPORAL_CONSTRUCTORS[propDef.type];
+  const ctor = resolveWriteConstructor(propDef);
   if (ctor === undefined) return expr;
+  if (propDef.isArray) {
+    const flattened = values
+      .filter((v): v is unknown[] => Array.isArray(v))
+      .flat();
+    if (flattened.length === 0) return expr;
+    if (!decideElementsWrap(flattened, ctor, propDef)) return expr;
+    return `[wc_t IN ${expr} | ${ctor.fn}(wc_t)]`;
+  }
   const defined = values.filter((v) => v !== null && v !== undefined);
   if (defined.length === 0) return expr;
-  if (propDef.isArray) {
-    const anyString = defined.some(
-      (v) => Array.isArray(v) && v.some((el) => typeof el === 'string'),
-    );
-    return anyString ? `[wc_t IN ${expr} | ${ctor}(wc_t)]` : expr;
-  }
-  const stringCount = defined.filter((v) => typeof v === 'string').length;
-  if (stringCount === 0) return expr;
-  if (stringCount !== defined.length)
+  const matches = defined.filter((v) => ctor.wraps(v)).length;
+  if (matches === 0) return expr;
+  if (matches !== defined.length)
     throw new OGMError(
-      `Mixed input types for ${propDef.type} field "${propDef.name}": some items pass ISO ` +
-        `strings, others pass non-string values. Batched writes share one Cypher expression ` +
-        `per field, so every item must use the same representation.`,
+      `Mixed input types for ${propDef.type} field "${propDef.name}": some items pass ` +
+        `plain ${ctor.fn}() inputs, others pass driver-native values. Batched writes ` +
+        `share one Cypher expression per field, so every item must use the same ` +
+        `representation.`,
     );
-  return `${ctor}(${expr})`;
+  return `${ctor.fn}(${expr})`;
 }
 
 /**
- * Wrap a WHERE parameter reference for a temporal field. With properties
- * stored as native temporals, comparing them to a raw string param is a
- * cross-type comparison — Neo4j evaluates it to NULL and silently drops
- * the row. `suffix` is the operator suffix (`''` for plain equality);
- * only comparison-shaped operators wrap, and `_IN`/`_NOT_IN` wrap their
- * list param element-wise.
+ * Wrap a WHERE parameter reference for a constructor-typed field. With
+ * properties stored natively, comparing them to a raw string/map param is
+ * a cross-type comparison — Neo4j evaluates it to NULL and silently
+ * drops the row. `suffix` is the operator suffix (`''` for plain
+ * equality); only comparison-shaped operators wrap, and `_IN`/`_NOT_IN`
+ * wrap their list param element-wise.
  */
-export function wrapTemporalWhereParam(
+export function wrapWhereParam(
   paramRef: string,
   value: unknown,
   propDef: PropertyDefinition | undefined,
   suffix: string,
 ): string {
   if (propDef === undefined) return paramRef;
-  const ctor = TEMPORAL_CONSTRUCTORS[propDef.type];
+  const ctor = resolveWriteConstructor(propDef);
   if (ctor === undefined) return paramRef;
-  if (!TEMPORAL_COMPARABLE_SUFFIXES.has(suffix)) return paramRef;
+  if (!COMPARABLE_SUFFIXES.has(suffix)) return paramRef;
   if (suffix === '_IN' || suffix === '_NOT_IN') {
-    if (!Array.isArray(value) || !value.some((el) => typeof el === 'string'))
-      return paramRef;
-    return `[wc_t IN ${paramRef} | ${ctor}(wc_t)]`;
+    if (!Array.isArray(value)) return paramRef;
+    if (!decideElementsWrap(value, ctor, propDef)) return paramRef;
+    return `[wc_t IN ${paramRef} | ${ctor.fn}(wc_t)]`;
   }
-  if (typeof value !== 'string') return paramRef;
-  return `${ctor}(${paramRef})`;
+  if (!ctor.wraps(value)) return paramRef;
+  return `${ctor.fn}(${paramRef})`;
 }
 
 /**

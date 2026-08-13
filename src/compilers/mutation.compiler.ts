@@ -22,9 +22,9 @@ import {
 import {
   coerceWriteValue,
   resolveDefaultWriteValue,
-  wrapTemporalListItemExpr,
-  wrapTemporalWhereParam,
-  wrapTemporalWriteExpr,
+  wrapListItemExpr,
+  wrapWhereParam,
+  wrapWriteExpr,
 } from '../utils/write-coercion';
 import { WhereCompiler } from './where.compiler';
 
@@ -291,11 +291,7 @@ export class MutationCompiler {
         assertSafePropertyName(key, 'update property');
         const propDef = nodeDef.properties.get(key);
         const paramName = `update_${key}`;
-        const valueExpr = wrapTemporalWriteExpr(
-          `$${paramName}`,
-          value,
-          propDef,
-        );
+        const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
         setClauses.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
         params[paramName] = coerceWriteValue(value, propDef);
       }
@@ -423,7 +419,7 @@ export class MutationCompiler {
       assertSafePropertyName(key, 'merge key');
       const propDef = nodeDef.properties.get(key);
       const paramName = `merge_${key}`;
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
       mergeProps.push(`${escapeIdentifier(key)}: ${valueExpr}`);
       mergeKeyNames.push(key);
       params[paramName] = coerceWriteValue(value, propDef);
@@ -470,7 +466,7 @@ export class MutationCompiler {
       assertSafePropertyName(key, 'create property');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onCreate_${key}`;
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
       createSets.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
       params[paramName] = coerceWriteValue(value, propDef);
     }
@@ -484,7 +480,7 @@ export class MutationCompiler {
       if (mergeKeyNames.includes(propDef.name)) continue;
       const paramName = `onCreate_${propDef.name}`;
       const bound = resolveDefaultWriteValue(propDef);
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, bound, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, bound, propDef);
       createSets.push(`n.${escapeIdentifier(propDef.name)} = ${valueExpr}`);
       params[paramName] = bound;
     }
@@ -499,7 +495,7 @@ export class MutationCompiler {
       assertSafePropertyName(key, 'update property');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onMatch_${key}`;
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
       updateSets.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
       params[paramName] = coerceWriteValue(value, propDef);
     }
@@ -654,7 +650,7 @@ export class MutationCompiler {
       const mergeProps = mergeKeys
         .map(
           (k) =>
-            `${escapeIdentifier(k)}: ${wrapTemporalListItemExpr(
+            `${escapeIdentifier(k)}: ${wrapListItemExpr(
               `item.${escapeIdentifier(k)}`,
               data.map((d) => d[k]),
               nodeDef.properties.get(k),
@@ -668,7 +664,7 @@ export class MutationCompiler {
       for (const key of scalarKeys)
         if (!mergeKeys.includes(key))
           onCreateSets.push(
-            `n.${escapeIdentifier(key)} = ${wrapTemporalListItemExpr(
+            `n.${escapeIdentifier(key)} = ${wrapListItemExpr(
               `item.${escapeIdentifier(key)}`,
               data.map((d) => d[key]),
               nodeDef.properties.get(key),
@@ -682,7 +678,7 @@ export class MutationCompiler {
         const paramName = `default_${propDef.name}`;
         const bound = resolveDefaultWriteValue(propDef);
         onCreateSets.push(
-          `n.${escapeIdentifier(propDef.name)} = ${wrapTemporalWriteExpr(
+          `n.${escapeIdentifier(propDef.name)} = ${wrapWriteExpr(
             `$${paramName}`,
             bound,
             propDef,
@@ -700,7 +696,7 @@ export class MutationCompiler {
         propParts.push(`${escapeIdentifier(field)}: randomUUID()`);
       for (const key of scalarKeys)
         propParts.push(
-          `${escapeIdentifier(key)}: ${wrapTemporalListItemExpr(
+          `${escapeIdentifier(key)}: ${wrapListItemExpr(
             `item.${escapeIdentifier(key)}`,
             data.map((d) => d[key]),
             nodeDef.properties.get(key),
@@ -711,7 +707,7 @@ export class MutationCompiler {
         const paramName = `default_${propDef.name}`;
         const bound = resolveDefaultWriteValue(propDef);
         propParts.push(
-          `${escapeIdentifier(propDef.name)}: ${wrapTemporalWriteExpr(
+          `${escapeIdentifier(propDef.name)}: ${wrapWriteExpr(
             `$${paramName}`,
             bound,
             propDef,
@@ -772,7 +768,7 @@ export class MutationCompiler {
       assertSafePropertyName(key, 'create property');
       const propDef = nodeDef.properties.get(key);
       const paramName = `${prefix}_${key}`;
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, value, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
       parts.push(`${escapeIdentifier(key)}: ${valueExpr}`);
       propParams[paramName] = coerceWriteValue(value, propDef);
     }
@@ -787,7 +783,7 @@ export class MutationCompiler {
       if (input[propDef.name] !== undefined) continue;
       const paramName = `${prefix}_${propDef.name}`;
       const bound = resolveDefaultWriteValue(propDef);
-      const valueExpr = wrapTemporalWriteExpr(`$${paramName}`, bound, propDef);
+      const valueExpr = wrapWriteExpr(`$${paramName}`, bound, propDef);
       parts.push(`${escapeIdentifier(propDef.name)}: ${valueExpr}`);
       propParams[paramName] = bound;
     }
@@ -979,7 +975,7 @@ export class MutationCompiler {
             const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `${prefix}_create${ci}_edge_${prop}`;
             setItems.push(
-              `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+              `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                 `$${paramName}`,
                 val,
                 edgePropDef,
@@ -1061,7 +1057,7 @@ export class MutationCompiler {
             const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `${prefix}_conn${ci}_edge_${prop}`;
             setItems.push(
-              `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+              `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                 `$${paramName}`,
                 val,
                 edgePropDef,
@@ -1172,7 +1168,7 @@ export class MutationCompiler {
                 const edgePropDef = this.getEdgePropDef(relDef, prop);
                 const paramName = `connect_${fieldName}_${ci}_edge_${prop}`;
                 setItems.push(
-                  `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                  `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                     `$${paramName}`,
                     val,
                     edgePropDef,
@@ -1282,7 +1278,7 @@ export class MutationCompiler {
             // r.prop is relationship property (escape), connItem.edge.prop is parameter map (no escape)
             const setItems = edgeProps.map(
               (p) =>
-                `r.${escapeIdentifier(p)} = ${wrapTemporalListItemExpr(
+                `r.${escapeIdentifier(p)} = ${wrapListItemExpr(
                   `connItem.edge.${p}`,
                   (spec as Record<string, unknown>[]).map(
                     (it) =>
@@ -1341,7 +1337,7 @@ export class MutationCompiler {
             const edgePropDef = this.getEdgePropDef(relDef, prop);
             const paramName = `connect_${fieldName}_edge_${prop}`;
             setItems.push(
-              `r.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+              `r.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                 `$${paramName}`,
                 val,
                 edgePropDef,
@@ -1846,7 +1842,7 @@ export class MutationCompiler {
                 const edgePropDef = this.getEdgePropDef(relDef, prop);
                 const paramName = `${itemPrefix}_conn${ci}_edge_${prop}`;
                 setItems.push(
-                  `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                  `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                     `$${paramName}`,
                     val,
                     edgePropDef,
@@ -1893,7 +1889,7 @@ export class MutationCompiler {
             const nodePropDef = targetNodeDef.properties.get(prop);
             const paramName = `${itemPrefix}_set_${prop}`;
             setClauses.push(
-              `${updateVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+              `${updateVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                 `$${paramName}`,
                 val,
                 nodePropDef,
@@ -1912,7 +1908,7 @@ export class MutationCompiler {
               const edgePropDef = this.getEdgePropDef(relDef, prop);
               const paramName = `${itemPrefix}_edge_${prop}`;
               edgeClauses.push(
-                `${relVar}.${escapeIdentifier(prop)} = ${wrapTemporalWriteExpr(
+                `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
                   `$${paramName}`,
                   val,
                   edgePropDef,
@@ -2063,7 +2059,7 @@ export class MutationCompiler {
           assertSafePropertyName(baseProp, 'where property');
           const paramName = `${prefix}_NOT_${notProp}`;
           const escapedProp = escapeIdentifier(baseProp);
-          const paramRef = wrapTemporalWhereParam(
+          const paramRef = wrapWhereParam(
             `$${paramName}`,
             notVal,
             targetNodeDef?.properties.get(baseProp),
@@ -2101,7 +2097,7 @@ export class MutationCompiler {
         const { baseProp, template } = this.parseOperatorSuffix(prop);
         assertSafePropertyName(baseProp, 'where property');
         const paramName = `${prefix}_${prop}`;
-        const paramRef = wrapTemporalWhereParam(
+        const paramRef = wrapWhereParam(
           `$${paramName}`,
           val,
           targetNodeDef?.properties.get(baseProp),
@@ -2377,7 +2373,7 @@ export class MutationCompiler {
       // Note: itemVar map access is NOT escaped (parameter map keys, not Cypher identifiers)
       // Temporal wrap keys off the FIRST item's value type — the UNWIND
       // fast path already requires shape-homogeneous items.
-      const valueRef = wrapTemporalWhereParam(
+      const valueRef = wrapWhereParam(
         `${itemVar}.where.node.${key}`,
         nodeWhere[key],
         targetNodeDef?.properties.get(baseProp),

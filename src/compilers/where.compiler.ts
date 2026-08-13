@@ -22,7 +22,7 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
-import { wrapTemporalWhereParam } from '../utils/write-coercion';
+import { wrapWhereParam } from '../utils/write-coercion';
 
 export interface WhereResult {
   cypher: string;
@@ -1445,7 +1445,7 @@ export class WhereCompiler {
     // Wrap the param in the field's temporal constructor for
     // comparison-shaped operators. A wrapped param is no longer a string,
     // so case-insensitive toLower() must not apply to either side.
-    const rawParamRef = wrapTemporalWhereParam(
+    const rawParamRef = wrapWhereParam(
       `$${paramName}`,
       value,
       propsHolder?.properties.get(fieldName),
