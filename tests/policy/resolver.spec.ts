@@ -444,6 +444,245 @@ describe('PolicyResolver', () => {
   });
 });
 
+describe('PolicyResolver.resolveDetailed', () => {
+  const schema = makeSchema({
+    nodes: [{ typeName: 'Book', implementsInterfaces: ['Resource'] }],
+    interfaces: [{ name: 'Resource', implementedBy: ['Book'] }],
+  });
+
+  it('returns null exactly when resolve() does', () => {
+    const r = buildResolver(
+      { Book: [permissive({ operations: ['create'], when: () => ({}) })] },
+      schema,
+    );
+    expect(r.resolveDetailed('Book', 'read', {})).toBeNull();
+    expect(r.resolve('Book', 'read', {})).toBeNull();
+    expect(buildResolver({}, schema).resolveDetailed('Book', 'read', {})).toBe(
+      null,
+    );
+  });
+
+  it('reports every matching policy in registration order: own type, then interfaces', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({ operations: ['read'], when: () => ({}), name: 'p' }),
+          restrictive({ operations: ['read'], when: () => ({}), name: 'r' }),
+        ],
+        Resource: [
+          restrictive({ operations: ['read'], when: () => ({}), name: 'ri' }),
+        ],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.overriddenBy).toBeNull();
+    expect(
+      d.entries.map((e) => [e.name, e.kind, e.source, e.index, e.applied]),
+    ).toEqual([
+      ['p', 'permissive', 'Book', 0, true],
+      ['r', 'restrictive', 'Book', 1, true],
+      ['ri', 'restrictive', 'Resource', 0, true],
+    ]);
+  });
+
+  it('synthesizes <source>.<kind>[<index>] ids for unnamed policies, counting all operations', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({ operations: ['create'], when: () => ({}) }),
+          permissive({ operations: ['read'], when: () => ({}) }),
+          restrictive({ operations: ['read'], when: () => ({}), name: 'r' }),
+        ],
+        Resource: [restrictive({ operations: ['read'], when: () => ({}) })],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.entries.map((e) => [e.name, e.named])).toEqual([
+      ['Book.permissive[1]', false],
+      ['r', true],
+      ['Resource.restrictive[0]', false],
+    ]);
+  });
+
+  it('keeps duplicate names as separate positional entries', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          restrictive({ operations: ['read'], when: () => ({}), name: 'dup' }),
+          restrictive({ operations: ['read'], when: () => ({}), name: 'dup' }),
+        ],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.entries.map((e) => [e.name, e.index])).toEqual([
+      ['dup', 0],
+      ['dup', 1],
+    ]);
+  });
+
+  it('evaluates appliesWhen for BOTH permissives and restrictives', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({
+            operations: ['read'],
+            when: () => ({}),
+            name: 'p-off',
+            appliesWhen: () => false,
+          }),
+          restrictive({
+            operations: ['read'],
+            when: () => ({}),
+            name: 'r-off',
+            appliesWhen: () => false,
+          }),
+          restrictive({
+            operations: ['read'],
+            when: () => ({}),
+            name: 'r-on',
+            appliesWhen: () => true,
+          }),
+        ],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.entries.map((e) => [e.name, e.applied, e.skipped])).toEqual([
+      ['p-off', false, false],
+      ['r-off', false, false],
+      ['r-on', true, false],
+    ]);
+  });
+
+  it('marks everything after a firing override (and every non-override) as skipped', () => {
+    const seen: string[] = [];
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({
+            operations: ['read'],
+            when: () => ({}),
+            name: 'p',
+            appliesWhen: () => {
+              seen.push('p.appliesWhen');
+              return true;
+            },
+          }),
+          override({ operations: ['read'], when: () => false, name: 'o1' }),
+          override({ operations: ['read'], when: () => true, name: 'o2' }),
+          override({
+            operations: ['read'],
+            when: () => {
+              seen.push('o3.when');
+              return true;
+            },
+            name: 'o3',
+          }),
+        ],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.overriddenBy).toBe('o2');
+    expect(d.entries.map((e) => [e.name, e.applied, e.skipped])).toEqual([
+      ['p', false, true],
+      ['o1', false, false],
+      ['o2', true, false],
+      ['o3', false, true],
+    ]);
+    // Short-circuit is real: nothing after the firing override runs, and
+    // no appliesWhen runs at all.
+    expect(seen).toEqual([]);
+  });
+
+  it('reports a non-firing override as not applied', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          override({ operations: ['read'], when: () => false, name: 'o' }),
+          permissive({ operations: ['read'], when: () => ({}), name: 'p' }),
+        ],
+      },
+      schema,
+    );
+    const d = r.resolveDetailed('Book', 'read', {})!;
+    expect(d.overriddenBy).toBeNull();
+    expect(d.entries.map((e) => [e.name, e.applied, e.skipped])).toEqual([
+      ['o', false, false],
+      ['p', true, false],
+    ]);
+  });
+
+  it('uses the fallback id for an unnamed firing override', () => {
+    const r = buildResolver(
+      { Book: [override({ operations: ['read'], when: () => true })] },
+      schema,
+    );
+    expect(r.resolveDetailed('Book', 'read', {})!.overriddenBy).toBe(
+      'Book.override[0]',
+    );
+    // resolve() keeps its legacy audit name.
+    expect(r.resolve('Book', 'read', {})!.evaluated).toEqual(['override']);
+  });
+});
+
+describe('PolicyResolver.resolve — appliesWhen on restrictives', () => {
+  const schema = makeSchema({ nodes: [{ typeName: 'Book' }] });
+
+  it('omits a non-applying restrictive from `evaluated` but keeps it in `restrictives`', () => {
+    const rOff = restrictive({
+      operations: ['read'],
+      when: () => ({}),
+      name: 'r-off',
+      appliesWhen: () => false,
+    });
+    const rOn = restrictive({
+      operations: ['read'],
+      when: () => ({}),
+      name: 'r-on',
+    });
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({ operations: ['read'], when: () => ({}), name: 'p' }),
+          rOff,
+          rOn,
+        ],
+      },
+      schema,
+    );
+    const resolved = r.resolve('Book', 'read', {})!;
+    expect(resolved.evaluated).toEqual(['p', 'r-on']);
+    // Downstream (compiler / evaluateWriteRestrictives) still enforces the
+    // gate; the array itself is unchanged so InterfaceModel's
+    // "no policies → unconstrained" branch cannot be reached by gating.
+    expect(resolved.restrictives).toEqual([rOff, rOn]);
+  });
+
+  it('applies the same audit rule to write-side restrictives', () => {
+    const r = buildResolver(
+      {
+        Book: [
+          permissive({ operations: ['update'], when: () => ({}), name: 'p' }),
+          restrictive({
+            operations: ['update'],
+            when: () => true,
+            name: 'w-off',
+            appliesWhen: () => false,
+          }),
+        ],
+      },
+      schema,
+    );
+    const resolved = r.resolve('Book', 'update', {})!;
+    expect(resolved.evaluated).toEqual(['p']);
+    expect(resolved.restrictives).toHaveLength(1);
+  });
+});
+
 describe('hashCtx', () => {
   it('returns "empty" for undefined or null', () => {
     expect(hashCtx(undefined)).toBe('empty');

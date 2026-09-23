@@ -392,6 +392,44 @@ export interface ResolvedPolicies<C extends PolicyContext = PolicyContext> {
 }
 
 /**
+ * One operation-matching policy as seen by
+ * `PolicyResolver.resolveDetailed()`. Unlike `ResolvedPolicies`, nothing
+ * is dropped: policies gated off by `appliesWhen` and policies never
+ * evaluated because an override fired are reported too. Consumed by the
+ * explain path (`Model.explainPolicies`).
+ */
+export interface DetailedPolicy<C extends PolicyContext = PolicyContext> {
+  readonly policy: Policy<C>;
+  readonly kind: Policy<C>['kind'];
+  /** Type or interface whose registry entry declared this policy. */
+  readonly source: string;
+  /** Position in `source`'s registration list (all operations counted). */
+  readonly index: number;
+  /** `policy.name`, or `<source>.<kind>[<index>]` when unnamed. */
+  readonly name: string;
+  /** False when `name` is the synthesized fallback identifier. */
+  readonly named: boolean;
+  /**
+   * `appliesWhen(ctx)` held (absent counts as held). For an override:
+   * its `when(ctx)` returned true. Always false when `skipped`.
+   */
+  readonly applied: boolean;
+  /** Not evaluated at all because an earlier override fired. */
+  readonly skipped: boolean;
+}
+
+/**
+ * Full resolution for one (typeName, operation, ctx) triple. Entries are
+ * in registration order — the type's own policies first, then each
+ * implemented interface's.
+ */
+export interface DetailedResolution<C extends PolicyContext = PolicyContext> {
+  /** Fallback-aware name of the override that fired, else `null`. */
+  readonly overriddenBy: string | null;
+  readonly entries: ReadonlyArray<DetailedPolicy<C>>;
+}
+
+/**
  * Carries policy state through one compile pass. Created per query in
  * `Model` / `InterfaceModel` and threaded into `WhereCompiler` /
  * `SelectionCompiler`.

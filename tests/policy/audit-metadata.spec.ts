@@ -1,6 +1,6 @@
 import { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
-import { permissive } from '../../src/policy/types';
+import { permissive, restrictive } from '../../src/policy/types';
 
 const schema = `
 type Book @node {
@@ -89,6 +89,73 @@ describe('Audit metadata', () => {
     await ogm.withContext({}).model('Book').find({});
     const meta = recorded[0].config?.metadata;
     expect(meta!.policiesEvaluated).toEqual(['p1']);
+  });
+
+  it('omits a restrictive whose appliesWhen is false from policiesEvaluated', async () => {
+    const recorded: Recorded[] = [];
+    const policies = {
+      Book: [
+        permissive({
+          operations: ['read'],
+          when: () => ({ ownerId: 'u' }),
+          name: 'p1',
+        }),
+        restrictive({
+          operations: ['read'],
+          when: () => ({ title: 'never' }),
+          name: 'r1',
+          appliesWhen: () => false,
+        }),
+      ],
+    };
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(recorded),
+      policies,
+    });
+    await ogm.withContext({}).model('Book').find({});
+    expect(recorded[0].config?.metadata?.policiesEvaluated).toEqual(['p1']);
+
+    // Emitted Cypher is unaffected: identical to the same OGM without r1.
+    const baseline: Recorded[] = [];
+    await new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(baseline),
+      policies: { Book: [policies.Book[0]] },
+    })
+      .withContext({})
+      .model('Book')
+      .find({});
+    expect(recorded[0].cypher).toBe(baseline[0].cypher);
+    expect(recorded[0].params).toEqual(baseline[0].params);
+  });
+
+  it('lists a restrictive whose appliesWhen is true in policiesEvaluated', async () => {
+    const recorded: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs: schema,
+      driver: createMockDriver(recorded),
+      policies: {
+        Book: [
+          permissive({
+            operations: ['read'],
+            when: () => ({ ownerId: 'u' }),
+            name: 'p1',
+          }),
+          restrictive({
+            operations: ['read'],
+            when: () => ({ title: 'x' }),
+            name: 'r1',
+            appliesWhen: () => true,
+          }),
+        ],
+      },
+    });
+    await ogm.withContext({}).model('Book').find({});
+    expect(recorded[0].config?.metadata?.policiesEvaluated).toEqual([
+      'p1',
+      'r1',
+    ]);
   });
 
   it('sets bypassed=true on per-call unsafe', async () => {
