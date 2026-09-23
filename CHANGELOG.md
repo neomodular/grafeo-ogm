@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.2.0 (2026-09-23) — 🔎 Explain policy decisions
+
+> **Policy-bound reads can now explain themselves.** When a policy hides a node, `find` could only show *that* it disappeared, never *which* named clause removed it, because every clause is compiled into a single `WHERE` predicate. The new `Model.explainPolicies()` evaluates each `read` policy separately for every candidate node, covering both the declarative `when:` form and the raw `cypher:` form, and returns the hidden nodes too ([#6](https://github.com/neomodular/grafeo-ogm/issues/6)).
+>
+> **Additive minor release.** No existing signature changes, and every existing query emits byte-identical Cypher (pinned by a new 17-case golden suite). The one observable change is a correction to `policiesEvaluated` in the audit metadata (see below).
+
+### ✨ `Model.explainPolicies()`
+
+```typescript
+const report = await ogm
+  .withContext(ctx)
+  .model('Chart')
+  .explainPolicies({ where: { id_IN: candidateIds }, select: { id: true } });
+// → [{ node, visible, overriddenBy, permissiveGranted, failedRestrictives,
+//      policies: [{ name, named, kind, source, applied, outcome }] }]
+```
+
+- **Matches enforcement exactly.** Explain reuses the fragments `find` compiles, and `visible` is computed from the same composed predicate `find` puts in its `WHERE`. The verdict recomputed from the per-policy outcomes is checked against it, and a mismatch throws rather than returning a wrong explanation.
+- **Outcomes:** `pass`, `fail`, `null` (NULL is reported separately from `false`), `abstain` (the policy emitted no predicate), `not-applied` (`appliesWhen` returned false), `skipped` (an override fired).
+- **Candidates** are selected by `where` / `labels` exactly as in `find`. Full `select` / `selectionSet` is supported, and nested relationships are still filtered by their own policies.
+- **Read-only:** when grafeo opens the session itself, it uses `READ` access mode. Candidates default to 100 per call; more than 1,000 is rejected.
+- **An explicit bypass:** every call logs a `warn`, is tagged `explain: true` in the transaction metadata (even with `auditMetadata: false`), and throws on models without a policy binding and on policy-bypassed OGMs. `onDeny: 'throw'` is reported as `visible: false` instead of being thrown.
+- Scope: `Model` and the `read` operation only. `InterfaceModel`, `count`, `aggregate`, and `delete` are not supported yet.
+- New exported types: `PolicyExplanation`, `PolicyClauseExplanation`, `PolicyClauseOutcome`, and `ExecuteOptions`.
+
+### 🐛 `policiesEvaluated` lists only policies that applied
+
+The audit metadata field is documented as "names of policies that fired", but it also listed restrictives whose `appliesWhen(ctx)` returned `false`, even though those contributed nothing to the query. They are no longer listed. Emitted Cypher is unchanged.
+
+To produce this list, the resolver now evaluates restrictive `appliesWhen` itself, and the compiler (or `evaluateWriteRestrictives`) still evaluates it too. As a result, **restrictive `appliesWhen` callbacks run twice per query**. They are documented as pure compile-time gates, so this only matters if yours have side effects (counters, logging).
+
+### 🔧 Internal
+
+- `WhereCompiler`'s policy clause is now built in two steps: `compilePolicyFragments()` (the per-policy parts) and `composePolicyClause()` (the combination). Output is byte-identical to 2.1.1. The new `compileForExplain()` returns the fragments without folding them into the `WHERE`.
+- `PolicyResolver.resolveDetailed()` returns every operation-matching policy with its `applied` / `skipped` state, source, and registration index. `resolve()` is now a projection of it via `projectResolution()`.
+- `Executor.execute()` accepts an optional 4th argument, `{ accessMode }`. It only affects sessions the executor opens itself; calls without it behave as before.
+
+### Tests
+
+- `tests/policy/explain-refactor-golden.spec.ts`: 17 goldens captured from the 2.1.1 compiler, covering every fragment shape, interface inheritance, `@cypher` preludes, traversal, nested selection, count, aggregate, delete, override, and `InterfaceModel`.
+- `tests/policy/explain.spec.ts`: 27 tests covering guards, clause forms, no short-circuiting, applicability, the outcome vocabulary, fidelity with `find` (including a forced mismatch), identity, selection and prelude scoping, and security signalling.
+- 10 new resolver tests, 2 new audit-metadata tests, and `tests/executor-access-mode.spec.ts` (5 tests).
+
 ## 2.1.1 (2026-08-13) — 📍 Point fields round-trip
 
 > **The last member of the 2.1.0 type-faithfulness family.** Reads flatten a native Point into a plain `{ x, y[, z], srid }` object — but writing that object back bound it as a map property value, which Neo4j rejects at runtime ("Property values can only be of primitive types or arrays thereof"). A `Point` read through the OGM could not be written back through the OGM.
