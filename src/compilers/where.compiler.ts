@@ -1,7 +1,11 @@
 import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
 import { isReadRestrictive } from '../policy/types';
-import type { PolicyContextBundle } from '../policy/types';
+import type {
+  PermissivePolicy,
+  PolicyContextBundle,
+  RestrictivePolicy,
+} from '../policy/types';
 import {
   NodeDefinition,
   PropertyDefinition,
@@ -39,6 +43,43 @@ export interface WhereResult {
    * caller never has to handle those.
    */
   preludes?: string[];
+}
+
+/**
+ * One resolved policy's compiled contribution to the policy clause.
+ * `parts` are its boolean fragments in emission order (the `when` part,
+ * then the `cypher` part) — exactly what `composePolicyClause` joins.
+ * Empty `parts` → the policy emitted no predicate: it abstained, or (for
+ * restrictives) it is write-side or gated off by `appliesWhen`.
+ */
+export interface CompiledPolicy {
+  readonly policy: PermissivePolicy | RestrictivePolicy;
+  readonly parts: ReadonlyArray<string>;
+}
+
+/**
+ * Per-policy compilation of one (typeName, op) frame. Positionally
+ * aligned with the bundle's `resolved.permissives` /
+ * `resolved.restrictives` — one entry per policy, in order.
+ */
+export interface CompiledPolicyFragments {
+  readonly permissives: ReadonlyArray<CompiledPolicy>;
+  readonly restrictives: ReadonlyArray<CompiledPolicy>;
+}
+
+/** Result of `WhereCompiler.compileForExplain` (explain path). */
+export interface ExplainWhereResult {
+  /** User where body only — the candidate filter. `''` when absent. */
+  userCypher: string;
+  /** User-where params followed by policy params (same as `compile()`). */
+  params: Record<string, unknown>;
+  /** Top-level `@cypher` preludes for BOTH the user where and policies. */
+  preludes: string[];
+  /**
+   * Root policy clause, or `null` when none applies (override fired).
+   * `clause` is byte-identical to what `compile()` AND-stitches.
+   */
+  policy: { fragments: CompiledPolicyFragments; clause: string } | null;
 }
 
 const MAX_DEPTH = 10;
@@ -196,12 +237,90 @@ export class WhereCompiler {
       policyContext?: PolicyContextBundle;
     },
   ): WhereResult {
+    const split = this.compileUserAndPolicy(
+      where,
+      nodeVar,
+      nodeDef,
+      paramCounter,
+      options,
+    );
+    if (!split) return { cypher: '', params: {} };
+
+    const cypher = split.policy
+      ? stitchUserAndPolicy(split.userCypher, split.policy.clause)
+      : split.userCypher;
+    const result: WhereResult = {
+      cypher,
+      params: split.params,
+    };
+    if (split.preludes) result.preludes = split.preludes;
+    return result;
+  }
+
+  /**
+   * Explain-path twin of `compile()`, used by `Model.explainPolicies`.
+   * Compiles the user `where` EXACTLY as `compile()` does — same order,
+   * same `paramCounter`, same `@cypher` prelude scope, same policy-aware
+   * relationship traversal — but returns the root policy clause
+   * separately instead of AND-stitching it: as per-policy fragments AND
+   * as the composed string `compile()` would have stitched. Both come
+   * from one compilation, so an explanation cannot drift from
+   * enforcement.
+   *
+   * `policy` is `null` when no root policy clause applies (an override
+   * fired).
+   *
+   * @internal
+   */
+  compileForExplain(
+    where: Record<string, unknown> | undefined | null,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    paramCounter: { count: number },
+    policyContext: PolicyContextBundle,
+  ): ExplainWhereResult {
+    const split = this.compileUserAndPolicy(
+      where,
+      nodeVar,
+      nodeDef,
+      paramCounter,
+      { policyContext },
+    );
+    return {
+      userCypher: split?.userCypher ?? '',
+      params: split?.params ?? {},
+      preludes: split?.preludes ?? [],
+      policy: split?.policy ?? null,
+    };
+  }
+
+  /**
+   * Shared body of `compile()` / `compileForExplain()`: compiles the user
+   * where, then the policy fragments, sharing one `paramCounter` and one
+   * top-level `@cypher` scope. Returns `null` when there is nothing to
+   * compile (no user where and no active policy).
+   */
+  private compileUserAndPolicy(
+    where: Record<string, unknown> | undefined | null,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    paramCounter: { count: number },
+    options?: {
+      preserveVars?: ReadonlyArray<string>;
+      policyContext?: PolicyContextBundle;
+    },
+  ): {
+    userCypher: string;
+    params: Record<string, unknown>;
+    preludes?: string[];
+    policy: { fragments: CompiledPolicyFragments; clause: string } | null;
+  } | null {
     const hasUserWhere = where != null && Object.keys(where).length > 0;
     const policyContext = options?.policyContext;
     const policyActive =
       policyContext !== undefined && !policyContext.resolved.overridden;
 
-    if (!hasUserWhere && !policyActive) return { cypher: '', params: {} };
+    if (!hasUserWhere && !policyActive) return null;
 
     // Top-level scope — preludes here are returned to the caller for stitching
     // BEFORE the WHERE clause. Nested scopes (relationship quantifiers) build
@@ -224,11 +343,14 @@ export class WhereCompiler {
         )
       : { cypher: '', params: {} as Record<string, unknown> };
 
-    let cypher = userBody.cypher;
     const params = { ...userBody.params };
 
+    let policy: {
+      fragments: CompiledPolicyFragments;
+      clause: string;
+    } | null = null;
     if (policyActive) {
-      const policyClause = this.compilePolicyClause(
+      const fragments = this.compilePolicyFragments(
         policyContext!,
         nodeVar,
         nodeDef,
@@ -236,40 +358,47 @@ export class WhereCompiler {
         scope,
         params,
       );
-      cypher = stitchUserAndPolicy(cypher, policyClause);
+      policy = { fragments, clause: composePolicyClause(fragments) };
     }
 
-    const result: WhereResult = {
-      cypher,
+    return {
+      userCypher: userBody.cypher,
       params,
+      preludes: scope.hasAny() ? scope.emit() : undefined,
+      policy,
     };
-    if (scope.hasAny()) result.preludes = scope.emit();
-    return result;
   }
 
   /**
-   * Compile the policy clause for a single (typeName, op) frame. AND-
-   * stitches into the user's body via `stitchUserAndPolicy`. Shares the
-   * same `paramCounter` and `scope` as the user where so that nothing
-   * collides downstream.
+   * Compile each resolved policy of a single (typeName, op) frame into
+   * its boolean fragments ("parts"), WITHOUT combining them —
+   * `composePolicyClause` does that. Shares the same `paramCounter` and
+   * `scope` as the user where so that nothing collides downstream.
+   *
+   * The result is positionally aligned with `resolved.permissives` /
+   * `resolved.restrictives`: one entry per policy, in order, even when a
+   * policy contributes no part.
    *
    * Permissive `cypher.params` keys are namespaced with `policy_p<n>_`
    * to guarantee no collision with `param0..N`.
    */
-  private compilePolicyClause(
+  private compilePolicyFragments(
     bundle: PolicyContextBundle,
     nodeVar: string,
     nodeDef: NodeDefinition,
     paramCounter: { count: number },
     scope: CypherFieldScope,
     paramsTarget: Record<string, unknown>,
-  ): string {
-    const { ctx, resolved, defaults, operation } = bundle;
+  ): CompiledPolicyFragments {
+    const { ctx, resolved } = bundle;
 
-    const permFrags: string[] = [];
+    const permissives: CompiledPolicy[] = [];
     let policyParamIdx = 0;
 
     for (const p of resolved.permissives) {
+      const parts: string[] = [];
+      permissives.push({ policy: p, parts });
+
       // `when` returns a where-partial — compile it through the same
       // pipeline so every existing operator/quantifier just works.
       if (p.when) {
@@ -284,12 +413,12 @@ export class WhereCompiler {
             scope,
           );
           if (compiled.cypher) {
-            permFrags.push(`(${compiled.cypher})`);
+            parts.push(`(${compiled.cypher})`);
             mergeParams(paramsTarget, compiled.params);
           }
         } else if (partial && Object.keys(partial).length === 0)
           // Empty partial means "match everything" — equivalent to true.
-          permFrags.push('true');
+          parts.push('true');
       }
 
       // `cypher` escape hatch — raw fragment + parameterized params
@@ -307,15 +436,16 @@ export class WhereCompiler {
             `policy_p${policyParamIdx++}_`,
           );
           mergeParams(paramsTarget, namespaced.values);
-          permFrags.push(
-            `(${rewritePolicyFragment(fragment, namespaced.map)})`,
-          );
+          parts.push(`(${rewritePolicyFragment(fragment, namespaced.map)})`);
         }
       }
     }
 
-    const restFrags: string[] = [];
+    const restrictives: CompiledPolicy[] = [];
     for (const p of resolved.restrictives) {
+      const parts: string[] = [];
+      restrictives.push({ policy: p, parts });
+
       // Only ReadRestrictive policies participate in the WHERE clause.
       // WriteRestrictive policies (create/update) are evaluated at the
       // application layer in Model.* — calling their `(ctx, input)`
@@ -323,7 +453,8 @@ export class WhereCompiler {
       if (!isReadRestrictive(p)) continue;
       // Compile-time gate. If `appliesWhen(ctx)` is false, the policy
       // contributes nothing to this query — same semantics as a
-      // dropped permissive.
+      // dropped permissive. (The resolver evaluates this gate too; this
+      // check stays as defense in depth for hand-built bundles.)
       if (p.appliesWhen && !p.appliesWhen(ctx)) continue;
 
       if (p.when) {
@@ -332,7 +463,7 @@ export class WhereCompiler {
         if (partial === false)
           // Hard deny — compiles to `false` and short-circuits the
           // restrictive AND chain.
-          restFrags.push('false');
+          parts.push('false');
         else if (partial && typeof partial === 'object') {
           const obj = partial as Record<string, unknown>;
           if (Object.keys(obj).length > 0) {
@@ -345,7 +476,7 @@ export class WhereCompiler {
               scope,
             );
             if (compiled.cypher) {
-              restFrags.push(`(${compiled.cypher})`);
+              parts.push(`(${compiled.cypher})`);
               mergeParams(paramsTarget, compiled.params);
             }
           }
@@ -364,69 +495,12 @@ export class WhereCompiler {
             `policy_p${policyParamIdx++}_`,
           );
           mergeParams(paramsTarget, namespaced.values);
-          restFrags.push(
-            `(${rewritePolicyFragment(fragment, namespaced.map)})`,
-          );
+          parts.push(`(${rewritePolicyFragment(fragment, namespaced.map)})`);
         }
       }
     }
 
-    // Default-deny: no permissives matched. The Model call site is
-    // responsible for raising `PolicyDeniedError` BEFORE compile when
-    // `defaults.onDeny === 'throw'`. At compile time we always fall
-    // back to `false` so the query is safe even if the call-site
-    // throw is bypassed (defense in depth, not the primary path).
-    if (resolved.permissives.length === 0) {
-      void defaults;
-      void operation;
-      return 'false';
-    }
-
-    // At least one permissive matched. Compose `(perm) AND (rest)`.
-    //
-    // SECURITY FIX (v1.8.2 — CRITICAL): Pre-1.8.2 emitted `'true'` here
-    // when `permFrags.length === 0`, on the assumption that an empty
-    // permFrags meant "every permissive returned an empty partial,
-    // which is match-anything". That assumption was WRONG and silently
-    // inverted the deny default in three documented patterns:
-    //
-    //   permissive: [{ when: (ctx) => ctx.userId ? {...} : null }]
-    //                                              ^^^ abstain
-    //   permissive: [{ when: (ctx) => undefined }]
-    //   permissive: [{ cypher: { fragment: () => '', params: ... } }]
-    //
-    // In every case, `permFrags` ended up empty and the compiler emitted
-    // `WHERE true`, dumping unrestricted data. The bug survived TS
-    // checks, code review, and the v1.7.0 NLS audit because "abstain"
-    // and "match-anything" looked indistinguishable at this layer.
-    //
-    // Permissives are an ALLOW-LIST. If no rule fires, access is DENIED.
-    // The explicit "match-anything" path is preserved: when a developer
-    // writes `when: () => ({})`, line 257-259 still pushes `'true'` into
-    // permFrags before this check, so permFrags.length > 0 and we take
-    // the else branch. The migration path for users relying on the old
-    // abstain-as-allow behaviour is to write `when: () => ({})` instead
-    // of `when: () => null`.
-    const permClause =
-      permFrags.length === 0
-        ? 'false'
-        : permFrags.length === 1
-          ? permFrags[0]
-          : `(${permFrags.join(' OR ')})`;
-
-    const restClause =
-      restFrags.length === 0
-        ? 'true'
-        : restFrags.length === 1
-          ? restFrags[0]
-          : restFrags.join(' AND ');
-
-    // Avoid the trivial `(... AND true)` formulation when there are no
-    // restrictives — keeps emitted Cypher tighter and the byte-
-    // identical regression cleaner.
-    return restClause === 'true'
-      ? permClause
-      : `(${permClause} AND ${restClause})`;
+    return { permissives, restrictives };
   }
 
   /**
@@ -1503,6 +1577,90 @@ function stitchUserAndPolicy(userBody: string, policyClause: string): string {
   if (!userBody) return policyClause;
   if (!policyClause) return userBody;
   return `(${userBody}) AND ${policyClause}`;
+}
+
+/**
+ * Compose compiled policy fragments into the single boolean clause
+ * `(P1 OR P2 …) AND R1 AND R2 …` that `compile()` AND-stitches into the
+ * WHERE. This is the ONLY place that composition happens: `compile()`
+ * stitches its output, and `Model.explainPolicies` projects the very
+ * same string as its enforcement verdict — so the two cannot disagree.
+ */
+function composePolicyClause(fragments: CompiledPolicyFragments): string {
+  // Default-deny: no permissives matched. The Model call site is
+  // responsible for raising `PolicyDeniedError` BEFORE compile when
+  // `defaults.onDeny === 'throw'`. At compile time we always fall
+  // back to `false` so the query is safe even if the call-site
+  // throw is bypassed (defense in depth, not the primary path).
+  if (fragments.permissives.length === 0) return 'false';
+
+  const permFrags = fragments.permissives.flatMap((c) => c.parts);
+  const restFrags = fragments.restrictives.flatMap((c) => c.parts);
+
+  // At least one permissive matched. Compose `(perm) AND (rest)`.
+  //
+  // SECURITY FIX (v1.8.2 — CRITICAL): Pre-1.8.2 emitted `'true'` here
+  // when `permFrags.length === 0`, on the assumption that an empty
+  // permFrags meant "every permissive returned an empty partial,
+  // which is match-anything". That assumption was WRONG and silently
+  // inverted the deny default in three documented patterns:
+  //
+  //   permissive: [{ when: (ctx) => ctx.userId ? {...} : null }]
+  //                                              ^^^ abstain
+  //   permissive: [{ when: (ctx) => undefined }]
+  //   permissive: [{ cypher: { fragment: () => '', params: ... } }]
+  //
+  // In every case, `permFrags` ended up empty and the compiler emitted
+  // `WHERE true`, dumping unrestricted data. The bug survived TS
+  // checks, code review, and the v1.7.0 NLS audit because "abstain"
+  // and "match-anything" looked indistinguishable at this layer.
+  //
+  // Permissives are an ALLOW-LIST. If no rule fires, access is DENIED.
+  // The explicit "match-anything" path is preserved: when a developer
+  // writes `when: () => ({})`, `compilePolicyFragments` still pushes
+  // `'true'` as that permissive's part, so permFrags.length > 0 and we
+  // take the else branch. The migration path for users relying on the
+  // old abstain-as-allow behaviour is to write `when: () => ({})`
+  // instead of `when: () => null`.
+  const permClause =
+    permFrags.length === 0
+      ? 'false'
+      : permFrags.length === 1
+        ? permFrags[0]
+        : `(${permFrags.join(' OR ')})`;
+
+  const restClause =
+    restFrags.length === 0
+      ? 'true'
+      : restFrags.length === 1
+        ? restFrags[0]
+        : restFrags.join(' AND ');
+
+  // Avoid the trivial `(... AND true)` formulation when there are no
+  // restrictives — keeps emitted Cypher tighter and the byte-
+  // identical regression cleaner.
+  return restClause === 'true'
+    ? permClause
+    : `(${permClause} AND ${restClause})`;
+}
+
+/**
+ * The boolean value ONE compiled policy contributes to
+ * `composePolicyClause`, as a standalone expression (explain path): a
+ * permissive's parts are OR-ed — they join the permissive disjunction —
+ * and a restrictive's parts are AND-ed — they join the restrictive
+ * conjunction. OR/AND are associative in Cypher's three-valued logic,
+ * so grouping per policy preserves the composed clause's truth value.
+ *
+ * Returns `null` when the policy has no parts (it abstained).
+ */
+export function policyValueExpression(
+  kind: 'permissive' | 'restrictive',
+  parts: ReadonlyArray<string>,
+): string | null {
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return `(${parts.join(kind === 'permissive' ? ' OR ' : ' AND ')})`;
 }
 
 /**
