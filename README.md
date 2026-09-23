@@ -1302,6 +1302,54 @@ When `policies` is configured, every OGM-emitted query attaches transaction meta
 
 Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is intentionally key-only — no ctx values are leaked.
 
+`policiesEvaluated` lists only the policies that **applied** to the query. A restrictive whose `appliesWhen(ctx)` returned `false` is omitted (before v2.2.0 it was listed even though it contributed nothing). `explainPolicies` calls add `explain: true` and are always recorded, even with `auditMetadata: false`.
+
+#### Explaining policy decisions
+
+When a policy-bound read hides a node, `find` can only show *that* the node disappeared. `explainPolicies` shows *which* named clause decided it. It evaluates every `read` policy for the type separately, for each candidate node, without short-circuiting. Both `when:` and `cypher:` clauses are covered, and nodes the policies reject are returned too.
+
+```typescript
+const report = await ogm
+  .withContext(ctx)
+  .model('Chart')
+  .explainPolicies({ where: { id_IN: candidateIds }, select: { id: true } });
+
+// [{
+//   node: { id: 'chart-8617' },
+//   visible: false,                        // exactly what `find` would enforce
+//   overriddenBy: null,
+//   permissiveGranted: true,
+//   failedRestrictives: ['chart.dose-translation-coverage'],
+//   policies: [
+//     { name: 'chart.read-grant', kind: 'permissive', source: 'Chart', applied: true, outcome: 'pass' },
+//     { name: 'chart.weight-zone', kind: 'restrictive', source: 'Chart', applied: true, outcome: 'pass' },
+//     { name: 'chart.text-field-scope', kind: 'restrictive', source: 'Chart', applied: false, outcome: 'not-applied' },
+//     { name: 'chart.dose-translation-coverage', kind: 'restrictive', source: 'Chart', applied: true, outcome: 'fail' },
+//   ],
+// }]
+```
+
+| `outcome` | Meaning |
+|---|---|
+| `pass` | Applied, and its predicate evaluated to `true`. |
+| `fail` | Applied, and it evaluated to `false`. This includes a restrictive hard deny (`when: () => false`). |
+| `null` | Applied, and it evaluated to NULL (for example, a missing property). Enforcement treats NULL as not-true. It is reported separately from `fail` because the fix is different. |
+| `abstain` | Applied, but it emitted no predicate. A permissive abstain grants nothing; a restrictive abstain restricts nothing. |
+| `not-applied` | `appliesWhen(ctx)` returned `false` (for an override: `when(ctx)` returned `false`). The policy was not evaluated. |
+| `skipped` | Not evaluated, because an earlier override fired. |
+
+How it works:
+
+- **Same predicates as `find`.** The explain query projects the exact compiled fragments `find` would enforce. `visible` is computed from the same composed predicate `find` puts in its `WHERE`. The verdict recomputed from the per-policy outcomes must agree with it; if it ever doesn't, the call throws instead of returning a wrong explanation.
+- **Candidate selection.** `where` and `labels` select candidates exactly as in `find`, including target-type policies on relationship filters. The root type's policy clause is reported, not used as a filter. Candidates that don't match `where` are simply absent from the result.
+- **Selection.** `select` / `selectionSet` accept everything `find` accepts. Relationships in the selection are still filtered by their own target-type policies. Only the root type's policies are explained.
+- **Read-only.** When grafeo opens the session itself, it opens it in `READ` access mode, so the server rejects any write. If you pass your own `transaction` or `session`, it is used as-is, and you control its access mode.
+- **Bounded.** `options.limit` defaults to 100, and values above 1,000 are rejected. Each candidate evaluates every policy, and the enforcement predicate is evaluated a second time for the cross-check, so explain costs more than a normal read. `sort` and `offset` are supported.
+- **Unnamed policies** are reported as `<source>.<kind>[<index>]` with `named: false`. Give every policy a `name` if you want stable, readable output.
+- **Default deny is reported, not thrown.** With `onDeny: 'throw'`, `explainPolicies` still returns rows with `visible: false` and `permissiveGranted: false`.
+
+> **Security: `explainPolicies` bypasses policy filtering by design.** It returns nodes the bound context cannot see, together with their selected fields. Expose it only on admin-only diagnostic paths, and never let request input decide whether it runs. Every call logs a `warn` and is tagged `explain: true` in the transaction metadata. It is only available on policy-bound models (`ogm.withContext(ctx).model(...)`) and throws on a model with no policy binding or on a policy-bypassed OGM. In this release it covers `Model` and the `read` operation only: `InterfaceModel`, `count`, `aggregate`, and `delete` are not supported yet.
+
 #### Limitations
 
 - **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal.
@@ -1879,6 +1927,7 @@ Open an issue on [GitHub](https://github.com/neomodular/grafeo-ogm/issues). For 
 | `count(options?)` | `number` | Count matching nodes |
 | `aggregate(options)` | `AggregateResult` | Aggregate values (min, max, avg, count) |
 | `setLabels(options)` | `void` | Add or remove labels on matching nodes |
+| `explainPolicies(options?)` | `PolicyExplanation<T>[]` | Per-clause `read` policy outcomes per candidate, including hidden nodes (policy-bound models only; see [Explaining policy decisions](#explaining-policy-decisions)) |
 
 ### InterfaceModel
 

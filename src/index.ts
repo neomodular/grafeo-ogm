@@ -49,6 +49,9 @@ export type {
   PoliciesByModel,
   PolicyDefaults,
   ResolvedPolicies,
+  PolicyClauseOutcome,
+  PolicyClauseExplanation,
+  PolicyExplanation,
 } from './policy/types';
 
 // Schema types
@@ -89,7 +92,11 @@ export type { VectorResult } from './compilers/vector.compiler';
 
 // Execution
 export { Executor } from './execution/executor';
-export type { ExecutionContext, OGMLogger } from './execution/executor';
+export type {
+  ExecuteOptions,
+  ExecutionContext,
+  OGMLogger,
+} from './execution/executor';
 export { ResultMapper } from './execution/result-mapper';
 
 // Type generator

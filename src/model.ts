@@ -9,17 +9,27 @@ import {
 } from './compilers/selection.compiler';
 import { VectorCompiler } from './compilers/vector.compiler';
 import { WhereCompiler } from './compilers/where.compiler';
+import type { CompiledPolicyFragments } from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
-import { hashCtx } from './policy/resolver';
+import {
+  buildExplainPlan,
+  EXPLAIN_OUTCOMES,
+  EXPLAIN_VISIBLE,
+  interpretExplainRow,
+  resolveExplainLimit,
+} from './policy/explain';
+import { hashCtx, projectResolution } from './policy/resolver';
 import { isWriteRestrictive } from './policy/types';
 import type {
+  DetailedResolution,
   Operation,
   PolicyContext,
   PolicyContextBundle,
   PolicyDefaults,
+  PolicyExplanation,
   ResolvedPolicies,
 } from './policy/types';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
@@ -46,6 +56,15 @@ export interface ModelPolicyBinding {
     op: Operation,
     ctx: PolicyContext,
   ) => ResolvedPolicies | null;
+  /**
+   * Full resolution (nothing dropped) for `explainPolicies`. Optional so
+   * hand-built bindings stay valid; `OGMWithContext` always supplies it.
+   */
+  resolveDetailed?: (
+    typeName: string,
+    op: Operation,
+    ctx: PolicyContext,
+  ) => DetailedResolution | null;
   defaults: PolicyDefaults;
   logger?: OGMLogger;
   /** Set when this binding belongs to a `unsafe.bypassPolicies()` OGM. */
@@ -481,11 +500,17 @@ export class Model<
     bundle: PolicyContextBundle | null,
     operation: Operation,
     bypassed: boolean,
+    /**
+     * `explainPolicies` call — tags `explain: true` and, like a global
+     * bypass, is ALWAYS recorded even with `auditMetadata: false`.
+     */
+    explain = false,
   ): ExecutionContext | undefined {
     if (!this.policyBinding) return context;
     if (
       this.policyBinding.defaults.auditMetadata === false &&
-      !this.policyBinding.globalBypass
+      !this.policyBinding.globalBypass &&
+      !explain
     )
       return context;
 
@@ -498,6 +523,7 @@ export class Model<
       policiesEvaluated: [...evaluated],
       bypassed,
     };
+    if (explain) metadata.explain = true;
 
     if (context?.metadata)
       return { ...context, metadata: { ...context.metadata, ...metadata } };
@@ -665,6 +691,185 @@ export class Model<
       ),
     );
     return ResultMapper.mapRecords(result.records, 'n') as T[];
+  }
+
+  // --- explainPolicies ------------------------------------------------------
+
+  /**
+   * Explain, per candidate node, the outcome of every `read` policy that
+   * `find` would enforce for this model's bound context (GitHub issue #6).
+   *
+   * **This is a deliberate policy bypass.** Candidates are selected by
+   * `where` / `labels` exactly as `find` selects them, but the root policy
+   * predicate is REPORTED instead of applied — nodes the bound context
+   * cannot see ARE returned, with `visible: false`. Use it only on
+   * admin-only diagnostic paths. Every call logs a `warn` and is tagged
+   * `explain: true` in transaction metadata, even with
+   * `auditMetadata: false`.
+   *
+   * - `visible` is the exact enforcement verdict: the query projects the
+   *   same composed predicate `find` puts in its WHERE, and the verdict
+   *   recomputed from the per-policy outcomes must agree with it or the
+   *   call throws — it never returns a possibly-wrong explanation.
+   * - Relationships in the selection are still filtered by their own
+   *   target-type policies, exactly as in `find`; only the root type's
+   *   policies are explained.
+   * - When the executor opens its own session it is READ-mode, so the
+   *   server rejects any write. A caller-supplied `transaction` /
+   *   `session` is used as-is — the caller owns its access mode.
+   * - `options.limit` defaults to 100 and may not exceed 1,000.
+   */
+  async explainPolicies(params?: {
+    where?: TWhere;
+    selectionSet?: string | DocumentNode;
+    select?: TSelect;
+    labels?: string[];
+    options?: FindOptions<TSort>;
+    context?: ExecutionContext;
+  }): Promise<PolicyExplanation<T>[]> {
+    if (params?.select && params?.selectionSet)
+      throw new OGMError(
+        'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
+      );
+
+    const binding = this.policyBinding;
+    if (binding?.globalBypass)
+      throw new OGMError(
+        'explainPolicies cannot run on a policy-bypassed OGM (ogm.unsafe.bypassPolicies()): there are no enforced policies to explain.',
+      );
+    const resolveDetailed = binding?.resolveDetailed;
+    if (!binding || !resolveDetailed)
+      throw new OGMError(
+        `explainPolicies requires a policy-bound model. Obtain it via ogm.withContext(ctx).model('${this.nodeDef.typeName}').`,
+      );
+
+    const limit = resolveExplainLimit(params?.options?.limit);
+
+    if (this.logger?.warn)
+      this.logger.warn(
+        '[OGM] explainPolicies on type "%s" returns rows regardless of policy outcome (diagnostic policy bypass)',
+        this.nodeDef.typeName,
+      );
+
+    // Resolve ONCE and derive the compile input from the same object the
+    // report is built from — keeps fragments aligned with entries.
+    const ctx = binding.ctx;
+    const detailed = resolveDetailed(this.nodeDef.typeName, 'read', ctx);
+    const policyContext: PolicyContextBundle | null = detailed
+      ? {
+          ctx,
+          operation: 'read',
+          resolved: projectResolution(detailed),
+          defaults: binding.defaults,
+          resolveForType: (typeName, targetOp) =>
+            binding.resolve(typeName, targetOp, ctx),
+        }
+      : null;
+
+    const cypherParts: string[] = [];
+    const allParams: Record<string, unknown> = {};
+    const paramCounter = { count: 0 };
+    const selection = this.resolveSelection(params ?? {});
+
+    const validatedLabels = (params?.labels ?? []).map((l) =>
+      assertSafeLabel(l),
+    );
+    const labels = [escapeIdentifier(this.nodeDef.label), ...validatedLabels];
+    cypherParts.push(`MATCH (n:${labels.join(':')})`);
+
+    // Candidate WHERE — compiled exactly as `find` compiles it (same
+    // order, counter, prelude scope, policy-aware traversal), with the
+    // root policy clause returned separately instead of AND-stitched.
+    let userCypher: string;
+    let policyClause: string | null = null;
+    let fragments: CompiledPolicyFragments | null = null;
+    if (policyContext) {
+      const where = this.whereCompiler.compileForExplain(
+        params?.where,
+        'n',
+        this.nodeDef,
+        paramCounter,
+        policyContext,
+      );
+      if (where.preludes.length > 0) cypherParts.push(...where.preludes);
+      mergeParams(allParams, where.params);
+      userCypher = where.userCypher;
+      policyClause = where.policy?.clause ?? null;
+      fragments = where.policy?.fragments ?? null;
+    } else {
+      // No policy registered for this type — `find` compiles without a
+      // policy context too.
+      const where = this.whereCompiler.compile(
+        params?.where,
+        'n',
+        this.nodeDef,
+        paramCounter,
+      );
+      if (where.preludes && where.preludes.length > 0)
+        cypherParts.push(...where.preludes);
+      mergeParams(allParams, where.params);
+      userCypher = where.cypher;
+    }
+    if (userCypher) cypherParts.push(`WHERE ${userCypher}`);
+
+    // Project the outcomes right after the candidate WHERE: the `@cypher`
+    // `__where_*` aliases the fragments reference are only in scope here
+    // (selection / sort preludes carry just their own preserveVars).
+    const plan = buildExplainPlan(detailed, fragments);
+    const visibleExpr =
+      policyClause === null ? 'true' : `coalesce((${policyClause}), false)`;
+    cypherParts.push(
+      `WITH n, [${plan.outcomeExpressions.join(', ')}] AS ${EXPLAIN_OUTCOMES}, ${visibleExpr} AS ${EXPLAIN_VISIBLE}`,
+    );
+
+    const explainVars = [EXPLAIN_OUTCOMES, EXPLAIN_VISIBLE];
+    const selectScope = new CypherFieldScope('n', explainVars, '__sel');
+    const returnClause = this.selectionCompiler.compile(
+      selection,
+      'n',
+      this.nodeDef,
+      this._maxDepth,
+      0,
+      allParams,
+      paramCounter,
+      selectScope,
+      policyContext,
+    );
+    const opts = this.compileOptions({ ...params?.options, limit }, allParams, [
+      ...explainVars,
+      ...selectScope.carried(),
+    ]);
+
+    if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
+    if (opts.pre) cypherParts.push(opts.pre);
+    cypherParts.push(
+      `RETURN ${returnClause}, ${EXPLAIN_OUTCOMES}, ${EXPLAIN_VISIBLE}`,
+    );
+    if (opts.post) cypherParts.push(opts.post);
+
+    const result = await this.executor.execute(
+      cypherParts.join('\n'),
+      allParams,
+      this.withAuditMetadata(
+        params?.context,
+        policyContext,
+        'read',
+        false,
+        true,
+      ),
+      { accessMode: 'READ' },
+    );
+
+    return result.records.map((record, row) => ({
+      node: ResultMapper.mapRecord(record, 'n') as T,
+      ...interpretExplainRow(
+        plan,
+        record.get(EXPLAIN_OUTCOMES),
+        record.get(EXPLAIN_VISIBLE),
+        this.nodeDef.typeName,
+        row,
+      ),
+    }));
   }
 
   // --- create ---------------------------------------------------------------

@@ -749,6 +749,8 @@ export class OGMWithContext<
         ctx: this.ctx as PolicyContext,
         resolve: (typeName, op, ctx) =>
           this.resolver.resolve(typeName, op, ctx),
+        resolveDetailed: (typeName, op, ctx) =>
+          this.resolver.resolveDetailed(typeName, op, ctx),
         defaults: this.defaults,
         logger: this.logger,
         globalBypass: this.globalBypass,

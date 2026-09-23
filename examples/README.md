@@ -41,6 +41,7 @@ npx tsx examples/01-basic-crud.ts
 | 12 | `12-error-handling.ts`      | RecordNotFoundError, OGMError | Yes |
 | 13 | `13-code-generation.ts`     | generateTypes() script | No |
 | 14 | `14-testing-utilities.ts`   | CypherAssert, Neo4jRecordFactory, SelectionSetFactory | No |
+| 15 | `15-policy-explain.ts`      | explainPolicies() — per-clause policy outcomes, hidden nodes included | Yes |
 
 ## Schema
 

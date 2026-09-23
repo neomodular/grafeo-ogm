@@ -45,6 +45,17 @@ export interface ExecutionContext {
   metadata?: Record<string, unknown>;
 }
 
+/** Per-call execution options that are not part of `ExecutionContext`. */
+export interface ExecuteOptions {
+  /**
+   * Access mode for the auto-commit session the executor opens itself.
+   * `'READ'` makes the server reject any write in the statement. Ignored
+   * when the caller supplies a `transaction` / `session` — the caller
+   * owns the access mode of those. Omitted → the driver default.
+   */
+  accessMode?: 'READ' | 'WRITE';
+}
+
 /**
  * Executes Cypher queries against Neo4j, using either a provided
  * transaction or an auto-commit session.
@@ -70,6 +81,7 @@ export class Executor {
     cypher: string,
     params: Record<string, unknown>,
     context?: ExecutionContext,
+    options?: ExecuteOptions,
   ): Promise<QueryResult> {
     if (Executor.debug) {
       this.logger.debug('[OGM] Cypher: %s', cypher);
@@ -89,8 +101,11 @@ export class Executor {
         ? context.session.run(cypher, params, { metadata: context.metadata })
         : context.session.run(cypher, params);
 
-    // Auto-commit session
-    const session = this.driver.session();
+    // Auto-commit session. The no-arg call is kept verbatim when no
+    // access mode is requested so the default path is unchanged.
+    const session = options?.accessMode
+      ? this.driver.session({ defaultAccessMode: options.accessMode })
+      : this.driver.session();
     try {
       const result = context?.metadata
         ? await session.run(cypher, params, { metadata: context.metadata })

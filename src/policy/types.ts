@@ -419,6 +419,66 @@ export interface DetailedPolicy<C extends PolicyContext = PolicyContext> {
 }
 
 /**
+ * Outcome of one policy for one candidate node, as reported by
+ * `Model.explainPolicies()`:
+ *
+ * - `pass` — applied; its predicate evaluated to `true`.
+ * - `fail` — applied; evaluated to `false` (includes a restrictive hard
+ *   deny, `when: () => false`).
+ * - `null` — applied; evaluated to NULL (three-valued logic, e.g. a
+ *   missing property). Enforcement treats it as not-true.
+ * - `abstain` — applied, but emitted no predicate. A permissive abstain
+ *   grants nothing; a restrictive abstain restricts nothing.
+ * - `not-applied` — `appliesWhen(ctx)` was false (override: `when(ctx)`
+ *   was false). Not compiled or evaluated.
+ * - `skipped` — not evaluated because an earlier override fired.
+ */
+export type PolicyClauseOutcome =
+  | 'pass'
+  | 'fail'
+  | 'null'
+  | 'abstain'
+  | 'not-applied'
+  | 'skipped';
+
+/** One policy's report within a `PolicyExplanation`. */
+export interface PolicyClauseExplanation {
+  /** `policy.name`, or `<source>.<kind>[<index>]` when unnamed. */
+  readonly name: string;
+  /** False when `name` is the synthesized fallback identifier. */
+  readonly named: boolean;
+  readonly kind: 'override' | 'permissive' | 'restrictive';
+  /** Type or interface whose registry entry declared the policy. */
+  readonly source: string;
+  /** `appliesWhen(ctx)` held (override: `when(ctx)` was true). */
+  readonly applied: boolean;
+  readonly outcome: PolicyClauseOutcome;
+}
+
+/**
+ * Per-candidate result of `Model.explainPolicies()`. `visible` is the
+ * exact verdict `find` enforces for the same bound context; the other
+ * fields explain it.
+ */
+export interface PolicyExplanation<T = Record<string, unknown>> {
+  /** The candidate, projected with the requested selection. */
+  readonly node: T;
+  /** Would `find` return this node for the bound context? */
+  readonly visible: boolean;
+  /** Name of the override that fired, else `null`. */
+  readonly overriddenBy: string | null;
+  /**
+   * Some permissive granted access (`true` when an override fired or the
+   * type has no policies). `false` → default deny.
+   */
+  readonly permissiveGranted: boolean;
+  /** Names of applied restrictives whose outcome is `fail` or `null`. */
+  readonly failedRestrictives: ReadonlyArray<string>;
+  /** Every `read` policy for the type, in registration order. */
+  readonly policies: ReadonlyArray<PolicyClauseExplanation>;
+}
+
+/**
  * Full resolution for one (typeName, operation, ctx) triple. Entries are
  * in registration order — the type's own policies first, then each
  * implemented interface's.
