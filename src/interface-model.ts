@@ -13,11 +13,8 @@ import { ExecutionContext, Executor } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
 import { hashCtx } from './policy/resolver';
-import type {
-  Operation,
-  PolicyContextBundle,
-  ResolvedPolicies,
-} from './policy/types';
+import { NO_ROOT_POLICY } from './policy/types';
+import type { Operation, PolicyContextBundle } from './policy/types';
 import type { ModelPolicyBinding, UnsafeOptions } from './model';
 import {
   InterfaceDefinition,
@@ -225,15 +222,23 @@ export class InterfaceModel<
   }
 
   /**
-   * Build a CASE-per-label policy clause. For each implementer with
-   * registered `'read'` policies, emit a branch that AND-combines the
-   * interface-level policy with the implementer's. Implementers without
-   * a registered policy fall back to the interface-level only. Branches
-   * with empty permissives evaluate to `false`.
+   * The interface's policy clause (v2.3.0):
+   * `(CASE WHEN n:M THEN <M clause> … ELSE false END)`, built by the shared
+   * `WhereCompiler.compileTargetPolicyClause` — the same construction that
+   * guards interface / union relationship targets. Each branch is exactly
+   * the clause `Model(M)` compiles for the same context and operation
+   * (M's resolution already folds in the interface's own policies); a
+   * member without a policy for the operation, or whose override fires, is
+   * `true`, and no clause is emitted when every member is `true`.
+   * `aggregate` falls back to a member's `read` policies when it has no
+   * `aggregate` policy, as `Model.aggregate` does.
    *
-   * Returns a Cypher fragment safe to AND into the WHERE clause; the
-   * fragment shares `paramCounter` with the calling pipeline so params
-   * don't collide.
+   * Pre-2.3.0 branches were composed here from the interface's and the
+   * implementer's policy lists: an implementer whose permissives were all
+   * gated off by `appliesWhen` got `THEN true` (while `Model(M).find`
+   * denies it), and interface predicates appeared twice per branch.
+   *
+   * Shares `paramCounter` with the calling pipeline so params don't collide.
    */
   private compileInterfacePolicyClause(
     bundle: PolicyContextBundle | null,
@@ -241,93 +246,28 @@ export class InterfaceModel<
     paramCounter: { count: number },
     paramsTarget: Record<string, unknown>,
   ): { cypher: string; preludes: string[] } {
-    if (!bundle) return { cypher: '', preludes: [] };
-    if (bundle.resolved.overridden) return { cypher: '', preludes: [] };
-
-    const branches: string[] = [];
-    let allPreludes: string[] = [];
-    let anyImplementerHasPolicy = false;
-    for (const memberName of this.interfaceDef.implementedBy) {
-      const memberDef = this.schema.nodes.get(memberName);
-      if (!memberDef) continue;
-      const memberPolicy = bundle.resolveForType(memberName, 'read');
-      if (memberPolicy) anyImplementerHasPolicy = true;
-      // Compose: interface-level + implementer-level. Use the where
-      // compiler with a synthesized bundle; the syntheticNodeDef stands
-      // in for the interface but properties are looked up on the
-      // implementer when AND-stitching.
-      const composedResolved: ResolvedPolicies = {
-        overridden: false,
-        permissives: [
-          ...(bundle.resolved?.permissives ?? []),
-          ...(memberPolicy?.permissives ?? []),
-        ],
-        restrictives: [
-          ...(bundle.resolved?.restrictives ?? []),
-          ...(memberPolicy?.restrictives ?? []),
-        ],
-        evaluated: [
-          ...(bundle.resolved?.evaluated ?? []),
-          ...(memberPolicy?.evaluated ?? []),
-        ],
-      };
-      // If neither interface nor implementer have permissives → branch
-      // is `false` (default-deny).
-      if (
-        composedResolved.permissives.length === 0 &&
-        composedResolved.restrictives.length === 0
-      ) {
-        // No policies in this branch → fall through (no constraint).
-        // We emit `true` so the CASE doesn't match and exclude this
-        // implementer; visibility is the union of explicit branches.
-        // But callers expect "no policy → no constraint" so we use
-        // `true` here to match the no-policy case.
-        branches.push(
-          `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN true`,
-        );
-        continue;
-      }
-      const branchBundle: PolicyContextBundle = {
-        ctx: bundle.ctx,
-        operation: 'read',
-        resolved: composedResolved,
-        defaults: bundle.defaults,
-        resolveForType: bundle.resolveForType,
-      };
-      const result = this.whereCompiler.compile(
-        undefined,
-        nodeVar,
-        memberDef,
-        paramCounter,
-        { policyContext: branchBundle },
-      );
-      mergeParams(paramsTarget, result.params);
-      if (result.preludes && result.preludes.length > 0)
-        allPreludes = [...allPreludes, ...result.preludes];
-      const branchClause = result.cypher.length > 0 ? result.cypher : 'true';
-      branches.push(
-        `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN ${branchClause}`,
-      );
-    }
-
-    // No implementer has any policy → no clause; fall back to the
-    // interface-level alone (handled via WhereCompiler in the caller).
-    if (!anyImplementerHasPolicy && bundle.resolved.permissives.length === 0)
+    // A firing interface-level override lifts every branch.
+    if (!bundle || bundle.resolved.overridden)
       return { cypher: '', preludes: [] };
 
-    if (branches.length === 0) return { cypher: '', preludes: [] };
-
-    // ELSE false guards the case where a labeled member appears that we
-    // didn't enumerate (defense in depth).
-    return {
-      cypher: `(CASE ${branches.join(' ')} ELSE false END)`,
-      preludes: allPreludes,
-    };
+    const clause = this.whereCompiler.compileTargetPolicyClause(
+      this.interfaceDef.name,
+      nodeVar,
+      bundle.operation,
+      bundle,
+      paramCounter,
+      memberFallbackOp(bundle.operation),
+    );
+    if (clause.cypher === null) return { cypher: '', preludes: [] };
+    mergeParams(paramsTarget, clause.params);
+    return { cypher: clause.cypher, preludes: clause.preludes };
   }
 
   /**
-   * Throw `PolicyDeniedError` early when default-deny is `'throw'` and
-   * no implementer has a permissive that matches.
+   * Throw `PolicyDeniedError` early when default-deny is `'throw'` and NO
+   * implementer can yield rows — the per-member test `Model(M)` applies:
+   * a member with no policy for the operation, a firing override, or an
+   * applicable permissive is visible.
    */
   private assertNotDeniedAtCompile(
     bundle: PolicyContextBundle | null,
@@ -337,21 +277,18 @@ export class InterfaceModel<
     if (bundle.resolved.overridden) return;
     if (bundle.defaults.onDeny !== 'throw') return;
     if (bundle.resolved.permissives.length > 0) return;
-    // Check implementer permissives — at least one should exist.
-    let anyPerm = false;
+    const fallbackOp = memberFallbackOp(bundle.operation);
     for (const member of this.interfaceDef.implementedBy) {
-      const m = bundle.resolveForType(member, 'read');
-      if (m && m.permissives.length > 0) {
-        anyPerm = true;
-        break;
-      }
+      const m =
+        bundle.resolveForType(member, bundle.operation) ??
+        (fallbackOp ? bundle.resolveForType(member, fallbackOp) : null);
+      if (!m || m.overridden || m.permissives.length > 0) return;
     }
-    if (!anyPerm)
-      throw new PolicyDeniedError({
-        typeName: this.interfaceDef.name,
-        operation,
-        reason: 'no-permissive-matched',
-      });
+    throw new PolicyDeniedError({
+      typeName: this.interfaceDef.name,
+      operation,
+      reason: 'no-permissive-matched',
+    });
   }
 
   async find(params?: {
@@ -401,12 +338,7 @@ export class InterfaceModel<
       ? {
           ctx: policyContext.ctx,
           operation: 'read',
-          resolved: {
-            overridden: true,
-            permissives: [],
-            restrictives: [],
-            evaluated: [],
-          },
+          resolved: NO_ROOT_POLICY,
           defaults: policyContext.defaults,
           resolveForType: policyContext.resolveForType,
         }
@@ -579,12 +511,7 @@ export class InterfaceModel<
       ? {
           ctx: policyContext.ctx,
           operation: 'read',
-          resolved: {
-            overridden: true,
-            permissives: [],
-            restrictives: [],
-            evaluated: [],
-          },
+          resolved: NO_ROOT_POLICY,
           defaults: policyContext.defaults,
           resolveForType: policyContext.resolveForType,
         }
@@ -842,4 +769,13 @@ function resolveInterfaceFieldCategory(
   )
     return 'temporal';
   return 'other';
+}
+
+/**
+ * `aggregate` (and so `count`) falls back to a member's `read` policies
+ * when it has no `aggregate` policy — the same fallback `Model.aggregate`
+ * applies at the root.
+ */
+function memberFallbackOp(op: Operation): Operation | undefined {
+  return op === 'aggregate' ? 'read' : undefined;
 }

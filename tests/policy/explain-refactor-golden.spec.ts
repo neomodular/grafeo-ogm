@@ -638,17 +638,20 @@ const GOLDEN: Record<string, Recorded[]> = {
       },
     },
   ],
+  // Deliberately RE-PINNED in v2.3.0 (fix-nls-enforcement-gaps, H2) — the
+  // only golden that change touches. Each branch is now exactly the
+  // implementer's own `Model(M).find` clause, which already inherits the
+  // interface's `tenantId` restrictive; pre-2.3.0 branches were composed
+  // from interface + implementer lists and carried it twice.
   'interface model find across implementers': [
     {
       cypher:
-        "MATCH (n:`Resource`)\nWHERE (CASE WHEN n:`Chart` THEN ((n.`ownerId` = $param0) AND (n.`tenantId` = $param1) AND (n.`tenantId` = $param2)) WHEN n:`Drug` THEN ((n.`valid` = $param3) AND (n.`tenantId` = $param4) AND (n.`tenantId` = $param5)) ELSE false END)\nWITH n, CASE WHEN n:`Chart` THEN 'Chart' WHEN n:`Drug` THEN 'Drug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Chart', 'Drug']]), .`id`, .`tenantId` , __typename: __typename }",
+        "MATCH (n:`Resource`)\nWHERE (CASE WHEN n:`Chart` THEN ((n.`ownerId` = $param0) AND (n.`tenantId` = $param1)) WHEN n:`Drug` THEN ((n.`valid` = $param2) AND (n.`tenantId` = $param3)) ELSE false END)\nWITH n, CASE WHEN n:`Chart` THEN 'Chart' WHEN n:`Drug` THEN 'Drug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Chart', 'Drug']]), .`id`, .`tenantId` , __typename: __typename }",
       params: {
         param0: 'u1',
         param1: 't1',
-        param2: 't1',
-        param3: true,
-        param4: 't1',
-        param5: 't1',
+        param2: true,
+        param3: 't1',
       },
     },
   ],
