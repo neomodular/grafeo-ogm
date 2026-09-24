@@ -392,6 +392,30 @@ export interface ResolvedPolicies<C extends PolicyContext = PolicyContext> {
 }
 
 /**
+ * Resolution used for a ROOT type that has no policy for the operation,
+ * when a policy context is bound anyway (v2.3.0). Binding it — instead of
+ * dropping the whole bundle — keeps `resolveForType` reachable, so the
+ * policies of every TARGET type reached through relationships (nested
+ * selection, traversal filters, nested writes) stay enforced; a type
+ * without policies must not be a gateway around its neighbours'.
+ *
+ * `overridden: true` carries exactly its documented operational meaning
+ * here ("emit no root clause"): every root-level consumer treats it like
+ * the absence of a bundle, and no target-policy consumer reads it.
+ *
+ * Compare by identity (`resolved === NO_ROOT_POLICY`) to ask "did the
+ * root resolve anything for this operation?" — e.g. `aggregate`'s
+ * fallback to `read` policies. A real override resolution is a different
+ * object and must NOT be mistaken for it.
+ */
+export const NO_ROOT_POLICY: ResolvedPolicies = Object.freeze({
+  overridden: true,
+  permissives: Object.freeze([]),
+  restrictives: Object.freeze([]),
+  evaluated: Object.freeze([]),
+});
+
+/**
  * One operation-matching policy as seen by
  * `PolicyResolver.resolveDetailed()`. Unlike `ResolvedPolicies`, nothing
  * is dropped: policies gated off by `appliesWhen` and policies never

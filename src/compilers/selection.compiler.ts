@@ -21,7 +21,11 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
-import type { WhereCompiler } from './where.compiler';
+import {
+  stitchUserAndPolicy,
+  traversalBundle,
+  type WhereCompiler,
+} from './where.compiler';
 
 /**
  * Represents a single node in the parsed selection tree.
@@ -704,9 +708,11 @@ export class SelectionCompiler {
             targetDef,
             params,
             paramCounter,
-            // Skip policy on the negation branch — policy is already
-            // AND-stitched on the main node-side fragment.
-            policyContext: null,
+            // The target policy is already AND-stitched on the main
+            // node-side fragment (outside this negation); compile the
+            // filter alone, with traversals inside it still enforcing.
+            policyContext,
+            userOnly: true,
             contextLabel: `connection "${node.fieldName}" node_NOT`,
             userWhere: userNodeNot,
           });
@@ -800,6 +806,12 @@ export class SelectionCompiler {
     policyContext: PolicyContextBundle | null;
     contextLabel: string;
     userWhere: Record<string, unknown> | undefined;
+    /**
+     * Compile the caller's filter only — no clause for the target itself
+     * (its policy is applied elsewhere, outside a negation). Traversals
+     * inside the filter still enforce their own targets' policies.
+     */
+    userOnly?: boolean;
   }): string {
     const {
       node,
@@ -810,6 +822,7 @@ export class SelectionCompiler {
       policyContext,
       contextLabel,
       userWhere,
+      userOnly,
     } = args;
     if (!this.whereCompiler || !params || !paramCounter) {
       // Without these, the policy can't be compiled — fall back to user-only
@@ -822,44 +835,47 @@ export class SelectionCompiler {
       return '';
     }
 
-    // Resolve the target type's read policy (if any).
-    const targetPolicy = policyContext
-      ? policyContext.resolveForType(targetDef.typeName, 'read')
-      : null;
-
-    const targetBundle: PolicyContextBundle | undefined = targetPolicy
-      ? {
-          ctx: policyContext!.ctx,
-          operation: 'read',
-          resolved: targetPolicy,
-          resolveForType: policyContext!.resolveForType,
-          defaults: policyContext!.defaults,
-        }
-      : undefined;
-
-    // Compile combined user where + policy in one pass.
-    const compiled = this.whereCompiler.compile(
-      userWhere,
-      childVar,
-      targetDef,
-      paramCounter,
-      targetBundle ? { policyContext: targetBundle } : undefined,
-    );
+    // v2.3.0 — the caller's filter and the target's `'read'` policy come
+    // from the shared `WhereCompiler.compileTargetBody`: a concrete
+    // target's own clause, or for an interface / union target a CASE over
+    // each member's own clause (pre-2.3.0 this resolved the ABSTRACT type,
+    // which carries none of its members' policies). The filter compiles
+    // under a live bundle even when the target has no policy, so
+    // traversals inside it keep enforcing at any depth.
+    let parts: {
+      user: string;
+      policy: string;
+      params: Record<string, unknown>;
+      preludes: string[];
+    };
+    if (userOnly) {
+      const compiled = this.whereCompiler.compile(
+        userWhere,
+        childVar,
+        targetDef,
+        paramCounter,
+        policyContext
+          ? { policyContext: traversalBundle(policyContext) }
+          : undefined,
+      );
+      parts = {
+        user: compiled.cypher,
+        policy: '',
+        params: compiled.params,
+        preludes: compiled.preludes ?? [],
+      };
+    } else
+      parts = this.whereCompiler.compileTargetBody(
+        userWhere,
+        childVar,
+        targetDef,
+        paramCounter,
+        policyContext ?? undefined,
+      );
 
     // Pattern comprehensions cannot host CALL { ... } subqueries.
-    if (compiled.preludes && compiled.preludes.length > 0) {
-      // Two distinct cases:
-      //  - user where references @cypher → original v1.6.0 error path
-      //  - policy references @cypher inside nested selection → new path
-      const policyHasCypher =
-        targetBundle &&
-        compiled.cypher.length > 0 &&
-        // Heuristic: if the user where alone produces no cypher refs but
-        // adding policy did, then policy is the source. We use a clearer
-        // policy-targeted error since both paths are equivalent for the
-        // user.
-        true;
-      if (policyHasCypher && targetBundle)
+    if (parts.preludes.length > 0) {
+      if (parts.policy)
         throw new OGMError(
           `Policy on "${targetDef.typeName}" requires @cypher field projection, ` +
             `which is not supported inside nested-selection enforcement (${contextLabel}). ` +
@@ -871,15 +887,10 @@ export class SelectionCompiler {
       );
     }
 
-    if (compiled.cypher) {
-      mergeParams(params, compiled.params);
-      return ` WHERE ${compiled.cypher}`;
-    }
-    // Compile produced no clause but may still have merged params.
-    if (compiled.params && Object.keys(compiled.params).length > 0)
-      mergeParams(params, compiled.params);
+    mergeParams(params, parts.params);
+    const cypher = stitchUserAndPolicy(parts.user, parts.policy);
     void node;
-    return '';
+    return cypher ? ` WHERE ${cypher}` : '';
   }
 
   /**

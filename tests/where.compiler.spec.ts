@@ -1001,9 +1001,125 @@ describe('WhereCompiler', () => {
     });
 
     it('should compile scalar null as IS NULL', () => {
-      const result = compiler.compile({ migrationKey: null }, 'n', bookNode);
+      // v2.3.0 — null filters require a declared field (see next test).
+      const withProp = makeNodeDef({
+        typeName: 'Book',
+        properties: new Map([
+          [
+            'migrationKey',
+            {
+              name: 'migrationKey',
+              type: 'String',
+              required: false,
+              isArray: false,
+              isListItemRequired: false,
+              isGenerated: false,
+              isUnique: false,
+              isCypher: false,
+              directives: [],
+            },
+          ],
+        ]),
+      });
+      const result = compiler.compile({ migrationKey: null }, 'n', withProp);
       expect(result.cypher).toBe('n.`migrationKey` IS NULL');
       expect(result.params).toEqual({});
+    });
+
+    it('should reject a null filter on an undeclared field (would match every row)', () => {
+      expect(() =>
+        compiler.compile({ migrationKey: null }, 'n', bookNode),
+      ).toThrow(/Unknown field "migrationKey"/);
+    });
+
+    describe('v2.3.0 — the operator suffix is parsed before null', () => {
+      const prop = (name: string, over: Record<string, unknown> = {}) => ({
+        name,
+        type: 'String',
+        required: false,
+        isArray: false,
+        isListItemRequired: false,
+        isGenerated: false,
+        isUnique: false,
+        isCypher: false,
+        directives: [],
+        ...over,
+      });
+      const node = makeNodeDef({
+        typeName: 'Book',
+        properties: new Map([
+          ['deletedAt', prop('deletedAt')],
+          [
+            'score',
+            prop('score', {
+              type: 'Int',
+              isCypher: true,
+              cypherStatement: 'RETURN 1 AS score',
+              cypherColumnName: 'score',
+            }),
+          ],
+        ]),
+        relationships: bookNode.relationships,
+      });
+
+      it('field_NOT: null compiles to IS NOT NULL', () => {
+        const result = compiler.compile({ deletedAt_NOT: null }, 'n', node);
+        expect(result.cypher).toBe('n.`deletedAt` IS NOT NULL');
+        expect(result.params).toEqual({});
+      });
+
+      it('rel_NOT: null compiles to EXISTS', () => {
+        const result = compiler.compile(
+          { belongsToCategory_NOT: null },
+          'n',
+          node,
+        );
+        expect(result.cypher).toMatch(
+          /^EXISTS \{ MATCH \(n\)-\[:`BELONGS_TO_CATEGORY`\]->\(r0/,
+        );
+      });
+
+      it.each([
+        ['deletedAt_IN'],
+        ['deletedAt_CONTAINS'],
+        ['deletedAt_GT'],
+        ['deletedAt_NOT_IN'],
+      ])('rejects %s: null', (key) => {
+        expect(() => compiler.compile({ [key]: null }, 'n', node)).toThrow(
+          /cannot be used with null/,
+        );
+      });
+
+      it.each([['belongsToCategory_SOME'], ['belongsToCategory_NONE']])(
+        'rejects relationship filter %s: null',
+        (key) => {
+          expect(() => compiler.compile({ [key]: null }, 'n', node)).toThrow(
+            /cannot be null/,
+          );
+        },
+      );
+
+      it('a @cypher field null filter projects through the prelude alias', () => {
+        const result = compiler.compile({ score_NOT: null }, 'n', node);
+        expect(result.cypher).toBe('__where_n_score IS NOT NULL');
+        expect(result.preludes?.length).toBeGreaterThan(0);
+      });
+
+      it('edge properties follow the same null semantics', () => {
+        const result = compiler.compile(
+          { hasStatusConnection_SOME: { edge: { endDate_NOT: null } } },
+          'n',
+          bookNode,
+        );
+        expect(result.cypher).toContain('e0.`endDate` IS NOT NULL');
+        expect(() =>
+          compiler.compile(
+            { hasStatusConnection_SOME: { edge: { endDat: null } } },
+            'n',
+            bookNode,
+          ),
+        ).toThrow(/Unknown field "endDat"/);
+      });
     });
 
     it('should skip undefined values', () => {

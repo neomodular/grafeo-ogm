@@ -288,7 +288,7 @@ describe('WhereCompiler — target-policy AND-stitch on relationship traversal (
     expect(result.cypher).toMatch(/r0\.`tenantId`/);
   });
 
-  it('3. _ALL + default-deny (target has no matching permissive) → target unreachable', () => {
+  it('3. _ALL + default-deny (target has no matching permissive) → vacuous over hidden nodes', () => {
     const policyContext = buildBundle({
       resolveByType: {
         Content: {
@@ -309,12 +309,15 @@ describe('WhereCompiler — target-policy AND-stitch on relationship traversal (
       { policyContext },
     );
 
-    // _ALL emits NOT EXISTS { MATCH ... WHERE NOT (inner) }. The inner
-    // WHERE is `(user) AND (false)` because target permissives is empty.
-    // Effectively that means "no contentRel violates the predicate" but
-    // the policy reduces every target row to inaccessible.
-    expect(result.cypher).toMatch(/NOT EXISTS \{ MATCH .* WHERE NOT \(/);
-    expect(result.cypher).toContain('false');
+    // v2.3.0 — _ALL means "no VISIBLE contentRel fails the predicate":
+    // NOT EXISTS { MATCH ... WHERE <policy> AND NOT (<user>) }. With the
+    // target default-denied nothing is visible, so the quantifier is
+    // vacuously true. Pre-2.3.0 the policy sat INSIDE the negation
+    // (`WHERE NOT ((user) AND false)`), which held only when NO related
+    // node existed at all — an oracle for hidden nodes.
+    expect(result.cypher).toBe(
+      'NOT EXISTS { MATCH (n)-[:`HAS_CONTENT`]->(r0:`Content`) WHERE false AND NOT (r0.`title` = $param1) }',
+    );
   });
 
   it('4. *Connection { node: {...} } + permissive on target → policy inside EXISTS body', () => {

@@ -1,7 +1,8 @@
 import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
-import { isReadRestrictive } from '../policy/types';
+import { isReadRestrictive, NO_ROOT_POLICY } from '../policy/types';
 import type {
+  Operation,
   PermissivePolicy,
   PolicyContextBundle,
   RestrictivePolicy,
@@ -235,6 +236,14 @@ export class WhereCompiler {
        * responsible for rejecting BEFORE compile — see `Model`.
        */
       policyContext?: PolicyContextBundle;
+      /**
+       * Caller-owned `@cypher` prelude scope (v2.3.0). When given, preludes
+       * register into it and are NOT returned — the caller emits the scope
+       * once, so several compiles against the same variable (a connection's
+       * node filter and its target policy) share one `CALL`/`WITH` chain.
+       * `preserveVars` is ignored (the scope already carries its own).
+       */
+      scope?: CypherFieldScope;
     },
   ): WhereResult {
     const split = this.compileUserAndPolicy(
@@ -295,6 +304,142 @@ export class WhereCompiler {
   }
 
   /**
+   * The policy clause guarding a node of a possibly ABSTRACT type for one
+   * operation (v2.3.0) — the single construction behind every target-
+   * policy consumer (nested selection, traversal filters, nested writes)
+   * and `InterfaceModel`'s root clause:
+   *
+   *   - concrete type → its own composed clause for `op` (byte-identical
+   *     to compiling it directly); `null` when it has no policy for `op`
+   *     or an override fires.
+   *   - interface / union →
+   *       `(CASE WHEN v:M1 THEN <M1 clause> WHEN v:M2 THEN … ELSE false END)`
+   *     over the concrete members, each branch being exactly that member's
+   *     own clause (`resolveForType(M, op)` already folds in M's interface
+   *     policies). A member without a policy for `op`, or whose override
+   *     fires, is `true`; when EVERY member is `true` the result is `null`
+   *     (unconstrained, like a concrete type without policies). `ELSE false`
+   *     excludes a node carrying no known member label (defense in depth).
+   *
+   * Pre-2.3.0 abstract targets resolved the ABSTRACT type's name, so the
+   * implementers' own policies were never applied through relationships.
+   *
+   * `fallbackOp`: resolve it for a type with NO policy for `op` — the
+   * `aggregate` → `read` fallback `Model.aggregate` applies at the root.
+   *
+   * `preludes` (for `@cypher` fields referenced by a policy) are returned
+   * to the caller; nested contexts reject them.
+   *
+   * @internal
+   */
+  compileTargetPolicyClause(
+    typeName: string,
+    varName: string,
+    op: Operation,
+    policyContext: PolicyContextBundle,
+    paramCounter: { count: number },
+    fallbackOp?: Operation,
+  ): {
+    cypher: string | null;
+    params: Record<string, unknown>;
+    preludes: string[];
+  } {
+    const members = this.abstractMembers(typeName);
+    if (members === null)
+      return this.compileConcreteTargetClause(
+        typeName,
+        varName,
+        op,
+        policyContext,
+        paramCounter,
+        fallbackOp,
+      );
+
+    const params: Record<string, unknown> = {};
+    const preludes: string[] = [];
+    const branches: string[] = [];
+    let constrained = false;
+    for (const member of members) {
+      if (!this.schema.nodes.has(member)) continue;
+      const clause = this.compileConcreteTargetClause(
+        member,
+        varName,
+        op,
+        policyContext,
+        paramCounter,
+        fallbackOp,
+      );
+      mergeParams(params, clause.params);
+      // Each member compiles in its own `@cypher` scope; chaining two
+      // scopes would drop the first one's aliases at the second's `WITH`.
+      if (preludes.length > 0 && clause.preludes.length > 0)
+        throw new OGMError(
+          `Policies on more than one member of "${typeName}" project @cypher ` +
+            `fields, which cannot be combined in one query. Refactor all but ` +
+            `one to stored properties.`,
+        );
+      preludes.push(...clause.preludes);
+      if (clause.cypher !== null) constrained = true;
+      branches.push(
+        `WHEN ${varName}:${escapeIdentifier(member)} THEN ${clause.cypher ?? 'true'}`,
+      );
+    }
+    if (!constrained) return { cypher: null, params: {}, preludes: [] };
+    return {
+      cypher: `(CASE ${branches.join(' ')} ELSE false END)`,
+      params,
+      preludes,
+    };
+  }
+
+  private compileConcreteTargetClause(
+    typeName: string,
+    varName: string,
+    op: Operation,
+    policyContext: PolicyContextBundle,
+    paramCounter: { count: number },
+    fallbackOp?: Operation,
+  ): {
+    cypher: string | null;
+    params: Record<string, unknown>;
+    preludes: string[];
+  } {
+    const nodeDef = this.schema.nodes.get(typeName);
+    let resolvedOp = op;
+    let resolved = policyContext.resolveForType(typeName, op);
+    if (!resolved && fallbackOp) {
+      resolvedOp = fallbackOp;
+      resolved = policyContext.resolveForType(typeName, fallbackOp);
+    }
+    if (!nodeDef || !resolved || resolved.overridden)
+      return { cypher: null, params: {}, preludes: [] };
+    const compiled = this.compile(undefined, varName, nodeDef, paramCounter, {
+      policyContext: {
+        ctx: policyContext.ctx,
+        operation: resolvedOp,
+        resolved,
+        resolveForType: policyContext.resolveForType,
+        defaults: policyContext.defaults,
+      },
+    });
+    return {
+      cypher: compiled.cypher || null,
+      params: compiled.params,
+      preludes: compiled.preludes ?? [],
+    };
+  }
+
+  /** Concrete members of an interface / union; `null` for any other type. */
+  private abstractMembers(typeName: string): string[] | null {
+    if (this.schema.nodes.has(typeName)) return null;
+    const iface = this.schema.interfaces?.get(typeName);
+    if (iface) return [...iface.implementedBy];
+    const union = this.schema.unions?.get(typeName);
+    if (union) return [...union];
+    return null;
+  }
+
+  /**
    * Shared body of `compile()` / `compileForExplain()`: compiles the user
    * where, then the policy fragments, sharing one `paramCounter` and one
    * top-level `@cypher` scope. Returns `null` when there is nothing to
@@ -308,6 +453,7 @@ export class WhereCompiler {
     options?: {
       preserveVars?: ReadonlyArray<string>;
       policyContext?: PolicyContextBundle;
+      scope?: CypherFieldScope;
     },
   ): {
     userCypher: string;
@@ -325,11 +471,10 @@ export class WhereCompiler {
     // Top-level scope — preludes here are returned to the caller for stitching
     // BEFORE the WHERE clause. Nested scopes (relationship quantifiers) build
     // their own scopes and stitch their preludes into the EXISTS body inline.
-    const scope = new CypherFieldScope(
-      nodeVar,
-      options?.preserveVars ?? [],
-      '__where',
-    );
+    const ownsScope = options?.scope === undefined;
+    const scope =
+      options?.scope ??
+      new CypherFieldScope(nodeVar, options?.preserveVars ?? [], '__where');
     const userBody = hasUserWhere
       ? this.compileConditions(
           where,
@@ -364,7 +509,7 @@ export class WhereCompiler {
     return {
       userCypher: userBody.cypher,
       params,
-      preludes: scope.hasAny() ? scope.emit() : undefined,
+      preludes: ownsScope && scope.hasAny() ? scope.emit() : undefined,
       policy,
     };
   }
@@ -522,14 +667,118 @@ export class WhereCompiler {
     policyContext: PolicyContextBundle | undefined,
   ): PolicyContextBundle | undefined {
     if (!policyContext) return undefined;
-    const targetPolicy = policyContext.resolveForType(typeName, 'read');
-    if (!targetPolicy) return undefined;
+    // v2.3.0 — a target WITHOUT a read policy still gets a bundle
+    // (`NO_ROOT_POLICY`: no clause of its own) so enforcement keeps
+    // cascading into deeper traversals. Pre-2.3.0 this returned
+    // `undefined`, making every policy-free type on a traversal path a
+    // gateway around the types beyond it (A → B(no policy) → C skipped C).
+    const targetPolicy =
+      policyContext.resolveForType(typeName, 'read') ?? NO_ROOT_POLICY;
     return {
       ctx: policyContext.ctx,
       operation: 'read',
       resolved: targetPolicy,
       resolveForType: policyContext.resolveForType,
       defaults: policyContext.defaults,
+    };
+  }
+
+  /**
+   * Compile a traversal's filter against its target node with the
+   * caller's filter (`user`) and the target's `read` policy (`policy`)
+   * kept SEPARATE, so each quantifier composes them correctly — the
+   * policy must never sit inside a negation (v2.3.0). Pre-2.3.0 the policy
+   * was compiled INTO the filter, so `_ALL` (`NOT (user AND policy)`) was
+   * falsified by hidden related nodes (an existence oracle), and a
+   * connection `node_NOT` was SATISFIED by them.
+   *
+   *   - no policy context → plain compile.
+   *   - concrete target → one `compileUserAndPolicy` pass (shared `@cypher`
+   *     prelude scope); the bundle cascades as `NO_ROOT_POLICY` at any depth.
+   *   - interface target → filter via a `NO_ROOT_POLICY` traversal bundle,
+   *     policy via `compileTargetPolicyClause` (CASE over the members'
+   *     own clauses — pre-2.3.0 only the interface's own policies ran).
+   *
+   * `''` for an absent part. With `scope`, concrete-target preludes
+   * register into it (caller emits); otherwise they are returned.
+   * Shared with `SelectionCompiler`'s nested-projection filters.
+   *
+   * @internal
+   */
+  compileTargetBody(
+    where: Record<string, unknown> | undefined | null,
+    targetVar: string,
+    targetDef: NodeDefinition,
+    counter: { count: number },
+    policyContext: PolicyContextBundle | undefined,
+    scope?: CypherFieldScope,
+  ): {
+    user: string;
+    policy: string;
+    params: Record<string, unknown>;
+    preludes: string[];
+  } {
+    if (!policyContext) {
+      const plain = this.compile(where, targetVar, targetDef, counter, {
+        scope,
+      });
+      return {
+        user: plain.cypher,
+        policy: '',
+        params: plain.params,
+        preludes: plain.preludes ?? [],
+      };
+    }
+
+    if (this.abstractMembers(targetDef.typeName) === null) {
+      const split = this.compileUserAndPolicy(
+        where,
+        targetVar,
+        targetDef,
+        counter,
+        {
+          policyContext: this.buildTargetBundle(
+            targetDef.typeName,
+            policyContext,
+          ),
+          scope,
+        },
+      );
+      if (!split) return { user: '', policy: '', params: {}, preludes: [] };
+      return {
+        user: split.userCypher,
+        policy: split.policy?.clause ?? '',
+        params: split.params,
+        preludes: split.preludes ?? [],
+      };
+    }
+
+    const userPart = this.compile(where, targetVar, targetDef, counter, {
+      policyContext: traversalBundle(policyContext),
+      scope,
+    });
+    const policyPart = this.compileTargetPolicyClause(
+      targetDef.typeName,
+      targetVar,
+      'read',
+      policyContext,
+      counter,
+    );
+    const userHasPreludes =
+      (userPart.preludes?.length ?? 0) > 0 || (scope?.hasAny() ?? false);
+    if (userHasPreludes && policyPart.preludes.length > 0)
+      throw new OGMError(
+        `Filtering "${targetDef.typeName}" by @cypher fields is not supported ` +
+          `when a member type's policy also projects @cypher fields. Filter on ` +
+          `stored properties, or refactor the member policy.`,
+      );
+    const params = { ...userPart.params };
+    mergeParams(params, policyPart.params);
+    return {
+      user: userPart.cypher,
+      policy: policyPart.cypher ?? '',
+      params,
+      preludes: [...(userPart.preludes ?? []), ...policyPart.preludes],
     };
   }
 
@@ -647,36 +896,12 @@ export class WhereCompiler {
         continue;
       }
 
-      // Handle null values: relationship null → NOT EXISTS, scalar null → IS NULL
+      // Null values — the operator suffix is split off FIRST (v2.3.0); see
+      // `compileNullCondition`.
       if (value === null) {
-        const relDef = nodeDef.relationships.get(key);
-        if (relDef) {
-          // Relationship null means "no such relationship exists"
-          const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
-          if (targetNodeDef) {
-            const relVar = `r${counter.count}`;
-            counter.count++;
-            const pattern = buildRelPattern({
-              sourceVar: nodeVar,
-              relDef,
-              targetVar: relVar,
-              targetLabel: 'auto',
-              // Pass schema so that union/interface targets resolve to a
-              // labelless target (relationship-type-only filter). Without
-              // this, the literal abstract type name is escaped as a label
-              // that no concrete node carries → NOT EXISTS is true for
-              // every row → ALL rows match.
-              schema: this.schema,
-            });
-            clauses.push(`NOT EXISTS { MATCH ${pattern} }`);
-          }
-        } else {
-          // Scalar null means "property IS NULL". `@cypher` scalars need
-          // to project through the scope first (NULL check on the alias).
-          assertSafeIdentifier(key, 'where clause');
-          const fieldRef = this.resolveFieldRef(key, nodeVar, nodeDef, scope);
-          clauses.push(`${fieldRef} IS NULL`);
-        }
+        clauses.push(
+          this.compileNullCondition(key, nodeVar, nodeDef, counter, scope),
+        );
         continue;
       }
 
@@ -844,28 +1069,45 @@ export class WhereCompiler {
       depth,
       policyContext,
     );
-    const innerClauses = inner.cypher ? [inner.cypher] : [];
-    const innerParams = inner.params;
+    const innerParams = { ...inner.params };
+
+    // v2.3.0 — the target's `'read'` policy, composed ONCE over the whole
+    // connection body (node, node_NOT, edge and logical groups alike) and
+    // kept outside every negation. Compiled after the caller's filter so
+    // parameter numbering matches the pre-2.3.0 single-`node` shape.
+    const target = policyContext
+      ? this.compileTargetBody(
+          undefined,
+          relVar,
+          targetNodeDef,
+          counter,
+          policyContext,
+          nodeScope,
+        )
+      : null;
+    const policy = target?.policy ?? '';
+    if (target) mergeParams(innerParams, target.params);
 
     // Stitch the inner preludes (CALL { ... } + WITH ...) INSIDE the
     // EXISTS body, between the MATCH pattern and the inner WHERE.
-    //   - `nodeScope.emit()` — preludes from `@cypher` fields registered
-    //     directly on the connection-where input's edge-side scope.
+    //   - `nodeScope.emit()` — node-side `@cypher` projections: the
+    //     caller's `node` filters and (concrete target) the target policy.
     //   - `edgeScope.emit()` — same, but edge-side.
-    //   - `inner.preludes` (v1.8.5) — preludes returned by the recursive
-    //     `compile()` calls on the node side, which now own their own
-    //     scopes.
+    //   - `inner.preludes` / `target.preludes` — scopes owned elsewhere
+    //     (an abstract target's member policies).
     const innerPreludes: string[] = [];
     if (nodeScope.hasAny()) innerPreludes.push(...nodeScope.emit());
     if (edgeScope.hasAny()) innerPreludes.push(...edgeScope.emit());
     if (inner.preludes && inner.preludes.length > 0)
       innerPreludes.push(...inner.preludes);
+    if (target && target.preludes.length > 0)
+      innerPreludes.push(...target.preludes);
     const preludeFragment = innerPreludes.length
       ? ` ${innerPreludes.join(' ')}`
       : '';
 
-    const whereClause =
-      innerClauses.length > 0 ? ` WHERE ${innerClauses.join(' AND ')}` : '';
+    const matched = stitchUserAndPolicy(inner.cypher, policy);
+    const whereClause = matched ? ` WHERE ${matched}` : '';
 
     switch (connSuffix) {
       case 'Connection':
@@ -881,9 +1123,9 @@ export class WhereCompiler {
           params: innerParams,
         };
       case 'Connection_ALL':
-        if (innerClauses.length > 0)
+        if (inner.cypher)
           return {
-            cypher: `NOT EXISTS { MATCH ${pattern}${preludeFragment} WHERE NOT (${innerClauses.join(' AND ')}) }`,
+            cypher: `NOT EXISTS { MATCH ${pattern}${preludeFragment} WHERE ${stitchAllCounterexample(inner.cypher, policy)} }`,
             params: innerParams,
           };
 
@@ -945,32 +1187,28 @@ export class WhereCompiler {
      */
     const extraPreludes: string[] = [];
 
-    // Resolve the target type's `'read'` policy ONCE per connection-where
-    // input. The same bundle is reused across every `node` / `node_NOT`
-    // key we encounter at this level (and across nested AND/OR/NOT
-    // groups via direct policyContext threading).
-    const targetBundle = this.buildTargetBundle(
-      targetNodeDef.typeName,
-      policyContext,
-    );
-
     for (const [key, val] of Object.entries(value)) {
       if (val === undefined) continue;
 
       if (key === 'node' || key === 'node_NOT') {
-        // Re-enter the top-level `compile()` so that the target type's
-        // `'read'` policy AND-stitches into the same body that the user
-        // filter produces. `compile()` manages its own inner scope and
-        // returns any preludes via `WhereResult.preludes`; we hoist
-        // those into `extraPreludes` so the surrounding `tryCompileConnection`
-        // can stitch them inside the EXISTS body alongside the existing
-        // `nodeScope.emit()` content.
+        // v2.3.0 — the caller's node filter only. The target's `'read'`
+        // policy is composed ONCE by `tryCompileConnection` over the whole
+        // connection body, never here: stitched in here it sat inside the
+        // `node_NOT` negation (satisfied by hidden nodes) and was absent
+        // from edge-only filters. The traversal bundle keeps deeper
+        // traversals enforcing; `nodeScope` shares the `@cypher` chain
+        // with that policy.
         const nodeResult = this.compile(
           val as Record<string, unknown>,
           relVar,
           targetNodeDef,
           counter,
-          targetBundle ? { policyContext: targetBundle } : undefined,
+          {
+            policyContext: policyContext
+              ? traversalBundle(policyContext)
+              : undefined,
+            scope: nodeScope,
+          },
         );
         if (nodeResult.preludes && nodeResult.preludes.length > 0)
           extraPreludes.push(...nodeResult.preludes);
@@ -1157,41 +1395,31 @@ export class WhereCompiler {
       schema: this.schema,
     });
 
-    // v1.8.5 — re-resolve the TARGET type's `'read'` policy when crossing
-    // the relationship boundary, mirroring `selection.compiler.ts:826-847`.
-    // Pre-1.8.5 this call site invoked `compileConditions` directly,
-    // skipping policy AND-stitching for the target — CRIT-3.
-    const targetBundle = this.buildTargetBundle(
-      targetNodeDef.typeName,
-      policyContext,
-    );
-
-    // Re-enter the top-level `compile()` so the target's policy clause
-    // (when present) AND-stitches into the same body that the user filter
-    // produces. `compile()` manages its own inner scope and returns any
-    // preludes via `WhereResult.preludes` for stitching inside EXISTS.
-    const innerResult = this.compile(
+    // v1.8.5 — the TARGET type's `'read'` policy applies when crossing the
+    // relationship boundary (CRIT-3). v2.3.0 — the caller's filter and the
+    // target's policy compile SEPARATELY and compose per quantifier with
+    // the policy OUTSIDE every negation (see `compileTargetBody`).
+    const body = this.compileTargetBody(
       value,
       relVar,
       targetNodeDef,
       counter,
-      targetBundle ? { policyContext: targetBundle } : undefined,
+      policyContext,
     );
+    const matched = stitchUserAndPolicy(body.user, body.policy);
 
-    const innerPreludes = innerResult.preludes ?? [];
+    const innerPreludes = body.preludes;
     const innerPreludeFragment = innerPreludes.length
       ? ` ${innerPreludes.join(' ')}`
       : '';
 
-    const whereClause = innerResult.cypher
-      ? ` WHERE ${innerResult.cypher}`
-      : '';
+    const whereClause = matched ? ` WHERE ${matched}` : '';
 
     switch (suffix) {
       case '_SOME':
         return {
           cypher: `EXISTS { MATCH ${pattern}${innerPreludeFragment}${whereClause} }`,
-          params: innerResult.params,
+          params: body.params,
         };
       case '_NONE':
       case '_NOT':
@@ -1202,14 +1430,16 @@ export class WhereCompiler {
         // Map → NULL → silent wrong rows.
         return {
           cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment}${whereClause} }`,
-          params: innerResult.params,
+          params: body.params,
         };
       case '_ALL':
-        // All matching rels must satisfy: NOT EXISTS { MATCH pattern WHERE NOT (inner) }
-        if (innerResult.cypher)
+        // No VISIBLE related node fails the filter. Without a caller filter
+        // the quantifier is vacuous — hidden nodes must not falsify it
+        // (pre-2.3.0 `_ALL: {}` leaked their existence).
+        if (body.user)
           return {
-            cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment} WHERE NOT (${innerResult.cypher}) }`,
-            params: innerResult.params,
+            cypher: `NOT EXISTS { MATCH ${pattern}${innerPreludeFragment} WHERE ${stitchAllCounterexample(body.user, body.policy)} }`,
+            params: body.params,
           };
 
         return { cypher: '', params: {} };
@@ -1220,7 +1450,7 @@ export class WhereCompiler {
         // produces preludes — distinguish that case so the error message
         // points at the right cause.
         if (innerPreludes.length > 0) {
-          if (targetBundle)
+          if (body.policy)
             throw new OGMError(
               `Policy on "${targetNodeDef.typeName}" requires @cypher field projection, ` +
                 `which is not supported inside _SINGLE quantifiers. Refactor the policy ` +
@@ -1240,7 +1470,7 @@ export class WhereCompiler {
         // collisions if/when a future compiler shared this counter.
         return {
           cypher: `size([${relVar} IN [(${pattern}${whereClause} | ${relVar})] | ${relVar}]) = 1`,
-          params: innerResult.params,
+          params: body.params,
         };
       }
       default:
@@ -1278,8 +1508,12 @@ export class WhereCompiler {
       memberKey: string;
       pattern: string;
       relVar: string;
-      /** Raw inner predicate ('' when the member contributes none). */
+      /** Caller filter AND member policy ('' when neither applies). */
       inner: string;
+      /** Caller filter alone ('' when none) — drives `_ALL` (v2.3.0). */
+      user: string;
+      /** Member `'read'` policy clause alone ('' when none). */
+      policy: string;
       /** ' CALL {...}' fragment from @cypher projections ('' when none). */
       preludeFragment: string;
     }[] = [];
@@ -1309,39 +1543,33 @@ export class WhereCompiler {
         targetLabelRaw: labelStr,
       });
 
-      // Per-member target bundle. `null` member-policy → undefined bundle
-      // → no policy stitching for this branch (original behavior).
-      const targetBundle = this.buildTargetBundle(
-        memberDef.typeName,
+      // Caller filter and the member's own `'read'` policy, compiled
+      // separately (v2.3.0) so `_ALL` can keep the policy outside its
+      // negation. `_SOME`/`_NONE`/`_SINGLE` use the stitched form, which
+      // is byte-identical to the pre-2.3.0 single compile.
+      const memberWhere = memberValue as Record<string, unknown> | null;
+      const body = this.compileTargetBody(
+        memberWhere,
+        relVar,
+        memberDef,
+        counter,
         policyContext,
       );
+      const inner = stitchUserAndPolicy(body.user, body.policy);
+      if (inner) mergeParams(allParams, body.params);
+      const preludeFragment = body.preludes.length
+        ? ` ${body.preludes.join(' ')}`
+        : '';
 
-      // Compile inner WHERE conditions for this member (if any properties
-      // specified). When the member has its own `'read'` policy, we still
-      // re-enter `compile()` so the policy AND-stitches into the EXISTS
-      // body even when `memberValue` is empty/null.
-      const memberWhere = memberValue as Record<string, unknown> | null;
-      const hasUserMemberWhere =
-        memberWhere && Object.keys(memberWhere).length > 0;
-      let inner = '';
-      let preludeFragment = '';
-      if (hasUserMemberWhere || targetBundle) {
-        const memberCompile = this.compile(
-          hasUserMemberWhere ? memberWhere : undefined,
-          relVar,
-          memberDef,
-          counter,
-          targetBundle ? { policyContext: targetBundle } : undefined,
-        );
-        if (memberCompile.cypher) {
-          inner = memberCompile.cypher;
-          mergeParams(allParams, memberCompile.params);
-        }
-        if (memberCompile.preludes && memberCompile.preludes.length > 0)
-          preludeFragment = ` ${memberCompile.preludes.join(' ')}`;
-      }
-
-      members.push({ memberKey, pattern, relVar, inner, preludeFragment });
+      members.push({
+        memberKey,
+        pattern,
+        relVar,
+        inner,
+        user: body.user,
+        policy: body.policy,
+        preludeFragment,
+      });
     }
 
     if (members.length === 0) return { cypher: '', params: {} };
@@ -1375,11 +1603,14 @@ export class WhereCompiler {
         // satisfied (same as the non-union empty-inner short-circuit),
         // and union members absent from the input are unconstrained —
         // consistent with `_SOME`, where only mentioned members count.
+        // v2.3.0 — only a VISIBLE member node (its policy holds) can fail
+        // the predicate; a member with no caller filter is vacuous even
+        // when it has a policy (pre-2.3.0 its hidden nodes falsified it).
         const failClauses = members
-          .filter((m) => m.inner)
+          .filter((m) => m.user)
           .map(
             (m) =>
-              `NOT EXISTS { MATCH ${m.pattern}${m.preludeFragment} WHERE NOT (${m.inner}) }`,
+              `NOT EXISTS { MATCH ${m.pattern}${m.preludeFragment} WHERE ${stitchAllCounterexample(m.user, m.policy)} }`,
           );
         if (failClauses.length === 0) return { cypher: '', params: {} };
         return {
@@ -1423,6 +1654,133 @@ export class WhereCompiler {
     }
   }
 
+  /**
+   * Compile `<key>: null` on a node (v2.3.0). The operator suffix is split
+   * off FIRST: pre-2.3.0 the whole key was treated as a property name, so
+   * the common "is not null" idiom `{ deletedAt_NOT: null }` compiled to
+   * `n.deletedAt_NOT IS NULL` — always true, silently matching every row
+   * (and silently restricting nothing when used in a restrictive policy).
+   *
+   *   field: null          → field IS NULL
+   *   field_NOT: null      → field IS NOT NULL
+   *   rel: null            → NOT EXISTS { MATCH (n)-[:REL]->(…) }
+   *   rel_NOT: null        → EXISTS { MATCH (n)-[:REL]->(…) }
+   *   any other operator   → OGMError (null has no meaning there)
+   *   undeclared field     → OGMError regardless of `strictWhere` — a null
+   *                          filter on an undeclared field matches every
+   *                          row (fail OPEN), unlike a non-null one
+   *
+   * A field literally named `key` always wins over suffix parsing.
+   */
+  private compileNullCondition(
+    key: string,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    counter: { count: number },
+    scope: CypherFieldScope,
+  ): string {
+    if (nodeDef.relationships.has(key))
+      return this.compileRelationshipExistence(
+        key,
+        nodeVar,
+        nodeDef,
+        counter,
+        false,
+      );
+    if (!nodeDef.properties.has(key))
+      for (const suffix of RELATIONSHIP_SUFFIXES) {
+        if (!key.endsWith(suffix)) continue;
+        const field = key.slice(0, -suffix.length);
+        if (!nodeDef.relationships.has(field)) continue;
+        if (suffix === '_NOT')
+          return this.compileRelationshipExistence(
+            field,
+            nodeVar,
+            nodeDef,
+            counter,
+            true,
+          );
+        throw new OGMError(
+          `Relationship filter "${key}" cannot be null. Use "${field}: null" ` +
+            `(no related node) or "${field}_NOT: null" (at least one related node).`,
+        );
+      }
+    return this.compileNullScalar(key, nodeVar, nodeDef, scope);
+  }
+
+  /**
+   * Scalar half of the null semantics above, shared by node properties and
+   * relationship-edge properties: `IS NULL` / `IS NOT NULL`, or an
+   * `OGMError` for any other operator and for undeclared fields.
+   */
+  private compileNullScalar(
+    key: string,
+    varName: string,
+    propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
+    scope: CypherFieldScope | null,
+  ): string {
+    if (propsHolder?.properties.has(key)) {
+      assertSafeIdentifier(key, 'where clause');
+      // `@cypher` scalars project through the scope (NULL check on the alias).
+      return `${this.resolveFieldRef(key, varName, propsHolder, scope)} IS NULL`;
+    }
+
+    for (const suffix of OPERATOR_SUFFIXES) {
+      if (!key.endsWith(suffix)) continue;
+      const field = key.slice(0, -suffix.length);
+      if (!propsHolder?.properties.has(field)) continue;
+      if (suffix !== '_NOT')
+        throw new OGMError(
+          `Operator "${suffix}" cannot be used with null ("${key}"). Use ` +
+            `"${field}: null" (IS NULL) or "${field}_NOT: null" (IS NOT NULL) to test for null.`,
+        );
+      assertSafeIdentifier(field, 'where clause');
+      return `${this.resolveFieldRef(field, varName, propsHolder, scope)} IS NOT NULL`;
+    }
+
+    throw new OGMError(
+      `Unknown field "${key}" in where clause with a null value. A null ` +
+        `filter on a field the type does not declare would match every row, ` +
+        `so it is rejected (regardless of strictWhere). Check for typos.`,
+    );
+  }
+
+  /**
+   * `NOT EXISTS` (no related node) / `EXISTS` (at least one) for a
+   * relationship null filter. Byte-identical to the pre-2.3.0 `rel: null`
+   * emission for the `NOT EXISTS` case.
+   */
+  private compileRelationshipExistence(
+    field: string,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    counter: { count: number },
+    exists: boolean,
+  ): string {
+    const relDef = nodeDef.relationships.get(field)!;
+    if (!resolveTargetDef(relDef.target, this.schema))
+      throw new OGMError(
+        `Cannot resolve the target type "${relDef.target}" of relationship "${field}".`,
+      );
+    const relVar = `r${counter.count}`;
+    counter.count++;
+    const pattern = buildRelPattern({
+      sourceVar: nodeVar,
+      relDef,
+      targetVar: relVar,
+      targetLabel: 'auto',
+      // Pass schema so that union/interface targets resolve to a
+      // labelless target (relationship-type-only filter). Without this,
+      // the literal abstract type name is escaped as a label that no
+      // concrete node carries → NOT EXISTS is true for every row → ALL
+      // rows match.
+      schema: this.schema,
+    });
+    return exists
+      ? `EXISTS { MATCH ${pattern} }`
+      : `NOT EXISTS { MATCH ${pattern} }`;
+  }
+
   private compileEdgeConditions(
     edgeWhere: Record<string, unknown>,
     edgeVar: string,
@@ -1435,6 +1793,11 @@ export class WhereCompiler {
 
     for (const [key, value] of Object.entries(edgeWhere)) {
       assertSafeKey(key, 'edge where input');
+      // Same null semantics as node properties (v2.3.0).
+      if (value === null) {
+        clauses.push(this.compileNullScalar(key, edgeVar, propsDef, edgeScope));
+        continue;
+      }
       const result = this.compileScalarCondition(
         key,
         value,
@@ -1573,10 +1936,40 @@ export class WhereCompiler {
  * fragment. Both come from `compileConditions` so each is already a
  * valid boolean expression. Empty user bodies skip the AND wrap.
  */
-function stitchUserAndPolicy(userBody: string, policyClause: string): string {
+export function stitchUserAndPolicy(
+  userBody: string,
+  policyClause: string,
+): string {
   if (!userBody) return policyClause;
   if (!policyClause) return userBody;
   return `(${userBody}) AND ${policyClause}`;
+}
+
+/**
+ * `_ALL` body (v2.3.0): a related node the caller may SEE (`policy`) that
+ * fails the caller's filter. The policy sits OUTSIDE the negation, so
+ * hidden related nodes neither satisfy nor falsify the quantifier.
+ */
+function stitchAllCounterexample(
+  userBody: string,
+  policyClause: string,
+): string {
+  return policyClause
+    ? `${policyClause} AND NOT (${userBody})`
+    : `NOT (${userBody})`;
+}
+
+/**
+ * The bundle a traversal's USER filter compiles under (v2.3.0): no clause
+ * for the target itself (its policy is composed separately by the caller),
+ * but `resolveForType` stays live so deeper traversals keep enforcing.
+ *
+ * @internal
+ */
+export function traversalBundle(
+  policyContext: PolicyContextBundle,
+): PolicyContextBundle {
+  return { ...policyContext, operation: 'read', resolved: NO_ROOT_POLICY };
 }
 
 /**
