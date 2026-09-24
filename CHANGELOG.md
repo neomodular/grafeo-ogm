@@ -1,5 +1,88 @@
 # Changelog
 
+## 2.3.0 (2026-09-23) — 🛡️ Security release: NLS enforcement through relationships, nested writes and cascade delete
+
+> **Security release. Upgrade if you use `policies`.** Node-level-security (NLS) enforcement of the **root** type was sound, but enforcement of **other types reached through relationships** had several gaps. Together they let a bound `withContext(ctx)` read, link, update, create and delete nodes that the target type's policies forbid. One of them (cascade delete) deleted unrelated data with no policy involved at all. Every gap was reproduced before the fix and is pinned by a red-first regression test, both in the mock suite and in a new opt-in live-Neo4j suite.
+>
+> **Reads on OGMs without `policies` emit byte-identical Cypher.** Three changes apply to everyone: the cascade-delete fix, strict `null` filters, and nested-write `where` now being compiled by `WhereCompiler` (see *Behavior changes*).
+
+### 🛡️ Types without policies no longer bypass their neighbours' policies (critical)
+
+When the root type of a query had no policies of its own, the policy context was dropped entirely. Every related type's policies were then skipped in nested selection, in relationship filters (`_SOME`/`_NONE`/`_ALL`/`_SINGLE`/`…Connection`), on `connect`/`disconnect`, and in `explainPolicies`. A policy-free type (a tag, a join node) was a gateway around its neighbours. The same happened one level down: a policy-free type in the **middle** of a traversal (`a_SOME: { b_SOME: { c_SOME } }`) switched enforcement off for everything beyond it.
+
+A policy-bound model now always carries its policy context. A type without policies contributes no clause of its own, and every type it reaches still enforces its own. `count`/`aggregate` keep their fallback from `aggregate` to `read` policies.
+
+### 🛡️ Cascade delete honours its `where` and the target's `delete` policy (critical)
+
+`Model.delete({ delete: { rel: [{ where }] } })` ignored the per-relationship `where`: the documented README example deleted **every** related node, including nodes shared with other records, and never checked the target type's policies. Each cascade item now deletes only the related nodes matching its `where` (`{}` still means all), and each cascaded node must pass its own type's `delete` policy. A `delete` nested inside a cascade item (multi-level cascade, previously ignored) and unknown item keys now throw `OGMError` before anything runs.
+
+### 🛡️ Nested writes enforce the target type's policies
+
+A nested write now enforces exactly what the equivalent direct write on the target type would. Before, most nested writes enforced no target-type policy at all:
+
+| Nested operation | Now enforces on the target type |
+|---|---|
+| `connect` / `disconnect`, including `connect` inside `create` (previously unchecked) | `read` |
+| nested `update` | `update` row filter, plus its write restrictives (`WITH CHECK`) on the nested input |
+| nested `create`, in `create` or `update` | `create`: default deny, plus its write restrictives on the nested input |
+| `delete` inside `update` | `delete` row filter |
+
+Write restrictives and create default-deny are checked, at any depth, before the query runs. A rejected nested write throws `PolicyDeniedError` and nothing is written. The mutation compiler's separate `where` builder, which had drifted from `WhereCompiler` (it threaded no policy context into traversals and misparsed `null`), is removed. Nested-write `where` is now compiled by `WhereCompiler`, so traversals inside it enforce the traversed types' `read` policies too.
+
+### 🛡️ Interface and union relationship targets apply each member's policy (critical)
+
+When a relationship pointed at an **interface** or **union**, enforcement looked up the abstract type's name. That name carries only interface-level policies (none for a union), so the concrete members' own policies were never applied through the relationship: not in nested selection, not in relationship filters, not in nested writes. Each related node is now checked against its concrete type's policy: `CASE WHEN n:Chart THEN <Chart policy> WHEN n:Drug THEN <Drug policy> … ELSE false END`. One shared helper builds this clause for every consumer, including `InterfaceModel` (below).
+
+### 🛡️ Relationship filters no longer leak hidden nodes
+
+The target type's policy was compiled **inside** the caller's filter, which is only correct for `_SOME`. Wherever the quantifier negates the filter, hidden nodes leaked into the result:
+
+- `rel_ALL: { … }` was falsified by hidden related nodes.
+- `rel_ALL: {}` held only when no related node existed at all, which revealed whether hidden nodes exist.
+- A connection `node_NOT` filter was satisfied by hidden nodes.
+- An edge-only connection filter (`relConnection: { edge: { … } }`) applied no target policy at all.
+
+The filter and the policy are now composed separately, with the policy outside every negation. Quantifiers range over the related nodes the caller may see: a hidden node neither satisfies nor falsifies them. `_SOME` emits the same Cypher as before.
+
+### 🛡️ `null` filters no longer fail open (high)
+
+`{ field_NOT: null }` compiled to `` n.`field_NOT` IS NULL ``, which is always true, so a restrictive policy such as `{ approvedAt_NOT: null }` matched every row. `null` is now interpreted after the operator suffix is split off:
+
+- `field_NOT: null` → `IS NOT NULL`
+- `rel_NOT: null` → `EXISTS`
+- any other operator with `null`, or an unknown field with `null` (even without `strictWhere`), throws `OGMError`
+
+This applies to every `where`, including policy partials and nested-write `where`.
+
+### 🛡️ `InterfaceModel` branches match each implementer's own model (medium)
+
+An implementer whose `read` permissives were all gated off by `appliesWhen` got `THEN true` in `InterfaceModel`'s per-label `CASE`, while `Model(<Impl>).find` denies it. Each branch is now exactly the clause that the implementer's own model enforces, which also removes the interface predicates that previously appeared twice per branch. `aggregate`/`count` branches now use each implementer's own `aggregate` policies (falling back to `read`), as `Model.aggregate` does. The `onDeny: 'throw'` pre-check no longer throws when an implementer has no policies (it is visible under its own model).
+
+### ⚠️ Behavior changes
+
+- **Cascade delete honours `where`.** If you relied on the old delete-everything behavior while passing a `where`, pass `{}` instead. Multi-level cascade and unknown cascade keys throw.
+- **Nested writes into protected types can now be filtered or denied.** Add the matching policy for that operation on the target type, or perform the write directly on its model.
+- **Relationship filters over protected types** now range over visible related nodes only (`_ALL` in particular).
+- **Strict `null`:** `field_NOT: null` flips from always-true to `IS NOT NULL`; unsupported or unknown `null` filters throw.
+- **Emitted Cypher changes** for: reads that reach protected types through policy-free types; every nested write with a `where` or a protected target (parameters now come from the shared `paramN` counter); `InterfaceModel` reads with policies; and cascade deletes (one `CALL { … }` per item).
+- Two edge cases now throw `OGMError` instead of emitting Cypher that fails at runtime: `@cypher`-projecting policies on more than one member of an interface/union target, and `@cypher` fields in both an abstract target's filter and a member policy.
+
+### 🔧 Internal
+
+- New `NO_ROOT_POLICY` resolution ("bound, but no root clause"). New `src/policy/nested-writes.ts`, where the root and nested create/update checks share one implementation.
+- `WhereCompiler.compileTargetPolicyClause()` (concrete or abstract, optional operation fallback) and `compileTargetBody()` are the single construction behind every target-policy consumer. `compile()` accepts a caller-owned `@cypher` scope.
+- `MutationCompiler.compileCreate` / `compileDelete` gain optional trailing `policyContext` / `paramCounter` parameters. The bulk-connect `UNWIND` fast path is kept for scalar, non-null, non-logical items; everything else compiles through `WhereCompiler`.
+
+### Tests
+
+- Mock red/green tests for every gap (`tests/policy/enforcement-gaps.spec.ts`).
+- A 25-case invariant suite: each `InterfaceModel` branch equals its implementer's own `find`/`aggregate`/`count` clause, in text and parameter values.
+- Against v2.2.0, 56 of these 75 new tests fail. The other 19 are byte-identity guards, positive controls, and invariant cases where the old construction already agreed.
+- An opt-in live-Neo4j suite (`tests/integration/`, skipped unless `NEO4J_URI` is set) asserting database outcomes per gap.
+- The 17-case policy golden suite is unchanged except for the deliberately re-pinned `InterfaceModel` case (deduplicated predicates).
+
+---
+
 ## 2.2.0 (2026-09-23) — 🔎 Explain policy decisions
 
 > **Policy-bound reads can now explain themselves.** When a policy hides a node, `find` could only show *that* it disappeared, never *which* named clause removed it, because every clause is compiled into a single `WHERE` predicate. The new `Model.explainPolicies()` evaluates each `read` policy separately for every candidate node, covering both the declarative `when:` form and the raw `cypher:` form, and returns the hidden nodes too ([#6](https://github.com/neomodular/grafeo-ogm/issues/6)).
