@@ -349,9 +349,7 @@ describe('type-faithful writes (temporal, BigInt strings, @default)', () => {
         eventNode,
         emptyWhere,
       );
-      expect(single.cypher).toContain(
-        '.`when` > datetime($connect_sessions_when_GT)',
-      );
+      expect(single.cypher).toContain('.`when` > datetime($param0)');
     });
   });
 

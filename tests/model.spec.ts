@@ -570,7 +570,7 @@ describe('Model', () => {
       expect(result.relationshipsDeleted).toBe(2);
     });
 
-    it('should produce OPTIONAL MATCH + cascade delete with delete input', async () => {
+    it('should produce a cascade subquery + delete with delete input', async () => {
       mockSession.run.mockResolvedValueOnce({
         records: [],
         summary: {
@@ -587,7 +587,7 @@ describe('Model', () => {
 
       const cypher = getCypher(mockSession);
       expect(cypher).toContain('MATCH (n:`Book`)');
-      expect(cypher).toContain('OPTIONAL MATCH');
+      expect(cypher).toContain('CALL {');
       expect(cypher).toContain('`HAS_STATUS`');
       expect(cypher).toContain('DETACH DELETE');
 

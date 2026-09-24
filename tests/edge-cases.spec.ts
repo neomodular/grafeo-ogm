@@ -470,16 +470,25 @@ describe('MutationCompiler — edge cases', () => {
     expect(result.cypher).not.toContain('OPTIONAL MATCH');
   });
 
-  // 15d. Delete with cascade produces OPTIONAL MATCH for related nodes
-  it('produces OPTIONAL MATCH and cascaded delete for related nodes', () => {
+  // 15d. Delete with cascade — `true` is the legacy "delete every related
+  // node" shorthand (v2.3.0: still accepted, now a CALL subquery).
+  it('accepts the `true` cascade shorthand and deletes related nodes', () => {
     const whereResult = { cypher: 'n.id = $param0', params: { param0: '1' } };
     const result = compiler.compileDelete(bookNode, whereResult, {
       hasStatus: true,
     });
 
-    expect(result.cypher).toContain('OPTIONAL MATCH');
+    expect(result.cypher).toContain('CALL {');
     expect(result.cypher).toContain('`HAS_STATUS`');
     expect(result.cypher).toContain('DETACH DELETE');
+  });
+
+  it('rejects non-object cascade values other than `true` (v2.3.0)', () => {
+    const whereResult = { cypher: 'n.id = $param0', params: { param0: '1' } };
+    // `false` used to delete everything too (values were ignored).
+    expect(() =>
+      compiler.compileDelete(bookNode, whereResult, { hasStatus: false }),
+    ).toThrow(/must be an object/);
   });
 
   // 15e. Boolean false and numeric zero in create input

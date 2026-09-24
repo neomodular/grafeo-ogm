@@ -1,5 +1,7 @@
 import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
+import { PolicyDeniedError } from '../policy/errors';
+import { NO_ROOT_POLICY } from '../policy/types';
 import type { PolicyContextBundle } from '../policy/types';
 import {
   NodeDefinition,
@@ -17,6 +19,7 @@ import {
   assertSafeLabel,
   assertSafePropertyName,
   escapeIdentifier,
+  isPlainObject,
   mergeParams,
 } from '../utils/validation';
 import {
@@ -27,13 +30,6 @@ import {
   wrapWriteExpr,
 } from '../utils/write-coercion';
 import { WhereCompiler } from './where.compiler';
-
-/**
- * Relationship filter suffixes that require EXISTS subquery patterns.
- * These match related nodes via relationship traversal rather than scalar property comparison.
- */
-const RELATIONSHIP_SUFFIXES = ['_SOME', '_NONE', '_ALL', '_SINGLE'] as const;
-type RelationshipSuffix = (typeof RELATIONSHIP_SUFFIXES)[number];
 
 export interface MutationResult {
   cypher: string;
@@ -99,47 +95,147 @@ export class MutationCompiler {
     params: Record<string, unknown>,
     policyContext: PolicyContextBundle | undefined,
     paramCounter: { count: number } | undefined,
+    /**
+     * Operation whose policy gates the target (v2.3.0): `read` for
+     * connect/disconnect (you must see a node to link it), `update` for a
+     * nested update, `delete` for nested/cascade deletes — exactly what the
+     * equivalent DIRECT write on the target type enforces.
+     */
+    op: 'read' | 'update' | 'delete' = 'read',
   ): string | null {
-    if (!policyContext || !paramCounter) return null;
+    if (!policyContext) return null;
+    // v2.3.0 — a missing counter must never mean a missing policy.
+    const counter = paramCounter ?? counterAfter(params);
 
-    const targetPolicy = policyContext.resolveForType(
+    // Mirror the direct write's compile-time default-deny: a direct
+    // update/delete with `onDeny: 'throw'` and no applicable permissive
+    // throws before running, so the nested equivalent must too. (Connect/
+    // disconnect keep their pre-2.3.0 `read` semantics: compile to false.)
+    if (op !== 'read' && policyContext.defaults.onDeny === 'throw') {
+      const resolved = policyContext.resolveForType(targetNodeDef.typeName, op);
+      if (resolved && !resolved.overridden && resolved.permissives.length === 0)
+        throw new PolicyDeniedError({
+          typeName: targetNodeDef.typeName,
+          operation: op,
+          reason: 'no-permissive-matched',
+        });
+    }
+
+    // Abstract (interface / union) targets get a CASE over their concrete
+    // members' own clauses — pre-2.3.0 only the abstract type's own
+    // policies (usually none) were applied.
+    const clause = this.getPolicyWhereCompiler().compileTargetPolicyClause(
       targetNodeDef.typeName,
-      'read',
-    );
-    if (!targetPolicy) return null;
-
-    const targetBundle: PolicyContextBundle = {
-      ctx: policyContext.ctx,
-      operation: 'read',
-      resolved: targetPolicy,
-      resolveForType: policyContext.resolveForType,
-      defaults: policyContext.defaults,
-    };
-
-    const compiled = this.getPolicyWhereCompiler().compile(
-      undefined,
       targetVar,
-      targetNodeDef,
-      paramCounter,
-      { policyContext: targetBundle },
+      op,
+      policyContext,
+      counter,
     );
 
-    if (compiled.preludes && compiled.preludes.length > 0)
+    if (clause.preludes.length > 0)
       throw new OGMError(
         `Policy on "${targetNodeDef.typeName}" requires @cypher field ` +
-          `projection, which is not supported inside connect/disconnect ` +
+          `projection, which is not supported inside nested mutation ` +
           `target filters. Refactor the policy to use stored properties.`,
       );
 
-    if (!compiled.cypher) return null;
+    if (!clause.cypher) return null;
+    mergeParams(params, clause.params);
+    return clause.cypher;
+  }
+
+  private getPolicyWhereCompiler(): WhereCompiler {
+    // Inherit the logger: since v2.3.0 this compiler also compiles every
+    // nested-write `where`, and its empty-AND/OR warnings must surface.
+    if (!this.policyWhereCompiler)
+      this.policyWhereCompiler = new WhereCompiler(this.schema, {
+        logger: this.logger,
+      });
+    return this.policyWhereCompiler;
+  }
+
+  /**
+   * Compile a nested-write `where` (connect, disconnect, nested update,
+   * nested/cascade delete) against `targetVar` through `WhereCompiler` —
+   * the single where implementation (v2.3.0: the mutation compiler's
+   * parallel builder was removed after repeatedly drifting from it).
+   * Operators, null semantics, abstract relationship targets and —
+   * crucially — traversal-policy enforcement are identical to a direct
+   * `where`: a relationship filter inside it AND-stitches the traversed
+   * type's `read` policy. The target's OWN operation policy is added
+   * separately by `buildTargetPolicyPredicate`, so the root here is bound
+   * as `NO_ROOT_POLICY`.
+   *
+   * Returns `''` for an absent or empty where.
+   */
+  private compileTargetWhere(
+    whereSpec: Record<string, unknown> | undefined,
+    targetVar: string,
+    targetNodeDef: NodeDefinition,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+  ): string {
+    if (!whereSpec || Object.keys(whereSpec).length === 0) return '';
+    const counter = paramCounter ?? counterAfter(params);
+    const nodeWhere = connectionWhereToNodeWhere(whereSpec);
+    const traversalBundle: PolicyContextBundle | undefined = policyContext
+      ? { ...policyContext, operation: 'read', resolved: NO_ROOT_POLICY }
+      : undefined;
+    const compiled = this.getPolicyWhereCompiler().compile(
+      nodeWhere,
+      targetVar,
+      targetNodeDef,
+      counter,
+      traversalBundle ? { policyContext: traversalBundle } : undefined,
+    );
+    if (compiled.preludes && compiled.preludes.length > 0)
+      throw new OGMError(
+        `Filtering a nested mutation target of type "${targetNodeDef.typeName}" ` +
+          `by an @cypher field is not supported. Use stored properties in ` +
+          `nested connect/disconnect/update/delete filters.`,
+      );
     mergeParams(params, compiled.params);
     return compiled.cypher;
   }
 
-  private getPolicyWhereCompiler(): WhereCompiler {
-    if (!this.policyWhereCompiler)
-      this.policyWhereCompiler = new WhereCompiler(this.schema);
-    return this.policyWhereCompiler;
+  /**
+   * The bulk-connect UNWIND fast path compiles each where key against the
+   * ROW's own value (`connItem.where.node.<key>`), which `WhereCompiler`
+   * cannot express. It is therefore restricted to the one shape where
+   * that is exact: every item's where is `{ node: { … } }` or bare
+   * properties, holding only declared, stored scalar properties of the
+   * target (registered operators allowed) with NON-NULL values — no
+   * `AND`/`OR`/`NOT`/`node_NOT`, no relationship traversal, no `@cypher`
+   * field. Every predicate it emits is then a scalar comparison against a
+   * concrete row value, so it can only narrow matches, never fail open.
+   * Anything else takes the per-item path through `WhereCompiler`.
+   */
+  private isConnectFastPathEligible(
+    items: Record<string, unknown>[],
+    targetNodeDef: NodeDefinition,
+  ): boolean {
+    for (const item of items) {
+      const where = item.where;
+      if (where === undefined) continue;
+      if (!isPlainObject(where)) return false;
+      const keys = Object.keys(where).filter((k) => where[k] !== undefined);
+      let nodeWhere: Record<string, unknown>;
+      if (keys.some((k) => CONNECTION_WHERE_KEYS.has(k))) {
+        if (keys.length !== 1 || keys[0] !== 'node') return false;
+        if (!isPlainObject(where.node)) return false;
+        nodeWhere = where.node;
+      } else nodeWhere = where;
+
+      for (const [key, val] of Object.entries(nodeWhere)) {
+        if (val === undefined || val === null) return false;
+        if (isPlainObject(val)) return false;
+        const { baseProp } = this.parseOperatorSuffix(key);
+        const propDef = targetNodeDef.properties.get(baseProp);
+        if (!propDef || propDef.isCypher) return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -176,8 +272,19 @@ export class MutationCompiler {
     inputs: Record<string, unknown>[],
     nodeDef: NodeDefinition,
     labels?: string[],
+    /**
+     * The caller's `create` bundle (v2.3.0). Its `resolveForType` gates
+     * every connect target in the nested input by the TARGET type's `read`
+     * policy — pre-2.3.0 the create path threaded no policy at all.
+     */
+    policyContext?: PolicyContextBundle,
+    /**
+     * Shared `param<N>` counter; continue it into the RETURN selection so
+     * nested-filter params never collide with the selection's.
+     */
+    paramCounter?: { count: number },
   ): MutationResult {
-    this.relFilterCounter = 0;
+    const counter = paramCounter ?? { count: 0 };
     const lines: string[] = [];
     const params: Record<string, unknown> = {};
     const createdVars: string[] = [];
@@ -210,11 +317,8 @@ export class MutationCompiler {
         prefix,
         params,
         createdVars.slice(0, -1), // ancestors = all vars before current
-        // No policy context is threaded on the create path: `create`'s
-        // nested connect enforcement is out of scope for this fix, so
-        // the emitted create Cypher stays byte-identical.
-        undefined,
-        undefined,
+        policyContext,
+        counter,
       );
       lines.push(...relLines);
     }
@@ -262,11 +366,13 @@ export class MutationCompiler {
      */
     paramCounter?: { count: number },
   ): MutationResult {
-    this.relFilterCounter = 0;
     const labelStr = this.getCachedLabelString(nodeDef);
 
     const lines: string[] = [];
     const params: Record<string, unknown> = { ...whereResult.params };
+    // Continue after the root WHERE's params when the caller threads no
+    // counter, so nested filters can never collide with them.
+    const counter = paramCounter ?? counterAfter(whereResult.params);
 
     // Apply runtime labels to MATCH pattern (same as find())
     if (labels && labels.length > 0) {
@@ -307,7 +413,7 @@ export class MutationCompiler {
         0,
         [],
         policyContext,
-        paramCounter,
+        counter,
       );
       lines.push(...relLines);
     }
@@ -320,7 +426,7 @@ export class MutationCompiler {
         nodeDef,
         params,
         policyContext,
-        paramCounter,
+        counter,
       );
       lines.push(...disconnectLines);
     }
@@ -332,7 +438,7 @@ export class MutationCompiler {
         nodeDef,
         params,
         policyContext,
-        paramCounter,
+        counter,
       );
       lines.push(...connectLines);
     }
@@ -346,6 +452,12 @@ export class MutationCompiler {
 
   /**
    * Generate DELETE Cypher with optional cascade.
+   *
+   * v2.3.0 — each cascaded relationship honours its per-item `where` and
+   * is gated by the TARGET type's `delete` policy (`buildNestedDelete`).
+   * Pre-2.3.0 the cascade iterated only the relationship KEYS: the
+   * documented `{ where }` was ignored, so every related node — shared
+   * ones included — was deleted, with no policy check.
    */
   compileDelete(
     nodeDef: NodeDefinition,
@@ -355,11 +467,16 @@ export class MutationCompiler {
       preludes?: string[];
     },
     deleteInput?: Record<string, unknown>,
+    /** The caller's `delete` bundle; gates each cascade target. */
+    policyContext?: PolicyContextBundle,
+    /** Shared `param<N>` counter, continued from the root WHERE. */
+    paramCounter?: { count: number },
   ): MutationResult {
     const labelStr = this.getCachedLabelString(nodeDef);
 
     const lines: string[] = [];
     const params: Record<string, unknown> = { ...whereResult.params };
+    const counter = paramCounter ?? counterAfter(whereResult.params);
 
     lines.push(`MATCH (n:${labelStr})`);
     if (whereResult.preludes && whereResult.preludes.length > 0)
@@ -367,30 +484,138 @@ export class MutationCompiler {
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
     if (deleteInput && Object.keys(deleteInput).length > 0) {
-      const deleteVars: string[] = [];
       let varCounter = 0;
-
-      for (const [fieldName] of Object.entries(deleteInput)) {
+      for (const [fieldName, spec] of Object.entries(deleteInput)) {
+        if (spec === undefined) continue;
         const relDef = nodeDef.relationships.get(fieldName);
-        if (!relDef) continue;
-
-        const cascadeVar = `cascade_${varCounter}`;
-        varCounter++;
-
-        const pattern = buildRelPattern({
-          sourceVar: 'n',
-          relDef,
-          targetVar: cascadeVar,
-          targetLabel: relDef.target,
-        });
-        lines.push(`OPTIONAL MATCH ${pattern}`);
-        deleteVars.push(cascadeVar);
+        if (!relDef)
+          throw new OGMError(
+            `Unknown relationship "${fieldName}" in the delete input of ${nodeDef.typeName}.`,
+          );
+        const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
+        if (!targetNodeDef)
+          throw new OGMError(
+            `Cannot resolve the target type "${relDef.target}" of relationship "${fieldName}".`,
+          );
+        lines.push(
+          ...this.buildNestedDelete({
+            spec,
+            relDef,
+            sourceVar: 'n',
+            withClause: 'WITH n',
+            targetNodeDef,
+            nextVar: () => `cascade_${varCounter++}`,
+            tag: fieldName,
+            params,
+            policyContext,
+            paramCounter: counter,
+          }),
+        );
       }
-
-      lines.push(`DETACH DELETE ${[...deleteVars, 'n'].join(', ')}`);
-    } else lines.push('DETACH DELETE n');
+    }
+    lines.push('DETACH DELETE n');
 
     return { cypher: lines.join('\n'), params };
+  }
+
+  /**
+   * Nested / cascade delete of ONE relationship's targets (v2.3.0), shared
+   * by `compileDelete` (`Model.delete`'s `delete` input) and delete-inside-
+   * `update`. One subquery per spec item:
+   *
+   *   <withClause>
+   *   CALL {
+   *     <withClause>
+   *     MATCH (src)-[:REL]->(t)
+   *     WHERE <item.where via WhereCompiler> AND <target `delete` policy>
+   *     DETACH DELETE t
+   *     RETURN count(*) AS _del_<tag>_<i>
+   *   }
+   *
+   * `spec` is one item or an array (singular vs list relationships);
+   * `null` means "no cascade" (GraphQL InputMaybe). `{}` / no `where`
+   * deletes every related node the target's `delete` policy permits.
+   * A multi-level cascade (`delete` inside an item) and unknown item keys
+   * are rejected instead of silently ignored.
+   */
+  private buildNestedDelete(args: {
+    spec: unknown;
+    relDef: RelationshipDefinition;
+    sourceVar: string;
+    withClause: string;
+    targetNodeDef: NodeDefinition;
+    nextVar: () => string;
+    tag: string;
+    params: Record<string, unknown>;
+    policyContext: PolicyContextBundle | undefined;
+    paramCounter: { count: number } | undefined;
+  }): string[] {
+    const { spec, relDef, sourceVar, withClause, targetNodeDef } = args;
+    if (spec === null || spec === undefined) return [];
+    // Legacy shorthand: `{ rel: true }` = delete every related node (the
+    // pre-2.3.0 cascade ignored values, so callers relied on it). Any other
+    // non-object value — `false` included, which used to delete everything
+    // too — is rejected below rather than silently reinterpreted.
+    const items = spec === true ? [{}] : Array.isArray(spec) ? spec : [spec];
+    const lines: string[] = [];
+
+    items.forEach((item, idx) => {
+      if (!isPlainObject(item))
+        throw new OGMError(
+          `Each nested delete of "${relDef.fieldName}" must be an object ({ where?, delete? }).`,
+        );
+      for (const key of Object.keys(item)) {
+        if (item[key] === undefined) continue;
+        if (key !== 'where' && key !== 'delete')
+          throw new OGMError(
+            `Unknown key "${key}" in a nested delete of "${relDef.fieldName}". Allowed: "where", "delete".`,
+          );
+      }
+      if (hasNestedCascade(item.delete))
+        throw new OGMError(
+          `Multi-level cascade delete is not supported (a "delete" inside the nested delete of "${relDef.fieldName}"). ` +
+            `Delete the deeper nodes in a separate call.`,
+        );
+
+      const targetVar = args.nextVar();
+      const pattern = buildRelPattern({
+        sourceVar,
+        relDef,
+        targetVar,
+        targetLabel: 'auto',
+        schema: this.schema,
+      });
+      const conditions = [
+        this.compileTargetWhere(
+          item.where as Record<string, unknown> | undefined,
+          targetVar,
+          targetNodeDef,
+          args.params,
+          args.policyContext,
+          args.paramCounter,
+        ),
+        this.buildTargetPolicyPredicate(
+          targetNodeDef,
+          targetVar,
+          args.params,
+          args.policyContext,
+          args.paramCounter,
+          'delete',
+        ),
+      ].filter((c): c is string => Boolean(c));
+
+      lines.push(withClause);
+      lines.push('CALL {');
+      lines.push(withClause);
+      lines.push(`MATCH ${pattern}`);
+      if (conditions.length > 0)
+        lines.push(`WHERE ${conditions.join(' AND ')}`);
+      lines.push(`DETACH DELETE ${targetVar}`);
+      lines.push(`RETURN count(*) AS _del_${args.tag}_${idx}`);
+      lines.push('}');
+    });
+
+    return lines;
   }
 
   /**
@@ -1019,23 +1244,23 @@ export class MutationCompiler {
 
         lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
 
-        const conditions = this.buildConnectionWhereConditions(
-          whereSpec,
-          connectVar,
-          `${prefix}_conn${ci}`,
-          params,
-          targetNodeDef,
-        );
-        const policyPredicate = this.buildTargetPolicyPredicate(
-          targetNodeDef,
-          connectVar,
-          params,
-          policyContext,
-          paramCounter,
-        );
-        const connectConditions = policyPredicate
-          ? [...conditions, policyPredicate]
-          : conditions;
+        const connectConditions = [
+          this.compileTargetWhere(
+            whereSpec,
+            connectVar,
+            targetNodeDef,
+            params,
+            policyContext,
+            paramCounter,
+          ),
+          this.buildTargetPolicyPredicate(
+            targetNodeDef,
+            connectVar,
+            params,
+            policyContext,
+            paramCounter,
+          ),
+        ].filter((c): c is string => Boolean(c));
         if (connectConditions.length > 0)
           lines.push(`WHERE ${connectConditions.join(' AND ')}`);
 
@@ -1105,17 +1330,17 @@ export class MutationCompiler {
       if (Array.isArray(spec)) {
         if (spec.length === 0) continue; // Empty array — nothing to connect
 
-        // Check if WHERE contains relationship filters (nested objects referencing
-        // relationships on the target node). UNWIND can't handle EXISTS subqueries
-        // with dynamic params, so we fall back to individual CALL subqueries.
-        const hasRelFilters = this.arrayConnectHasRelationshipFilters(
+        // The UNWIND fast path compiles filters against per-row values and
+        // is only exact for plain scalar, non-null filters (see
+        // isConnectFastPathEligible). Everything else — null values,
+        // logical keys, traversals — takes one CALL subquery per item,
+        // compiled through WhereCompiler.
+        const useFastPath = this.isConnectFastPathEligible(
           spec as Record<string, unknown>[],
           targetNodeDef,
         );
 
-        if (hasRelFilters)
-          // Fall back to individual CALL subqueries per item — these use
-          // buildConnectionWhereConditions which handles relationship filters.
+        if (!useFastPath)
           for (let ci = 0; ci < spec.length; ci++) {
             const connectSpec = spec[ci] as Record<string, unknown>;
             const whereSpec = connectSpec.where as
@@ -1132,23 +1357,23 @@ export class MutationCompiler {
             const connectVar = `target_${fieldName}_${ci}`;
             lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
 
-            const conditions = this.buildConnectionWhereConditions(
-              whereSpec,
-              connectVar,
-              `connect_${fieldName}_${ci}`,
-              params,
-              targetNodeDef,
-            );
-            const policyPredicate = this.buildTargetPolicyPredicate(
-              targetNodeDef,
-              connectVar,
-              params,
-              policyContext,
-              paramCounter,
-            );
-            const connectConditions = policyPredicate
-              ? [...conditions, policyPredicate]
-              : conditions;
+            const connectConditions = [
+              this.compileTargetWhere(
+                whereSpec,
+                connectVar,
+                targetNodeDef,
+                params,
+                policyContext,
+                paramCounter,
+              ),
+              this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                connectVar,
+                params,
+                policyContext,
+                paramCounter,
+              ),
+            ].filter((c): c is string => Boolean(c));
             if (connectConditions.length > 0)
               lines.push(`WHERE ${connectConditions.join(' AND ')}`);
 
@@ -1301,24 +1526,23 @@ export class MutationCompiler {
         lines.push('WITH n');
         lines.push(`MATCH (target:${targetLabelStr})`);
 
-        const matchConditions = this.buildConnectionWhereConditions(
-          whereSpec,
-          'target',
-          `connect_${fieldName}`,
-          params,
-          targetNodeDef,
-        );
-
-        const policyPredicate = this.buildTargetPolicyPredicate(
-          targetNodeDef,
-          'target',
-          params,
-          policyContext,
-          paramCounter,
-        );
-        const singleConnectConditions = policyPredicate
-          ? [...matchConditions, policyPredicate]
-          : matchConditions;
+        const singleConnectConditions = [
+          this.compileTargetWhere(
+            whereSpec,
+            'target',
+            targetNodeDef,
+            params,
+            policyContext,
+            paramCounter,
+          ),
+          this.buildTargetPolicyPredicate(
+            targetNodeDef,
+            'target',
+            params,
+            policyContext,
+            paramCounter,
+          ),
+        ].filter((c): c is string => Boolean(c));
         if (singleConnectConditions.length > 0)
           lines.push(`WHERE ${singleConnectConditions.join(' AND ')}`);
 
@@ -1416,26 +1640,27 @@ export class MutationCompiler {
           });
           lines.push(`OPTIONAL MATCH ${pattern}`);
 
-          const conditions = this.buildConnectionWhereConditions(
-            whereSpec,
-            targetVar,
-            `disconnect_${fieldName}_${si}`,
-            params,
-            targetNodeDef,
-          );
-
-          const policyPredicate = targetNodeDef
-            ? this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                targetVar,
-                params,
-                policyContext,
-                paramCounter,
-              )
-            : null;
-          const disconnectConditions = policyPredicate
-            ? [...conditions, policyPredicate]
-            : conditions;
+          if (!targetNodeDef)
+            throw new OGMError(
+              `Cannot resolve the target type "${relDef.target}" of relationship "${fieldName}".`,
+            );
+          const disconnectConditions = [
+            this.compileTargetWhere(
+              whereSpec,
+              targetVar,
+              targetNodeDef,
+              params,
+              policyContext,
+              paramCounter,
+            ),
+            this.buildTargetPolicyPredicate(
+              targetNodeDef,
+              targetVar,
+              params,
+              policyContext,
+              paramCounter,
+            ),
+          ].filter((c): c is string => Boolean(c));
           if (disconnectConditions.length > 0)
             lines.push(`WHERE ${disconnectConditions.join(' AND ')}`);
 
@@ -1576,64 +1801,23 @@ export class MutationCompiler {
         const itemPrefix = `${relPrefix}_${i}`;
 
         // --- delete (detach delete target nodes) ---
-        // Wrapped in CALL subquery to prevent OPTIONAL MATCH from multiplying
-        // pipeline rows (N existing nodes → N rows → N subsequent CREATEs).
-        if (item.delete) {
-          const deleteItems = Array.isArray(item.delete)
-            ? (item.delete as Record<string, unknown>[])
-            : [item.delete as Record<string, unknown>];
-
-          for (let di = 0; di < deleteItems.length; di++) {
-            const deleteSpec = deleteItems[di];
-            const whereSpec = deleteSpec.where as
-              | Record<string, unknown>
-              | undefined;
-
-            const delTarget = `${sourceVar}_del${varCounter}`;
-            const delRel = `r_del_${key}_${i}_${di}`;
-            varCounter++;
-
-            lines.push(withClause);
-            lines.push(`CALL {`);
-            lines.push(withClause);
-
-            const pattern = buildRelPattern({
-              sourceVar,
+        // Shared with `compileDelete`'s cascade: where + target `delete`
+        // policy, one CALL subquery per spec item (v2.3.0).
+        if (item.delete)
+          lines.push(
+            ...this.buildNestedDelete({
+              spec: item.delete,
               relDef,
-              targetVar: delTarget,
-              edgeVar: delRel,
-              targetLabel: 'auto',
-            });
-            lines.push(`OPTIONAL MATCH ${pattern}`);
-
-            if (whereSpec && Object.keys(whereSpec).length > 0) {
-              const nodeWhere = (whereSpec.node ?? whereSpec) as Record<
-                string,
-                unknown
-              >;
-              // Use the same WHERE-condition builder as the disconnect /
-              // connect paths so operator suffixes (_GT/_CONTAINS/_IN/etc.),
-              // `NOT`, and relationship sub-filters work consistently. The
-              // pre-1.7.2 inline implementation only emitted `prop = $param`
-              // for every key, silently turning operator-suffixed keys
-              // (`name_CONTAINS`) into property lookups against
-              // non-existent fields → zero rows deleted.
-              const conditions = this.buildNodeWhereConditions(
-                nodeWhere,
-                delTarget,
-                `${itemPrefix}_del${di}`,
-                params,
-                targetNodeDef,
-              );
-              if (conditions.length > 0)
-                lines.push(`WHERE ${conditions.join(' AND ')}`);
-            }
-
-            lines.push(`DETACH DELETE ${delTarget}`);
-            lines.push(`RETURN count(*) AS _del_${key}_${i}_${di}`);
-            lines.push(`}`);
-          }
-        }
+              sourceVar,
+              withClause,
+              targetNodeDef,
+              nextVar: () => `${sourceVar}_del${varCounter++}`,
+              tag: `${key}_${i}`,
+              params,
+              policyContext,
+              paramCounter,
+            }),
+          );
 
         // --- create ---
         if (item.create) {
@@ -1747,24 +1931,23 @@ export class MutationCompiler {
               // keys are handled identically to the top-level disconnect
               // path (`buildDisconnects`). Restores backwards-compat with
               // @neo4j/graphql-ogm's nested update.disconnect[].where shape.
-              const conditions = this.buildConnectionWhereConditions(
-                whereSpec,
-                discTarget,
-                `${itemPrefix}_disc_${di}`,
-                params,
-                targetNodeDef,
-              );
-
-              const policyPredicate = this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                discTarget,
-                params,
-                policyContext,
-                paramCounter,
-              );
-              const nestedDiscConditions = policyPredicate
-                ? [...conditions, policyPredicate]
-                : conditions;
+              const nestedDiscConditions = [
+                this.compileTargetWhere(
+                  whereSpec,
+                  discTarget,
+                  targetNodeDef,
+                  params,
+                  policyContext,
+                  paramCounter,
+                ),
+                this.buildTargetPolicyPredicate(
+                  targetNodeDef,
+                  discTarget,
+                  params,
+                  policyContext,
+                  paramCounter,
+                ),
+              ].filter((c): c is string => Boolean(c));
               if (nestedDiscConditions.length > 0)
                 lines.push(`WHERE ${nestedDiscConditions.join(' AND ')}`);
 
@@ -1805,23 +1988,23 @@ export class MutationCompiler {
             // connect handle the same shapes as nested disconnect and
             // top-level paths. Empty/undefined `whereSpec` short-circuits
             // to `[]` inside the helper, so the no-where case still works.
-            const conditions = this.buildConnectionWhereConditions(
-              whereSpec,
-              connectVar,
-              `${itemPrefix}_conn${ci}`,
-              params,
-              targetNodeDef,
-            );
-            const policyPredicate = this.buildTargetPolicyPredicate(
-              targetNodeDef,
-              connectVar,
-              params,
-              policyContext,
-              paramCounter,
-            );
-            const nestedConnConditions = policyPredicate
-              ? [...conditions, policyPredicate]
-              : conditions;
+            const nestedConnConditions = [
+              this.compileTargetWhere(
+                whereSpec,
+                connectVar,
+                targetNodeDef,
+                params,
+                policyContext,
+                paramCounter,
+              ),
+              this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                connectVar,
+                params,
+                policyContext,
+                paramCounter,
+              ),
+            ].filter((c): c is string => Boolean(c));
             if (nestedConnConditions.length > 0)
               lines.push(`WHERE ${nestedConnConditions.join(' AND ')}`);
 
@@ -1964,17 +2147,29 @@ export class MutationCompiler {
             // compiler; this was the missed third sibling. The param
             // prefix is chosen so the legacy plain-equality case keeps
             // byte-identical param names (`${itemPrefix}_where_${prop}`).
-            if (updateWhere) {
-              const conditions = this.buildConnectionWhereConditions(
+            // v2.3.0 — the nested update is row-filtered by the TARGET's
+            // `update` policy, exactly like a direct update on that type
+            // (pre-2.3.0 it enforced no target policy at all).
+            const updateConditions = [
+              this.compileTargetWhere(
                 updateWhere,
                 updateVar,
-                `${itemPrefix}_where`,
-                params,
                 targetNodeDef,
-              );
-              if (conditions.length > 0)
-                lines.push(`WHERE ${conditions.join(' AND ')}`);
-            }
+                params,
+                policyContext,
+                paramCounter,
+              ),
+              this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                updateVar,
+                params,
+                policyContext,
+                paramCounter,
+                'update',
+              ),
+            ].filter((c): c is string => Boolean(c));
+            if (updateConditions.length > 0)
+              lines.push(`WHERE ${updateConditions.join(' AND ')}`);
 
             if (setClauses.length > 0)
               lines.push(`SET ${setClauses.join(', ')}`);
@@ -2033,279 +2228,6 @@ export class MutationCompiler {
     return { baseProp: key, template: '%v = $%p' };
   }
 
-  /**
-   * Build WHERE conditions for connect/disconnect operations.
-   * Handles operator suffixes (_IN, _NOT, _NOT_IN, _CONTAINS, etc.),
-   * NOT blocks, and relationship filters (_SOME, _NONE, _ALL, _SINGLE).
-   *
-   * @param targetNodeDef - Optional node definition for the target node.
-   *   Required to resolve relationship filters like `configurations_SOME`.
-   *   When omitted, relationship filters are silently skipped.
-   */
-  private buildNodeWhereConditions(
-    nodeWhere: Record<string, unknown>,
-    targetVar: string,
-    prefix: string,
-    params: Record<string, unknown>,
-    targetNodeDef?: NodeDefinition,
-  ): string[] {
-    const conditions: string[] = [];
-
-    for (const [prop, val] of Object.entries(nodeWhere))
-      if (prop === 'NOT') {
-        const notSpec = val as Record<string, unknown>;
-        for (const [notProp, notVal] of Object.entries(notSpec)) {
-          const { baseProp, template } = this.parseOperatorSuffix(notProp);
-          assertSafePropertyName(baseProp, 'where property');
-          const paramName = `${prefix}_NOT_${notProp}`;
-          const escapedProp = escapeIdentifier(baseProp);
-          const paramRef = wrapWhereParam(
-            `$${paramName}`,
-            notVal,
-            targetNodeDef?.properties.get(baseProp),
-            notProp.slice(baseProp.length),
-          );
-          let expr: string;
-          if (template === '%v = $%p')
-            // Simple equality → negate to <>
-            expr = `${targetVar}.${escapedProp} <> ${paramRef}`;
-          else {
-            // Operator suffix — wrap with NOT if not already negated
-            const resolved = template
-              .replace('%v', `${targetVar}.${escapedProp}`)
-              .replace('$%p', paramRef);
-            expr = resolved.startsWith('NOT ') ? resolved : `NOT ${resolved}`;
-          }
-          conditions.push(expr);
-          params[paramName] = notVal;
-        }
-      } else {
-        // Check for relationship filter suffixes (_SOME, _NONE, _ALL, _SINGLE)
-        const relFilter = this.tryBuildRelationshipFilter(
-          prop,
-          val,
-          targetVar,
-          prefix,
-          params,
-          targetNodeDef,
-        );
-        if (relFilter) {
-          conditions.push(relFilter);
-          continue;
-        }
-
-        const { baseProp, template } = this.parseOperatorSuffix(prop);
-        assertSafePropertyName(baseProp, 'where property');
-        const paramName = `${prefix}_${prop}`;
-        const paramRef = wrapWhereParam(
-          `$${paramName}`,
-          val,
-          targetNodeDef?.properties.get(baseProp),
-          prop.slice(baseProp.length),
-        );
-        conditions.push(
-          template
-            .replace('%v', `${targetVar}.${escapeIdentifier(baseProp)}`)
-            .replace('$%p', paramRef),
-        );
-        params[paramName] = val;
-      }
-
-    return conditions;
-  }
-
-  /**
-   * Build WHERE conditions from a connection-level WHERE spec.
-   * Handles `node`, `NOT`, `AND`, `OR` at the connection level.
-   *
-   * Connection WHERE format: `{ node: {...}, NOT: { node: {...} }, AND: [...], OR: [...] }`
-   */
-  private buildConnectionWhereConditions(
-    whereSpec: Record<string, unknown> | undefined,
-    targetVar: string,
-    prefix: string,
-    params: Record<string, unknown>,
-    targetNodeDef?: NodeDefinition,
-  ): string[] {
-    if (!whereSpec || Object.keys(whereSpec).length === 0) return [];
-
-    const conditions: string[] = [];
-
-    // Direct node conditions
-    if (whereSpec.node) {
-      const nodeConditions = this.buildNodeWhereConditions(
-        whereSpec.node as Record<string, unknown>,
-        targetVar,
-        prefix,
-        params,
-        targetNodeDef,
-      );
-      conditions.push(...nodeConditions);
-    }
-
-    // NOT wrapper — negate the inner connection conditions
-    if (whereSpec.NOT) {
-      const notSpec = whereSpec.NOT as Record<string, unknown>;
-      const innerConditions = this.buildConnectionWhereConditions(
-        notSpec,
-        targetVar,
-        `${prefix}_NOT`,
-        params,
-        targetNodeDef,
-      );
-      if (innerConditions.length > 0)
-        conditions.push(`NOT (${innerConditions.join(' AND ')})`);
-    }
-
-    // AND — all sub-conditions must hold
-    if (Array.isArray(whereSpec.AND)) {
-      const before = conditions.length;
-      for (let i = 0; i < whereSpec.AND.length; i++) {
-        const sub = this.buildConnectionWhereConditions(
-          whereSpec.AND[i] as Record<string, unknown>,
-          targetVar,
-          `${prefix}_AND${i}`,
-          params,
-          targetNodeDef,
-        );
-        conditions.push(...sub);
-      }
-      if (conditions.length === before)
-        this.warnEmptyLogical('AND', 'mutation connection where');
-    }
-
-    // OR — any sub-condition must hold
-    if (Array.isArray(whereSpec.OR)) {
-      const orClauses: string[] = [];
-      for (let i = 0; i < whereSpec.OR.length; i++) {
-        const sub = this.buildConnectionWhereConditions(
-          whereSpec.OR[i] as Record<string, unknown>,
-          targetVar,
-          `${prefix}_OR${i}`,
-          params,
-          targetNodeDef,
-        );
-        if (sub.length > 0) orClauses.push(`(${sub.join(' AND ')})`);
-      }
-      if (orClauses.length > 0) conditions.push(`(${orClauses.join(' OR ')})`);
-      // Prisma semantics: OR with zero effective disjuncts matches NOTHING.
-      // Previously the operator vanished, so `disconnect: [{ where:
-      // { OR: [] } }]` detached EVERY related node instead of none.
-      else {
-        this.warnEmptyLogical('OR', 'mutation connection where');
-        conditions.push('false');
-      }
-    }
-
-    // Fallback: if no recognized keys, treat the whole spec as node conditions
-    // (backward compatibility for simple `{ id: '...' }` style)
-    if (!whereSpec.node && !whereSpec.NOT && !whereSpec.AND && !whereSpec.OR) {
-      // Reject unsupported connection WHERE keys (e.g., "edge")
-      if (whereSpec.edge !== undefined)
-        throw new OGMError(
-          `Connection WHERE with "edge" filters is not supported in mutations. ` +
-            `Only "node", "NOT", "AND", "OR" keys or direct property conditions are allowed.`,
-        );
-
-      const fallbackConditions = this.buildNodeWhereConditions(
-        whereSpec,
-        targetVar,
-        prefix,
-        params,
-        targetNodeDef,
-      );
-      conditions.push(...fallbackConditions);
-    }
-
-    return conditions;
-  }
-
-  /** Counter for unique relationship filter variables within a single WHERE clause. */
-  private relFilterCounter = 0;
-
-  /**
-   * Try to compile a relationship filter condition (_SOME, _NONE, _ALL, _SINGLE).
-   * Returns the Cypher expression string or null if the key is not a relationship filter.
-   */
-  private tryBuildRelationshipFilter(
-    key: string,
-    value: unknown,
-    nodeVar: string,
-    prefix: string,
-    params: Record<string, unknown>,
-    targetNodeDef?: NodeDefinition,
-  ): string | null {
-    if (!targetNodeDef || typeof value !== 'object' || value === null)
-      return null;
-
-    // Detect suffix and extract field name
-    let suffix: RelationshipSuffix | null = null;
-    let fieldName = '';
-    for (const s of RELATIONSHIP_SUFFIXES)
-      if (key.endsWith(s)) {
-        suffix = s;
-        fieldName = key.slice(0, -s.length);
-        break;
-      }
-
-    // If no suffix, check if bare key is a relationship (defaults to _SOME)
-    if (!suffix) {
-      const relDef = targetNodeDef.relationships.get(key);
-      if (!relDef) return null;
-      suffix = '_SOME';
-      fieldName = key;
-    }
-
-    const relDef = targetNodeDef.relationships.get(fieldName);
-    if (!relDef) return null;
-
-    const relTargetDef = resolveTargetDef(relDef.target, this.schema);
-    if (!relTargetDef) return null;
-
-    const relVar = `rf${this.relFilterCounter++}`;
-    const innerWhere = value as Record<string, unknown>;
-
-    // Build the MATCH pattern
-    const edgePart = `[:${escapeIdentifier(relDef.type)}]`;
-    const escapedTarget = escapeIdentifier(relDef.target);
-    const pattern =
-      relDef.direction === 'IN'
-        ? `(${nodeVar})<-${edgePart}-(${relVar}:${escapedTarget})`
-        : `(${nodeVar})-${edgePart}->(${relVar}:${escapedTarget})`;
-
-    // Recursively compile inner conditions
-    const innerConditions = this.buildNodeWhereConditions(
-      innerWhere,
-      relVar,
-      `${prefix}_${fieldName}`,
-      params,
-      relTargetDef,
-    );
-    const innerClause =
-      innerConditions.length > 0
-        ? ` WHERE ${innerConditions.join(' AND ')}`
-        : '';
-
-    switch (suffix) {
-      case '_SOME':
-        return `EXISTS { MATCH ${pattern}${innerClause} }`;
-
-      case '_NONE':
-        return `NOT EXISTS { MATCH ${pattern}${innerClause} }`;
-
-      case '_ALL':
-        // Double negation: all match ≡ none fail to match
-        if (!innerClause) return '';
-        return `NOT EXISTS { MATCH ${pattern} WHERE NOT (${innerConditions.join(' AND ')}) }`;
-
-      case '_SINGLE':
-        return `size([${relVar} IN [(${pattern}${innerClause} | ${relVar})] | ${relVar}]) = 1`;
-
-      default:
-        return null;
-    }
-  }
-
   private buildGeneratedIdClause(nodeDef: NodeDefinition): string {
     const parts: string[] = [];
     for (const [, propDef] of nodeDef.properties)
@@ -2313,46 +2235,6 @@ export class MutationCompiler {
         parts.push(`${escapeIdentifier(propDef.name)}: randomUUID()`);
 
     return parts.join(', ');
-  }
-
-  /**
-   * Check if any item in an array connect spec has relationship filters in its WHERE clause.
-   * Relationship filters require EXISTS subqueries which can't use UNWIND param references.
-   */
-  private arrayConnectHasRelationshipFilters(
-    items: Record<string, unknown>[],
-    targetNodeDef: NodeDefinition,
-  ): boolean {
-    for (const item of items) {
-      const whereSpec = item.where as Record<string, unknown> | undefined;
-      if (!whereSpec) continue;
-      const nodeWhere = (whereSpec.node ?? whereSpec) as Record<
-        string,
-        unknown
-      >;
-      for (const key of Object.keys(nodeWhere)) {
-        // Strip operator suffixes to get the base field name
-        let fieldName = key;
-        for (const s of RELATIONSHIP_SUFFIXES)
-          if (key.endsWith(s)) {
-            fieldName = key.slice(0, -s.length);
-            break;
-          }
-
-        // If the base field name is a relationship on the target, it's a rel filter
-        if (targetNodeDef.relationships.has(fieldName)) return true;
-        // Also check if the value is an object (nested filter on a relationship)
-        const val = nodeWhere[key];
-        if (
-          typeof val === 'object' &&
-          val !== null &&
-          !Array.isArray(val) &&
-          targetNodeDef.relationships.has(key)
-        )
-          return true;
-      }
-    }
-    return false;
   }
 
   private extractConnectWhereConditions(
@@ -2406,6 +2288,109 @@ export class MutationCompiler {
  * path to validate that every item shares the same shape; mismatched
  * shapes silently drop keys from the compiled WHERE / SET.
  */
+/** Keys that make a nested-mutation `where` connection-shaped. */
+const CONNECTION_WHERE_KEYS: ReadonlySet<string> = new Set([
+  'node',
+  'node_NOT',
+  'NOT',
+  'AND',
+  'OR',
+  'edge',
+  'edge_NOT',
+]);
+
+/**
+ * Map a nested-mutation connection where onto an equivalent NODE where on
+ * the target, for `WhereCompiler` (v2.3.0). Mutation `where` never supports
+ * edge filters, so the two shapes are interchangeable:
+ *
+ *   { node: A }          → A
+ *   { node_NOT: A }      → { NOT: A }
+ *   { NOT: C }           → { NOT: map(C) }
+ *   { AND: [C…] }        → { AND: [map(C)…] }   (likewise OR; `OR: []`
+ *                                                 still matches nothing)
+ *   bare properties      → themselves (legacy `{ id: 'x' }` shape)
+ *
+ * `edge`/`edge_NOT` throw (unsupported in mutations). In a connection-
+ * shaped where, any other key throws too — the removed parallel builder
+ * silently IGNORED such keys (`{ id: 'x', NOT: {…} }` dropped `id`),
+ * widening the match.
+ */
+export function connectionWhereToNodeWhere(
+  spec: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isPlainObject(spec))
+    throw new OGMError('A nested mutation where must be an object.');
+  const keys = Object.keys(spec).filter((k) => spec[k] !== undefined);
+  const edgeKey = keys.find((k) => k === 'edge' || k === 'edge_NOT');
+  if (edgeKey)
+    throw new OGMError(
+      `Connection WHERE with "${edgeKey}" filters is not supported in mutations. ` +
+        `Only "node", "node_NOT", "NOT", "AND", "OR" keys or direct property conditions are allowed.`,
+    );
+  if (!keys.some((k) => CONNECTION_WHERE_KEYS.has(k))) return spec;
+
+  const parts: Record<string, unknown>[] = [];
+  for (const key of keys) {
+    const value = spec[key];
+    if (value === null) continue;
+    switch (key) {
+      case 'node':
+        parts.push(value as Record<string, unknown>);
+        break;
+      case 'node_NOT':
+        parts.push({ NOT: value });
+        break;
+      case 'NOT':
+        parts.push({
+          NOT: connectionWhereToNodeWhere(value as Record<string, unknown>),
+        });
+        break;
+      case 'AND':
+      case 'OR':
+        if (!Array.isArray(value))
+          throw new OGMError(
+            `"${key}" in a nested mutation where must be an array.`,
+          );
+        parts.push({
+          [key]: value.map((item) =>
+            connectionWhereToNodeWhere(item as Record<string, unknown>),
+          ),
+        });
+        break;
+      default:
+        throw new OGMError(
+          `Unknown key "${key}" in a connection-shaped nested mutation where. ` +
+            `Allowed: "node", "node_NOT", "NOT", "AND", "OR" — put property ` +
+            `conditions inside "node".`,
+        );
+    }
+  }
+  return parts.length === 1 ? parts[0] : { AND: parts };
+}
+
+/** A nested delete item's own `delete` asks for a deeper cascade. */
+function hasNestedCascade(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return isPlainObject(value) ? Object.keys(value).length > 0 : true;
+}
+
+/**
+ * A `param<N>` counter that continues after every `param<N>` already in
+ * `params`, for callers that did not thread their own counter (direct
+ * `MutationCompiler` use): nested-write filters compiled with it can never
+ * collide with the root WHERE's params.
+ */
+function counterAfter(params: Record<string, unknown>): { count: number } {
+  let max = -1;
+  for (const key of Object.keys(params)) {
+    const match = /^param(\d+)$/.exec(key);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return { count: max + 1 };
+}
+
 function computeConnectItemSignature(item: Record<string, unknown>): string {
   const where = item.where as Record<string, unknown> | undefined;
   const nodeWhere = (where?.node ?? where ?? {}) as Record<string, unknown>;

@@ -1,5 +1,8 @@
 import neo4j from 'neo4j-driver';
-import { MutationCompiler } from '../src/compilers/mutation.compiler';
+import {
+  connectionWhereToNodeWhere,
+  MutationCompiler,
+} from '../src/compilers/mutation.compiler';
 import {
   NodeDefinition,
   SchemaMetadata,
@@ -354,14 +357,12 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain('CREATE (n:\`Book\`');
       expect(result.cypher).toContain('WITH n');
       expect(result.cypher).toContain('MATCH (n_cn0:\`Status\`)');
-      expect(result.cypher).toContain(
-        'n_cn0.\`id\` = $create0_hasStatus_conn0_id',
-      );
+      expect(result.cypher).toContain('n_cn0.\`id\` = $param0');
       expect(result.cypher).toContain(
         'MERGE (n)-[:\`DRUG_HAS_STATUS\`]->(n_cn0)',
       );
       expect(result.params).toMatchObject({
-        create0_hasStatus_conn0_id: 'status1',
+        param0: 'status1',
       });
     });
 
@@ -427,14 +428,12 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain('MATCH (n:\`Author\`)');
       expect(result.cypher).toContain('WITH n');
       expect(result.cypher).toContain('MATCH (target:\`Status\`)');
-      expect(result.cypher).toContain(
-        'WHERE target.\`id\` = $connect_hasStatus_id',
-      );
+      expect(result.cypher).toContain('WHERE target.\`id\` = $param1');
       expect(result.cypher).toContain(
         'MERGE (n)-[:\`CHART_HAS_STATUS\`]->(target)',
       );
       expect(result.params).toMatchObject({
-        connect_hasStatus_id: 'status1',
+        param1: 'status1',
       });
     });
 
@@ -454,11 +453,9 @@ describe('MutationCompiler', () => {
       );
 
       expect(result.cypher).toContain('MATCH (target:\`Status\`)');
-      expect(result.cypher).toContain(
-        'WHERE target.\`name\` = $connect_hasStatus_name',
-      );
+      expect(result.cypher).toContain('WHERE target.\`name\` = $param1');
       expect(result.params).toMatchObject({
-        connect_hasStatus_name: 'Active',
+        param1: 'Active',
       });
     });
 
@@ -531,15 +528,13 @@ describe('MutationCompiler', () => {
       );
 
       expect(result.cypher).toContain('MATCH (target:\`ShelfRow\`)');
-      expect(result.cypher).toContain(
-        'WHERE target.\`id\` = $connect_shelfRows_id',
-      );
+      expect(result.cypher).toContain('WHERE target.\`id\` = $param1');
       expect(result.cypher).toContain('MERGE (n)-[r:\`GRID_ROWS\`]->(target)');
       expect(result.cypher).toContain(
         'SET r.\`position\` = $connect_shelfRows_edge_position',
       );
       expect(result.params).toMatchObject({
-        connect_shelfRows_id: 'row1',
+        param1: 'row1',
         // Int-typed edge props are bound as Neo4j Integer (issue #5)
         connect_shelfRows_edge_position: neo4j.int(3),
       });
@@ -696,11 +691,11 @@ describe('MutationCompiler', () => {
         'OPTIONAL MATCH (n)-[r_showsForEntities_0:\`RESOURCE_SHOWS_FOR\`]->(target_showsForEntities_0:\`Department\`)',
       );
       expect(result.cypher).toContain(
-        'WHERE NOT target_showsForEntities_0.\`id\` IN $disconnect_showsForEntities_0_NOT_id_IN',
+        'WHERE NOT (target_showsForEntities_0.\`id\` IN $param1)',
       );
       expect(result.cypher).toContain('DELETE r_showsForEntities_0');
       expect(result.params).toMatchObject({
-        disconnect_showsForEntities_0_NOT_id_IN: ['dept1', 'dept2'],
+        param1: ['dept1', 'dept2'],
       });
     });
 
@@ -760,10 +755,10 @@ describe('MutationCompiler', () => {
       );
 
       expect(result.cypher).toContain(
-        'WHERE target_showsForEntities_0.\`name\` <> $disconnect_showsForEntities_0_NOT_name',
+        'WHERE NOT (target_showsForEntities_0.\`name\` = $param1)',
       );
       expect(result.params).toMatchObject({
-        disconnect_showsForEntities_0_NOT_name: 'Engineering',
+        param1: 'Engineering',
       });
     });
 
@@ -791,11 +786,11 @@ describe('MutationCompiler', () => {
         'OPTIONAL MATCH (n)-[r_showsForEntities_0:\`RESOURCE_SHOWS_FOR\`]->(target_showsForEntities_0:\`Department\`)',
       );
       expect(result.cypher).toContain(
-        'WHERE target_showsForEntities_0.\`name\` = $disconnect_showsForEntities_0_name',
+        'WHERE target_showsForEntities_0.\`name\` = $param1',
       );
       expect(result.cypher).toContain('DELETE r_showsForEntities_0');
       expect(result.params).toMatchObject({
-        disconnect_showsForEntities_0_name: 'Engineering',
+        param1: 'Engineering',
       });
     });
 
@@ -826,11 +821,11 @@ describe('MutationCompiler', () => {
         'OPTIONAL MATCH (n)<-[r_tiers_0:\`GRANTS_ACCESS_TO_CONCENTRATION\`]-(target_tiers_0:\`Tier\`)',
       );
       expect(result.cypher).toContain(
-        'WHERE NOT (target_tiers_0.\`id\` IN $disconnect_tiers_0_NOT_id_IN)',
+        'WHERE NOT (target_tiers_0.\`id\` IN $param1)',
       );
       expect(result.cypher).toContain('DELETE r_tiers_0');
       expect(result.params).toMatchObject({
-        disconnect_tiers_0_NOT_id_IN: ['tier1', 'tier2'],
+        param1: ['tier1', 'tier2'],
       });
     });
 
@@ -855,11 +850,9 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain(
-        'WHERE target_tiers_0.\`id\` IN $disconnect_tiers_0_id_IN',
-      );
+      expect(result.cypher).toContain('WHERE target_tiers_0.\`id\` IN $param1');
       expect(result.params).toMatchObject({
-        disconnect_tiers_0_id_IN: ['tier3'],
+        param1: ['tier3'],
       });
     });
 
@@ -983,14 +976,12 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain(
         'MATCH (n)-[r_hasBooks_0:\`CHART_HAS_BOOKS\`]->(n_u0:\`Book\`)',
       );
-      expect(result.cypher).toContain(
-        'WHERE n_u0.\`id\` = $update_hasBooks_0_where_id',
-      );
+      expect(result.cypher).toContain('WHERE n_u0.\`id\` = $param1');
       expect(result.cypher).toContain(
         'SET n_u0.\`title\` = $update_hasBooks_0_set_title',
       );
       expect(result.params).toMatchObject({
-        update_hasBooks_0_where_id: 'book1',
+        param1: 'book1',
         update_hasBooks_0_set_title: 'Renamed Book',
       });
     });
@@ -1020,14 +1011,12 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain(
         'MATCH (n)-[r_shelfRows_0:\`GRID_ROWS\`]->(n_u0:\`ShelfRow\`)',
       );
-      expect(result.cypher).toContain(
-        'WHERE n_u0.\`id\` = $update_shelfRows_0_where_id',
-      );
+      expect(result.cypher).toContain('WHERE n_u0.\`id\` = $param1');
       expect(result.cypher).toContain(
         'SET r_shelfRows_0.\`position\` = $update_shelfRows_0_edge_position',
       );
       expect(result.params).toMatchObject({
-        update_shelfRows_0_where_id: 'row1',
+        param1: 'row1',
         update_shelfRows_0_edge_position: neo4j.int(5),
       });
       // Should NOT set edge as a node property
@@ -1137,7 +1126,7 @@ describe('MutationCompiler', () => {
 
       // The fix: operator suffix is parsed → emits CONTAINS, not equality
       expect(result.cypher).toContain(
-        'OPTIONAL MATCH (n)-[r_del_hasBooks_0_0:\`CHART_HAS_BOOKS\`]->',
+        'MATCH (n)-[:\`CHART_HAS_BOOKS\`]->(n_del0:\`Book\`)',
       );
       expect(result.cypher).toContain('CONTAINS');
       expect(result.cypher).toContain('DETACH DELETE');
@@ -1181,13 +1170,11 @@ describe('MutationCompiler', () => {
       );
 
       // Correct shape: WHERE NOT (...id IN ...)
-      expect(result.cypher).toContain(
-        'WHERE NOT (n_disc0.`id` IN $update_tiers_0_disc_0_NOT_id_IN)',
-      );
+      expect(result.cypher).toContain('WHERE NOT (n_disc0.`id` IN $param1)');
       // Pre-1.8.1 broken shape MUST NOT reappear
       expect(result.cypher).not.toContain('`node`');
       expect(result.params).toMatchObject({
-        update_tiers_0_disc_0_NOT_id_IN: ['tier1', 'tier2'],
+        param1: ['tier1', 'tier2'],
       });
     });
 
@@ -1216,10 +1203,8 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain('IN $update_tiers_0_disc_0_AND0_id_IN');
-      expect(result.cypher).toContain(
-        'n_disc0.`name` = $update_tiers_0_disc_0_AND1_name',
-      );
+      expect(result.cypher).toContain('IN $param1');
+      expect(result.cypher).toContain('n_disc0.`name` = $param2');
       expect(result.cypher).not.toContain('`node`');
     });
 
@@ -1245,8 +1230,8 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      // OR wraps each leg in parens
-      expect(result.cypher).toMatch(/WHERE \(\(.+\) OR \(.+\)\)/);
+      // OR of the two legs (WhereCompiler parenthesises the disjunction)
+      expect(result.cypher).toMatch(/WHERE \(.+ OR .+\)/);
       expect(result.cypher).not.toContain('`node`');
     });
 
@@ -1343,9 +1328,7 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain(
-        'WHERE NOT (n_conn0.`id` = $update_tiers_0_conn0_NOT_id)',
-      );
+      expect(result.cypher).toContain('WHERE NOT (n_conn0.`id` = $param1)');
       expect(result.cypher).not.toContain('`node`');
     });
 
@@ -1373,13 +1356,11 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain(
-        'CONTAINS $update_tiers_0_where_name_CONTAINS',
-      );
+      expect(result.cypher).toContain('CONTAINS $param1');
       // The pre-1.8.7 broken equality on the suffixed key must not reappear.
       expect(result.cypher).not.toContain('`name_CONTAINS`');
       expect(result.params).toMatchObject({
-        update_tiers_0_where_name_CONTAINS: 'legacy',
+        param1: 'legacy',
       });
     });
 
@@ -1400,14 +1381,12 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain(
-        'WHERE NOT (n_u0.`id` = $update_tiers_0_where_NOT_id)',
-      );
+      expect(result.cypher).toContain('WHERE NOT (n_u0.`id` = $param1)');
       expect(result.cypher).not.toContain('`NOT`');
       expect(result.cypher).not.toContain('`node`');
     });
 
-    it('keeps byte-identical params for plain-equality nested update where (v1.8.7)', () => {
+    it('binds plain-equality nested update where through the shared counter (v1.8.7 / v2.3.0)', () => {
       // The legacy shape must keep compiling to the same param names so
       // existing query plans and tests stay stable.
       const result = compiler.compileUpdate(
@@ -1426,11 +1405,9 @@ describe('MutationCompiler', () => {
         { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
       );
 
-      expect(result.cypher).toContain(
-        'WHERE n_u0.`id` = $update_tiers_0_where_id',
-      );
+      expect(result.cypher).toContain('WHERE n_u0.`id` = $param1');
       expect(result.params).toMatchObject({
-        update_tiers_0_where_id: 'tier1',
+        param1: 'tier1',
       });
     });
 
@@ -1469,8 +1446,9 @@ describe('MutationCompiler', () => {
       expect(result.params).toMatchObject({ param0: 'node1' });
     });
 
-    // 12. Delete with cascade (nested delete)
-    it('should generate cascade delete with OPTIONAL MATCH', () => {
+    // 12. Delete with cascade (nested delete) — v2.3.0: one CALL
+    // subquery per relationship, root deleted last.
+    it('should generate one cascade subquery per relationship', () => {
       const result = compiler.compileDelete(
         bookDetailsOverrideNode,
         baseWhereResult,
@@ -1482,12 +1460,15 @@ describe('MutationCompiler', () => {
 
       expect(result.cypher).toContain('MATCH (n:\`BookDetailsOverride\`)');
       expect(result.cypher).toContain(
-        'OPTIONAL MATCH (n)-[:\`CHART_BRANDED_AS\`]->(cascade_0:\`AuthorPenName\`)',
+        'MATCH (n)-[:\`CHART_BRANDED_AS\`]->(cascade_0:\`AuthorPenName\`)',
       );
       expect(result.cypher).toContain(
-        'OPTIONAL MATCH (n)-[:\`CHART_ALSO_KNOWN_AS\`]->(cascade_1:\`AuthorAlias\`)',
+        'MATCH (n)-[:\`CHART_ALSO_KNOWN_AS\`]->(cascade_1:\`AuthorAlias\`)',
       );
-      expect(result.cypher).toContain('DETACH DELETE cascade_0, cascade_1, n');
+      expect(result.cypher).toContain('DETACH DELETE cascade_0');
+      expect(result.cypher).toContain('DETACH DELETE cascade_1');
+      expect(result.cypher.split('\n').pop()).toBe('DETACH DELETE n');
+      expect(result.cypher.match(/CALL \{/g)).toHaveLength(2);
     });
 
     // 12b. Delete with cascade on IN-direction relationship
@@ -1498,9 +1479,51 @@ describe('MutationCompiler', () => {
 
       expect(result.cypher).toContain('MATCH (n:\`Category\`)');
       expect(result.cypher).toContain(
-        'OPTIONAL MATCH (n)<-[:\`HAS_SUBCATEGORY\`]-(cascade_0:\`Category\`)',
+        'MATCH (n)<-[:\`HAS_SUBCATEGORY\`]-(cascade_0:\`Category\`)',
       );
-      expect(result.cypher).toContain('DETACH DELETE cascade_0, n');
+      expect(result.cypher).toContain('DETACH DELETE cascade_0');
+      expect(result.cypher.split('\n').pop()).toBe('DETACH DELETE n');
+    });
+  });
+
+  describe('connectionWhereToNodeWhere (v2.3.0)', () => {
+    it('unwraps node and passes bare properties through', () => {
+      expect(connectionWhereToNodeWhere({ node: { id: 'a' } })).toEqual({
+        id: 'a',
+      });
+      expect(connectionWhereToNodeWhere({ id: 'a' })).toEqual({ id: 'a' });
+    });
+
+    it('maps node_NOT / NOT / AND / OR recursively', () => {
+      expect(
+        connectionWhereToNodeWhere({
+          node: { id: 'a' },
+          node_NOT: { name: 'x' },
+          NOT: { node: { name: 'y' } },
+          OR: [{ node: { id: 'b' } }, { id: 'c' }],
+        }),
+      ).toEqual({
+        AND: [
+          { id: 'a' },
+          { NOT: { name: 'x' } },
+          { NOT: { name: 'y' } },
+          { OR: [{ id: 'b' }, { id: 'c' }] },
+        ],
+      });
+    });
+
+    it('keeps an empty OR (matches nothing downstream)', () => {
+      expect(connectionWhereToNodeWhere({ OR: [] })).toEqual({ OR: [] });
+    });
+
+    it('rejects edge filters and unknown keys in a connection-shaped where', () => {
+      expect(() => connectionWhereToNodeWhere({ edge: { x: 1 } })).toThrow(
+        /edge.*not supported in mutations/,
+      );
+      // Pre-2.3.0 the `id` beside NOT was silently dropped, widening the match.
+      expect(() =>
+        connectionWhereToNodeWhere({ id: 'x', NOT: { node: { id: 'y' } } }),
+      ).toThrow(/Unknown key "id"/);
     });
   });
 
@@ -1732,12 +1755,42 @@ describe('MutationCompiler', () => {
 
     // v1.7.4 regression — heterogeneous array items used to silently
     // drop the diverging keys (only firstItem's keys made it into the
-    // WHERE). Now throws to surface the bug at compile time.
-    it('throws on heterogeneous connect array shapes (v1.7.4)', () => {
+    // WHERE). v2.3.0: items the UNWIND fast path cannot express exactly
+    // (here: `tenantId` is not a declared property of the target) take the
+    // per-item WhereCompiler path, where EVERY key of EVERY item is
+    // compiled — nothing can be dropped.
+    it('compiles every key of heterogeneous connect items (v1.7.4 / v2.3.0)', () => {
       const whereResult = {
         cypher: 'n.id = $where_id',
         params: { where_id: 'cat-1' },
       };
+      const result = compiler.compileUpdate(
+        { id: 'cat-1' },
+        undefined,
+        {
+          contentResources: [
+            { where: { node: { id: 'res-1' } } },
+            { where: { node: { id: 'res-2', tenantId: 'X' } } },
+          ],
+        },
+        undefined,
+        bookCategoryNode,
+        whereResult,
+      );
+      expect(result.cypher).not.toContain('UNWIND');
+      expect(result.cypher).toContain('`tenantId`');
+      expect(Object.values(result.params)).toEqual(
+        expect.arrayContaining(['res-1', 'res-2', 'X']),
+      );
+    });
+
+    it('still throws on heterogeneous shapes on the UNWIND fast path (v1.7.4)', () => {
+      const whereResult = {
+        cypher: 'n.id = $where_id',
+        params: { where_id: 'cat-1' },
+      };
+      // Both items are fast-path eligible (declared scalar `id`), but the
+      // shapes differ — a single UNWIND WHERE cannot serve both.
       expect(() =>
         compiler.compileUpdate(
           { id: 'cat-1' },
@@ -1745,8 +1798,7 @@ describe('MutationCompiler', () => {
           {
             contentResources: [
               { where: { node: { id: 'res-1' } } },
-              // Extra `tenantId` key — pre-1.7.4 silently dropped from WHERE
-              { where: { node: { id: 'res-2', tenantId: 'X' } } },
+              { where: { node: { id_IN: ['res-2', 'res-3'] } } },
             ],
           },
           undefined,
@@ -1754,6 +1806,29 @@ describe('MutationCompiler', () => {
           whereResult,
         ),
       ).toThrow(/divergent shapes.*item\[0\].*item\[1\]/);
+    });
+
+    it('routes null values and logical keys off the fast path (v2.3.0)', () => {
+      const whereResult = {
+        cypher: 'n.id = $where_id',
+        params: { where_id: 'cat-1' },
+      };
+      for (const where of [
+        { node: { id: null } },
+        { OR: [{ node: { id: 'a' } }, { node: { id: 'b' } }] },
+        { node_NOT: { id: 'a' } },
+      ]) {
+        const result = compiler.compileUpdate(
+          { id: 'cat-1' },
+          undefined,
+          { contentResources: [{ where }, { where }] },
+          undefined,
+          bookCategoryNode,
+          whereResult,
+        );
+        expect(result.cypher).not.toContain('UNWIND');
+        expect(result.cypher).not.toMatch(/target\.`(AND|OR|NOT|node_NOT)`/);
+      }
     });
 
     it('should handle disconnect with relationship NOT filter before connect', () => {

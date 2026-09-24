@@ -101,12 +101,13 @@ describe('Model mutations — connect/disconnect TARGET policy (CWE-285)', () =>
     // The connect target is MATCHed by Book label...
     expect(cypher).toContain('MATCH (target:');
     // ...and its WHERE now AND-stitches the Book `read` policy predicate.
-    expect(cypher).toContain('target.`ownerId` = $param1');
-    // The user's own connect filter is still present and uses a distinct,
-    // prefix-named param (no collision with the policy's `param<N>`).
-    expect(cypher).toContain('target.`id` = $connect_ownedBooks_id');
-    expect(params.param1).toBe('u1');
-    expect(params.connect_ownedBooks_id).toBe('b1');
+    expect(cypher).toContain('target.`ownerId` = $param2');
+    // v2.3.0 — the user's own connect filter is compiled by WhereCompiler
+    // and draws from the SAME shared counter as the policy predicate, so
+    // the two can never collide (filter first, then policy).
+    expect(cypher).toContain('target.`id` = $param1');
+    expect(params.param2).toBe('u1');
+    expect(params.param1).toBe('b1');
   });
 
   it('disconnect target MATCH carries the target type read policy predicate', async () => {
@@ -120,11 +121,9 @@ describe('Model mutations — connect/disconnect TARGET policy (CWE-285)', () =>
       });
 
     const { cypher, params } = recorded[0];
-    expect(cypher).toContain('target_ownedBooks_0.`ownerId` = $param1');
-    expect(cypher).toContain(
-      'target_ownedBooks_0.`id` = $disconnect_ownedBooks_0_id',
-    );
-    expect(params.param1).toBe('u1');
+    expect(cypher).toContain('target_ownedBooks_0.`ownerId` = $param2');
+    expect(cypher).toContain('target_ownedBooks_0.`id` = $param1');
+    expect(params.param2).toBe('u1');
   });
 
   it('nested connect (inside update body) carries the target policy predicate', async () => {
@@ -139,7 +138,7 @@ describe('Model mutations — connect/disconnect TARGET policy (CWE-285)', () =>
 
     const { cypher } = recorded[0];
     // Nested connect target var is `n_conn0`; its WHERE carries the policy.
-    expect(cypher).toContain('.`ownerId` = $param1');
+    expect(cypher).toContain('.`ownerId` = $param2');
     expect(cypher).toMatch(/MATCH \(n_conn0:/);
   });
 
@@ -169,14 +168,16 @@ describe('Model mutations — connect/disconnect TARGET policy (CWE-285)', () =>
       });
 
     const { cypher, params } = recorded[0];
-    // No `read` policy on Book → no target predicate, counter not bumped.
+    // No `read` policy on Book → no target predicate and no policy value
+    // bound (the only param<N> is the user's own connect filter).
     expect(cypher).not.toContain('target.`ownerId`');
-    expect(params).not.toHaveProperty('param1');
+    expect(Object.values(params)).not.toContain('u1');
+    expect(params.param1).toBe('b1');
   });
 
-  it('no target policy → connect Cypher is byte-identical (counter not bumped)', async () => {
+  it('no target policy → no target predicate and no policy params', async () => {
     // Source has an update policy but Book has NO policy: the connect
-    // target MATCH must stay byte-identical (no predicate, no param bump).
+    // target MATCH carries only the user's own filter.
     const recorded: Recorded[] = [];
     const ogm = new OGM({
       typeDefs: schema,
@@ -195,7 +196,7 @@ describe('Model mutations — connect/disconnect TARGET policy (CWE-285)', () =>
 
     const { cypher, params } = recorded[0];
     expect(cypher).not.toContain('target.`ownerId`');
-    expect(params).not.toHaveProperty('param1');
+    expect(Object.values(params)).not.toContain('u1');
   });
 
   it('no policies at all → connect Cypher is byte-identical to a bypassed policy OGM', async () => {
