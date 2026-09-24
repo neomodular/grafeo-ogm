@@ -15,6 +15,12 @@ import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
 import {
+  assertNestedCreatesAllowed,
+  assertNestedUpdatesAllowed,
+  evaluateCreatePolicies,
+  evaluateWriteRestrictives,
+} from './policy/nested-writes';
+import {
   buildExplainPlan,
   EXPLAIN_OUTCOMES,
   EXPLAIN_VISIBLE,
@@ -22,7 +28,7 @@ import {
   resolveExplainLimit,
 } from './policy/explain';
 import { hashCtx, projectResolution } from './policy/resolver';
-import { isWriteRestrictive } from './policy/types';
+import { NO_ROOT_POLICY } from './policy/types';
 import type {
   DetailedResolution,
   Operation,
@@ -458,8 +464,13 @@ export class Model<
       return null;
     }
 
-    const resolved = binding.resolve(this.nodeDef.typeName, op, binding.ctx);
-    if (!resolved) return null;
+    // v2.3.0 — a root with no policy for `op` still gets a bundle
+    // (`NO_ROOT_POLICY`: no root clause) so target-type policies stay
+    // enforced on everything reached through relationships. Pre-2.3.0 this
+    // returned `null`, turning policy-free types into gateways around
+    // their neighbours' policies.
+    const resolved =
+      binding.resolve(this.nodeDef.typeName, op, binding.ctx) ?? NO_ROOT_POLICY;
 
     return {
       ctx: binding.ctx,
@@ -755,16 +766,16 @@ export class Model<
     // report is built from — keeps fragments aligned with entries.
     const ctx = binding.ctx;
     const detailed = resolveDetailed(this.nodeDef.typeName, 'read', ctx);
-    const policyContext: PolicyContextBundle | null = detailed
-      ? {
-          ctx,
-          operation: 'read',
-          resolved: projectResolution(detailed),
-          defaults: binding.defaults,
-          resolveForType: (typeName, targetOp) =>
-            binding.resolve(typeName, targetOp, ctx),
-        }
-      : null;
+    // Always bound (v2.3.0): a root without policies still enforces the
+    // policies of the types its selection / traversals reach, like `find`.
+    const policyContext: PolicyContextBundle = {
+      ctx,
+      operation: 'read',
+      resolved: detailed ? projectResolution(detailed) : NO_ROOT_POLICY,
+      defaults: binding.defaults,
+      resolveForType: (typeName, targetOp) =>
+        binding.resolve(typeName, targetOp, ctx),
+    };
 
     const cypherParts: string[] = [];
     const allParams: Record<string, unknown> = {};
@@ -780,37 +791,19 @@ export class Model<
     // Candidate WHERE — compiled exactly as `find` compiles it (same
     // order, counter, prelude scope, policy-aware traversal), with the
     // root policy clause returned separately instead of AND-stitched.
-    let userCypher: string;
-    let policyClause: string | null = null;
-    let fragments: CompiledPolicyFragments | null = null;
-    if (policyContext) {
-      const where = this.whereCompiler.compileForExplain(
-        params?.where,
-        'n',
-        this.nodeDef,
-        paramCounter,
-        policyContext,
-      );
-      if (where.preludes.length > 0) cypherParts.push(...where.preludes);
-      mergeParams(allParams, where.params);
-      userCypher = where.userCypher;
-      policyClause = where.policy?.clause ?? null;
-      fragments = where.policy?.fragments ?? null;
-    } else {
-      // No policy registered for this type — `find` compiles without a
-      // policy context too.
-      const where = this.whereCompiler.compile(
-        params?.where,
-        'n',
-        this.nodeDef,
-        paramCounter,
-      );
-      if (where.preludes && where.preludes.length > 0)
-        cypherParts.push(...where.preludes);
-      mergeParams(allParams, where.params);
-      userCypher = where.cypher;
-    }
-    if (userCypher) cypherParts.push(`WHERE ${userCypher}`);
+    const where = this.whereCompiler.compileForExplain(
+      params?.where,
+      'n',
+      this.nodeDef,
+      paramCounter,
+      policyContext,
+    );
+    if (where.preludes.length > 0) cypherParts.push(...where.preludes);
+    mergeParams(allParams, where.params);
+    const policyClause: string | null = where.policy?.clause ?? null;
+    const fragments: CompiledPolicyFragments | null =
+      where.policy?.fragments ?? null;
+    if (where.userCypher) cypherParts.push(`WHERE ${where.userCypher}`);
 
     // Project the outcomes right after the candidate WHERE: the `@cypher`
     // `__where_*` aliases the fragments reference are only in scope here
@@ -889,16 +882,27 @@ export class Model<
 
     const policyContext = this.resolvePolicyContext('create', params.unsafe);
     this.evaluateCreatePolicies(policyContext, params.input);
+    assertNestedCreatesAllowed(
+      this.schema,
+      this.nodeDef,
+      params.input as unknown as Record<string, unknown>[],
+      policyContext,
+    );
 
+    // ONE counter for the whole statement: nested connect filters and their
+    // target-policy predicates (mutation compiler), then the selection's
+    // connection-where params, all draw from it — no `param<N>` collisions.
+    const paramCounter = { count: 0 };
     const { cypher, params: mutParams } = this.mutationCompiler.compileCreate(
       params.input,
       this.nodeDef,
       params.labels,
+      // v2.3.0 — connect targets inside the create input are gated by the
+      // TARGET type's read policy (pre-2.3.0 the create path threaded none).
+      policyContext ?? undefined,
+      paramCounter,
     );
 
-    // Shared counter so the selection's connection-where params don't collide
-    // with anything the mutation compiler already emitted into mutParams.
-    const paramCounter = { count: 0 };
     const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
     let finalCypher: string;
     if (params.select)
@@ -974,6 +978,12 @@ export class Model<
       policyContext,
       'update',
       params.update as Record<string, unknown> | undefined,
+    );
+    assertNestedUpdatesAllowed(
+      this.schema,
+      this.nodeDef,
+      params.update as Record<string, unknown> | undefined,
+      policyContext,
     );
 
     const paramCounter = { count: 0 };
@@ -1079,6 +1089,9 @@ export class Model<
       this.nodeDef,
       whereResult,
       params.delete,
+      // v2.3.0 — each cascade target is gated by its own `delete` policy.
+      policyContext ?? undefined,
+      paramCounter,
     );
 
     const result = await this.executor.execute(
@@ -1111,8 +1124,10 @@ export class Model<
     // aggregate prefers 'aggregate' policies but falls back to 'read'
     // per design decision #7. The fallback only applies when no
     // 'aggregate'-specific policy is registered for this type.
+    // "No aggregate policy registered" is `NO_ROOT_POLICY` (identity), not
+    // a null bundle — a bound model always carries one since v2.3.0.
     let policyContext = this.resolvePolicyContext('aggregate', params.unsafe);
-    if (!policyContext)
+    if (!policyContext || policyContext.resolved === NO_ROOT_POLICY)
       policyContext = this.resolvePolicyContext('read', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'aggregate');
 
@@ -1515,6 +1530,12 @@ export class Model<
       'update',
       params.data as Record<string, unknown> | undefined,
     );
+    assertNestedUpdatesAllowed(
+      this.schema,
+      this.nodeDef,
+      params.data as Record<string, unknown> | undefined,
+      policyContext,
+    );
 
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
@@ -1840,113 +1861,30 @@ export class Model<
   // --- Private helpers ------------------------------------------------------
 
   /**
-   * Evaluate `'create'` policies in JS BEFORE the mutation runs.
-   *
-   * - Override → all input is allowed.
-   * - Permissive → at least one (whose `appliesWhen` matches) must
-   *   accept each input via `when(ctx)` returning a non-empty partial.
-   * - Restrictive → must hold for every input. Restrictives whose
-   *   `when(ctx, input)` returns false trigger `PolicyDeniedError`.
-   *
-   * Note: the where-predicate from a permissive `when(ctx)` is treated
-   * as a SHAPE check — it only documents which fields the user is
-   * allowed to set; we do NOT compile-and-run the partial against the
-   * input. (Validating shape against a where-partial is out of scope
-   * for v1.7.0.) Restrictive `when(ctx, input)` is the canonical
-   * "WITH CHECK" hook.
+   * Root `'create'` checks (default-deny + WITH CHECK) — shared with every
+   * nested create via `src/policy/nested-writes.ts`.
    */
   private evaluateCreatePolicies(
     bundle: PolicyContextBundle | null,
     inputs: TCreateInput[],
   ): void {
-    if (!bundle || bundle.resolved.overridden) return;
-
-    if (
-      bundle.resolved.permissives.length === 0 &&
-      bundle.defaults.onDeny === 'throw'
-    )
-      throw new PolicyDeniedError({
-        typeName: this.nodeDef.typeName,
-        operation: 'create',
-        reason: 'no-permissive-matched',
-      });
-    if (
-      bundle.resolved.permissives.length === 0 &&
-      bundle.defaults.onDeny !== 'throw'
-    )
-      throw new PolicyDeniedError({
-        typeName: this.nodeDef.typeName,
-        operation: 'create',
-        reason: 'no-permissive-matched',
-        detail:
-          'create operations cannot rely on default-deny silent-empty; at least one permissive must apply.',
-      });
-
-    for (const input of inputs)
-      for (const r of bundle.resolved.restrictives) {
-        // Only WriteRestrictives participate at the application layer.
-        // ReadRestrictives bound to 'create' are nonsensical (no row to
-        // filter) and the constructor would have flagged a mixed
-        // operations array; this guard is defense in depth.
-        if (!isWriteRestrictive(r)) continue;
-        if (r.appliesWhen && !r.appliesWhen(bundle.ctx)) continue;
-        const verdict = r.when(
-          bundle.ctx,
-          input as unknown as Record<string, unknown>,
-        );
-        // v1.8.7 — require explicit positive consent. Pre-1.8.7 only
-        // `=== false` rejected, so a `when` returning undefined/null
-        // (e.g. `ctx.canWrite && input.tenantId === ctx.tenantId` with
-        // an anonymous ctx) silently ALLOWED the write.
-        if (verdict !== true)
-          throw new PolicyDeniedError({
-            typeName: this.nodeDef.typeName,
-            operation: 'create',
-            reason: 'restrictive-rejected-input',
-            policyName: r.name,
-          });
-      }
+    evaluateCreatePolicies(
+      bundle,
+      this.nodeDef.typeName,
+      inputs as unknown as Record<string, unknown>[],
+    );
   }
 
   /**
-   * Evaluate WRITE-side restrictive policies (create/update) at the
-   * application layer. Each `WriteRestrictive` is invoked exactly once
-   * with `(ctx, input)`; anything other than an explicit `true` return
-   * rejects the operation with `PolicyDeniedError` (v1.8.7 — previously
-   * only `false` rejected, so nullish returns silently allowed).
-   *
-   * ReadRestrictives are NOT consumed here — they enforce row-filter
-   * semantics via the compiled WHERE clause (see `WhereCompiler`). Only
-   * write-side restrictives have "WITH CHECK" semantics that need
-   * application-layer evaluation.
-   *
-   * For `delete`, there is no input to validate; deletes are filtered
-   * solely via ReadRestrictives on the WHERE clause. Calling this with
-   * `operation: 'delete'` is a no-op (no WriteRestrictives target
-   * delete).
+   * Root WITH CHECK for create/update input — shared with every nested
+   * write via `src/policy/nested-writes.ts`.
    */
   private evaluateWriteRestrictives(
     bundle: PolicyContextBundle | null,
     operation: Operation,
     input: Record<string, unknown> | undefined,
   ): void {
-    if (!bundle || bundle.resolved.overridden) return;
-    for (const r of bundle.resolved.restrictives) {
-      if (!isWriteRestrictive(r)) continue;
-      // Compile-time gate: appliesWhen returning false drops the
-      // policy entirely for this operation.
-      if (r.appliesWhen && !r.appliesWhen(bundle.ctx)) continue;
-      const verdict = r.when(bundle.ctx, input ?? {});
-      // v1.8.7 — require explicit positive consent (see
-      // evaluateCreatePolicies for the rationale).
-      if (verdict !== true)
-        throw new PolicyDeniedError({
-          typeName: this.nodeDef.typeName,
-          operation,
-          reason: 'restrictive-rejected-input',
-          policyName: r.name,
-        });
-    }
+    evaluateWriteRestrictives(bundle, this.nodeDef.typeName, operation, input);
   }
 
   private defaultSelection(): SelectionNode[] {
