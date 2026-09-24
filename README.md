@@ -580,6 +580,8 @@ const book = await Book.findUniqueOrThrow({
 | `_ALL` | Every related node matches | `{ categories_ALL: { name: 'Tech' } }` |
 | `_SINGLE` | Exactly one related node matches | `{ categories_SINGLE: { name: 'Tech' } }` |
 
+With [Node-Level Security](#node-level-security), quantifiers range over the related nodes the caller may **see**: a related node hidden by its type's `read` policy neither satisfies nor falsifies `_SOME`, `_NONE`, `_ALL` or `_SINGLE`.
+
 **Logical operators:**
 
 ```typescript
@@ -599,10 +601,23 @@ await Book.find({
 ```typescript
 // Scalar null check
 await Book.find({ where: { isbn: null } });        // WHERE n.isbn IS NULL
+await Book.find({ where: { isbn_NOT: null } });    // WHERE n.isbn IS NOT NULL
 
 // Relationship existence
 await Book.find({ where: { author: null } });       // NOT EXISTS pattern
+await Book.find({ where: { author_NOT: null } });   // EXISTS pattern
 ```
+
+| Input | Compiles to |
+|---|---|
+| `field: null` | `field IS NULL` |
+| `field_NOT: null` | `field IS NOT NULL` |
+| `relationship: null` | `NOT EXISTS { MATCH … }` |
+| `relationship_NOT: null` | `EXISTS { MATCH … }` |
+| any other operator with `null` (`_IN`, `_GT`, `_CONTAINS`, `_SOME`, …) | throws `OGMError` |
+| an unknown field with `null` | throws `OGMError`, even without `strictWhere` |
+
+The same rules apply everywhere a `where` is accepted: policy `when` partials, nested `select` filters, and nested-write `where`. Before v2.3.0, `{ field_NOT: null }` compiled to the always-true `` n.`field_NOT` IS NULL ``, so a filter such as a policy restrictive `{ approvedAt_NOT: null }` silently matched every row.
 
 **Connection filters (with edge properties):**
 
@@ -839,6 +854,15 @@ await Book.delete({
   },
 });
 ```
+
+Cascade semantics:
+
+- Each item deletes only the related nodes matching its `where`. An empty item (`{}`) deletes every related node of that relationship.
+- An item may be a single object or an array of items.
+- With [Node-Level Security](#node-level-security), each cascaded node must also pass its own type's `delete` policy. Nodes the policy rejects are kept.
+- A `delete` nested inside a cascade item (multi-level cascade) throws `OGMError`, as do unknown keys in a cascade item.
+
+> **Behavior change in v2.3.0:** before v2.3.0 the per-item `where` was ignored and the cascade deleted **every** related node, including nodes shared with other records. If you relied on that, pass `{}` explicitly.
 
 ### Delete Many
 
@@ -1269,6 +1293,28 @@ policies: {
 }
 ```
 
+#### Relationships and nested writes
+
+Policies protect a **type**, wherever it is reached from. When a bound model reaches another type through a relationship, that type's own policies apply, whether or not the root type has any.
+
+Reads:
+- **Nested selection**: related nodes are filtered by their type's `read` policy.
+- **Relationship filters** (`_SOME`, `_NONE`, `_ALL`, `_SINGLE`, `…Connection`): these range over the related nodes the caller may see. At any depth, a hidden node neither satisfies nor falsifies the quantifier.
+- **Interface and union targets**: each related node is checked against the policy of its concrete type (`CASE WHEN n:Chart THEN <Chart policy> WHEN n:Drug THEN <Drug policy> … ELSE false END`).
+
+Writes follow one principle: **a nested write enforces exactly what the equivalent direct write on the target type would.**
+
+| Nested operation | Target-type policy applied |
+|---|---|
+| `connect` / `disconnect` (in `create` or `update`) | `read`: only visible nodes can be linked or unlinked |
+| nested `update` | `update` row filter, plus its write restrictives (`WITH CHECK`) on the nested input |
+| nested `create` (in `create` or `update`) | `create`: at least one permissive must apply, plus its write restrictives on the nested input |
+| `delete` inside `update`, cascade `delete` | `delete` row filter |
+
+Write restrictives and create default-deny are checked before the query runs, so a rejected nested write throws `PolicyDeniedError` and nothing is written.
+
+> **A type without policies is open, but not a gateway.** Before v2.3.0, reading or writing through a type with no policies of its own skipped the policies of the types beyond it, and nested writes enforced no target-type policy at all. If a nested write into a protected type now gets filtered or denied, add the matching policy for that operation on the target type, or perform the write directly on its model.
+
 #### Enforcement boundary
 
 > **The OGM enforces policies at the compiler.** Policies do NOT apply to `ogm.$queryRaw`, `ogm.$executeRaw`, or to `@cypher` directive bodies that traverse from a stored field. If you need raw-Cypher enforcement, write the predicate into your raw Cypher manually or layer a Neo4j role/RBAC at the database.
@@ -1355,7 +1401,9 @@ How it works:
 - **`@cypher` scalar fields inside a policy `where`-partial throw when the policy is injected into nested-selection enforcement.** Refactor the policy to use stored properties or a relationship traversal.
 - **`upsert`** evaluates create- and update-side policies at the application layer (MERGE has no WHERE). Documented limit; full MERGE-aware enforcement is not yet implemented.
 - **Restrictives are split into read-side and write-side flavors.** A restrictive's `operations` array determines which `when` signature applies. Read-side ops (`read|delete|aggregate|count`) → `when(ctx)` returns a where-partial or boolean. Write-side ops (`create|update`) → `when(ctx, input)` returns a boolean only. Mixed arrays (e.g. `['read', 'create']`) are rejected at construction time — split into two restrictives. Each flavor is invoked exactly once per query (read-side at compile, write-side at the application layer). Use `isReadRestrictive` / `isWriteRestrictive` if you need to inspect a policy at runtime.
-- **InterfaceModel CASE-per-label fallback.** Implementers without a registered policy fall back to interface-level enforcement on their branch. The OGM emits a `logger.warn` at construction time when an interface has policies and one of its implementers does not — silence the warning by registering an explicit policy on each implementer.
+- **InterfaceModel branches.** Each implementer's `CASE` branch is exactly the policy clause that implementer's own model enforces, including the interface-level policies it inherits. An implementer with no policies of its own therefore gets only the interface-level ones. The OGM emits a `logger.warn` at construction time when an interface has policies and one of its implementers does not. Silence it by registering an explicit policy on each implementer.
+- **`edge` filters in nested-write `where`** (connect, disconnect, nested update and delete) are not supported and throw.
+- **`@cypher` fields in the policies of more than one member of an interface or union** cannot be combined in one query and throw. Refactor all but one to stored properties.
 - **No AsyncLocalStorage integration.** Context is supplied via explicit `withContext()` only — create one wrapper per request, discard after.
 
 ### Raw Cypher
