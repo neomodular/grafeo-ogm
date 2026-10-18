@@ -1232,6 +1232,33 @@ describe('MutationCompiler', () => {
       });
     });
 
+    // v2.4.2 — order within one nested update item matches @neo4j/graphql:
+    // delete, disconnect, connect, create, update.
+    it('emits a same-item create after its disconnect and connect', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        {
+          tiers: [
+            {
+              disconnect: [{}],
+              connect: [{ where: { node: { id: 't1' } } }],
+              create: [{ node: {} }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+      const disc = result.cypher.indexOf('DELETE r_disc_tiers');
+      const conn = result.cypher.indexOf('_cn_tiers');
+      const create = result.cypher.search(/CREATE \(n_cr\d+:/);
+      expect(disc).toBeGreaterThan(-1);
+      expect(conn).toBeGreaterThan(disc);
+      expect(create).toBeGreaterThan(conn);
+    });
+
     it('isolates a nested disconnect in a row-preserving CALL (#8)', () => {
       const result = compiler.compileUpdate(
         { id: 'conc1' },

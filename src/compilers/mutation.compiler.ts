@@ -1861,71 +1861,6 @@ export class MutationCompiler {
             }),
           );
 
-        // --- create ---
-        if (item.create) {
-          const createItems = Array.isArray(item.create)
-            ? (item.create as Record<string, unknown>[])
-            : [item.create as Record<string, unknown>];
-
-          for (let ci = 0; ci < createItems.length; ci++) {
-            const createSpec = createItems[ci];
-            const nodeSpec = (createSpec.node ?? createSpec) as Record<
-              string,
-              unknown
-            >;
-
-            const createVar = `${sourceVar}_cr${varCounter}`;
-            varCounter++;
-
-            const { propString, propParams } = this.buildCreateProperties(
-              nodeSpec,
-              targetNodeDef,
-              `${itemPrefix}_create${ci}`,
-            );
-
-            // Handle nested relationship creates within the created node
-            const nestedRelLines = this.buildCreateRelationships(
-              nodeSpec,
-              targetNodeDef,
-              createVar,
-              `${itemPrefix}_create${ci}`,
-              params,
-              allVars,
-              policyContext,
-              paramCounter,
-            );
-
-            const propsClause =
-              propString.length > 0
-                ? ` { ${propString} }`
-                : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
-
-            const relPattern = buildRelPattern({
-              sourceVar,
-              relDef,
-              targetVar: createVar,
-            });
-
-            // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
-            const hasNestedOps = nestedRelLines.length > 0;
-            if (hasNestedOps) {
-              lines.push(withClause);
-              lines.push(`CALL {`);
-              lines.push(withClause);
-            } else lines.push(withClause);
-
-            lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
-            mergeParams(params, propParams);
-            lines.push(`CREATE ${relPattern}`);
-
-            if (hasNestedOps) {
-              lines.push(...nestedRelLines);
-              lines.push(`RETURN count(*) AS _cc_${key}_${ci}`);
-              lines.push(`}`);
-            }
-          }
-        }
-
         // --- disconnect (runs before connect so "disconnect all + connect new" works) ---
         if (item.disconnect) {
           const disconnectItems = Array.isArray(item.disconnect)
@@ -2094,6 +2029,74 @@ export class MutationCompiler {
 
             lines.push(`RETURN count(*) AS _cn_${key}_${ci}`);
             lines.push(`}`);
+          }
+        }
+
+        // --- create ---
+        // Runs after disconnect and connect (as in @neo4j/graphql), so a
+        // same-item `disconnect: [{}]` + `create` keeps the new node linked.
+        // Pre-2.4.2 create ran first and the disconnect-all removed it.
+        if (item.create) {
+          const createItems = Array.isArray(item.create)
+            ? (item.create as Record<string, unknown>[])
+            : [item.create as Record<string, unknown>];
+
+          for (let ci = 0; ci < createItems.length; ci++) {
+            const createSpec = createItems[ci];
+            const nodeSpec = (createSpec.node ?? createSpec) as Record<
+              string,
+              unknown
+            >;
+
+            const createVar = `${sourceVar}_cr${varCounter}`;
+            varCounter++;
+
+            const { propString, propParams } = this.buildCreateProperties(
+              nodeSpec,
+              targetNodeDef,
+              `${itemPrefix}_create${ci}`,
+            );
+
+            // Handle nested relationship creates within the created node
+            const nestedRelLines = this.buildCreateRelationships(
+              nodeSpec,
+              targetNodeDef,
+              createVar,
+              `${itemPrefix}_create${ci}`,
+              params,
+              allVars,
+              policyContext,
+              paramCounter,
+            );
+
+            const propsClause =
+              propString.length > 0
+                ? ` { ${propString} }`
+                : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
+
+            const relPattern = buildRelPattern({
+              sourceVar,
+              relDef,
+              targetVar: createVar,
+            });
+
+            // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
+            const hasNestedOps = nestedRelLines.length > 0;
+            if (hasNestedOps) {
+              lines.push(withClause);
+              lines.push(`CALL {`);
+              lines.push(withClause);
+            } else lines.push(withClause);
+
+            lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
+            mergeParams(params, propParams);
+            lines.push(`CREATE ${relPattern}`);
+
+            if (hasNestedOps) {
+              lines.push(...nestedRelLines);
+              lines.push(`RETURN count(*) AS _cc_${key}_${ci}`);
+              lines.push(`}`);
+            }
           }
         }
 
