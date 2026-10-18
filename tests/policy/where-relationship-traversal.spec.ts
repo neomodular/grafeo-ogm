@@ -429,10 +429,10 @@ describe('WhereCompiler — target-policy AND-stitch on relationship traversal (
       { policyContext },
     );
 
-    // _SINGLE compiles to a `size([r0 IN [... | r0]] | r0]) = 1`
+    // _SINGLE compiles to a `size([(n)-[...]->(r0) WHERE ... | r0]) = 1`
     // pattern comprehension. The WHERE inside the comprehension contains
     // both the user filter AND the policy clause.
-    expect(result.cypher).toMatch(/size\(\[r0 IN \[/);
+    expect(result.cypher).toMatch(/^size\(\[\(n\)-/);
     expect(result.cypher).toMatch(/\]\) = 1$/);
     expect(result.cypher).toMatch(/r0\.`id`/);
     expect(result.cypher).toMatch(/r0\.`tenantId`/);

@@ -1137,8 +1137,13 @@ export class WhereCompiler {
               `Refactor to Connection_SOME + Connection_NONE, or remove the @cypher reference.`,
           );
 
+        // v2.5.0 — a pattern comprehension starts with the pattern
+        // itself. Pre-2.5.0 an extra `(` wrapped it, which Neo4j rejected
+        // ("Invalid input 'WHERE'"), so every Connection_SINGLE failed.
+        // The target policy stays inside `whereClause`, so only visible
+        // nodes are counted.
         return {
-          cypher: `size([(${pattern}${whereClause} | 1)]) = 1`,
+          cypher: `size([${pattern}${whereClause} | 1]) = 1`,
           params: innerParams,
         };
       default:
@@ -1468,8 +1473,14 @@ export class WhereCompiler {
         // bumped the counter once. The extra increment was dead and
         // skipped a slot in the param/var namespace, masking real
         // collisions if/when a future compiler shared this counter.
+        //
+        // v2.5.0 — a plain pattern comprehension. Pre-2.5.0 the pattern
+        // was wrapped in an extra `(` (inside a redundant list
+        // comprehension), which Neo4j rejected with "Invalid input
+        // 'WHERE'", so every `_SINGLE` failed. The target policy stays in
+        // `whereClause`: only nodes the caller may see are counted.
         return {
-          cypher: `size([${relVar} IN [(${pattern}${whereClause} | ${relVar})] | ${relVar}]) = 1`,
+          cypher: `size([${pattern}${whereClause} | ${relVar}]) = 1`,
           params: body.params,
         };
       }
@@ -1636,11 +1647,13 @@ export class WhereCompiler {
                 `Refactor the predicate to _SOME + _NONE, or remove the ` +
                 `@cypher reference.`,
             );
+        // v2.5.0 — plain pattern comprehensions (see the non-union
+        // `_SINGLE`: the pre-2.5.0 extra `(` made Neo4j reject the query).
         const sizeExprs = members.map(
           (m) =>
-            `size([${m.relVar} IN [(${m.pattern}${
+            `size([${m.pattern}${
               m.inner ? ` WHERE ${m.inner}` : ''
-            } | ${m.relVar})] | ${m.relVar}])`,
+            } | ${m.relVar}])`,
         );
         return {
           cypher: `${

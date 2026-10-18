@@ -581,7 +581,7 @@ describe('Traversal filters keep the target policy outside every negation', () =
   it('_SINGLE counts only visible matches', async () => {
     const cypher = await findTags({ charts_SINGLE: { title: 'x' } });
     expect(cypher).toMatch(
-      /size\(\[r0 IN \[\(.* WHERE \(r0\.`title` = \$p\) AND \(true AND \(r0\.`secret` = \$p\)\) \| r0\)\] \| r0\]\) = 1/,
+      /size\(\[\(n\)-.* WHERE \(r0\.`title` = \$p\) AND \(true AND \(r0\.`secret` = \$p\)\) \| r0\]\) = 1/,
     );
   });
 

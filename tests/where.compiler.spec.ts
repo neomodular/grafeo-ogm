@@ -669,7 +669,7 @@ describe('WhereCompiler', () => {
       bookNode,
     );
     expect(result.cypher).toBe(
-      'size([((n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE r0.`name` = $param1 | 1)]) = 1',
+      'size([(n)-[e0:`HAS_STATUS`]->(r0:`Status`) WHERE r0.`name` = $param1 | 1]) = 1',
     );
     expect(result.params).toEqual({ param1: 'Active' });
   });
@@ -933,7 +933,7 @@ describe('WhereCompiler', () => {
         doseNode,
       );
       expect(result.cypher).toBe(
-        'size([r0 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) WHERE r0.`value` = $param1 | r0)] | r0]) = 1',
+        'size([(n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) WHERE r0.`value` = $param1 | r0]) = 1',
       );
       expect(result.params).toEqual({ param1: 10 });
     });
@@ -945,8 +945,8 @@ describe('WhereCompiler', () => {
         doseNode,
       );
       expect(result.cypher).toBe(
-        '(size([r0 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) | r0)] | r0]) + ' +
-          'size([r1 IN [((n)-[:`DOSE_IS_OF_TYPE`]->(r1:`RangeChapter`:`ChapterType`) | r1)] | r1])) = 1',
+        '(size([(n)-[:`DOSE_IS_OF_TYPE`]->(r0:`StandardChapter`:`ChapterType`) | r0]) + ' +
+          'size([(n)-[:`DOSE_IS_OF_TYPE`]->(r1:`RangeChapter`:`ChapterType`) | r1])) = 1',
       );
     });
 
