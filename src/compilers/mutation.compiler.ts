@@ -785,7 +785,10 @@ export class MutationCompiler {
     const createSets: string[] = [];
     for (const [key, value] of Object.entries(create)) {
       if (value === undefined) continue;
-      if (nodeDef.relationships.has(key)) continue;
+      if (nodeDef.relationships.has(key)) {
+        if (value === null) continue;
+        throw upsertRelationshipError(nodeDef, key, 'create');
+      }
       assertSafePropertyName(key, 'create property');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onCreate_${key}`;
@@ -824,7 +827,10 @@ export class MutationCompiler {
     const updateSets: string[] = [];
     for (const [key, value] of Object.entries(update)) {
       if (value === undefined) continue;
-      if (nodeDef.relationships.has(key)) continue;
+      if (nodeDef.relationships.has(key)) {
+        if (value === null) continue;
+        throw upsertRelationshipError(nodeDef, key, 'update');
+      }
       assertSafePropertyName(key, 'update property');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onMatch_${key}`;
@@ -2893,6 +2899,22 @@ export function unwrapAbstractCreateNode(
         `e.g. { node: { ${target.members[0] ?? 'Member'}: { … } } }. Allowed: ${target.members.map((m) => `"${m}"`).join(', ')}.`,
     );
   return [keys[0], nodeSpec[keys[0]] as Record<string, unknown>];
+}
+
+/**
+ * MERGE writes scalars only. Pre-2.5.0 a relationship field in an upsert's
+ * `create` / `update` was skipped, so its nested connect / create never
+ * ran and nothing said so.
+ */
+function upsertRelationshipError(
+  nodeDef: NodeDefinition,
+  key: string,
+  branch: 'create' | 'update',
+): OGMError {
+  return new OGMError(
+    `upsert does not support relationship fields: "${key}" in "${branch}" (${nodeDef.typeName}). ` +
+      `Use create() / update() for nested relationship operations.`,
+  );
 }
 
 /** `null` / `{}`: the whole-relationship (blanket) form, never per member. */

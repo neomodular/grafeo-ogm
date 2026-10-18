@@ -489,17 +489,40 @@ describe('MutationCompiler.compileMerge()', () => {
     ).toThrow('at least one scalar property');
   });
 
-  it('should skip relationship fields in create and update', () => {
+  // v2.5.0 — relationship input used to be skipped silently, so its nested
+  // connect / create never ran. It now throws; an explicit null is a no-op.
+  it('should reject relationship fields in create and update', () => {
+    expect(() =>
+      compiler.compileMerge(
+        { externalId: 'ABC-123' },
+        { externalId: 'ABC-123', hasStatus: { connect: { where: {} } } },
+        {},
+        bookNode,
+      ),
+    ).toThrow(
+      /upsert does not support relationship fields: "hasStatus" in "create"/,
+    );
+    expect(() =>
+      compiler.compileMerge(
+        { externalId: 'ABC-123' },
+        { externalId: 'ABC-123' },
+        { hasStatus: { connect: { where: {} } } },
+        bookNode,
+      ),
+    ).toThrow(
+      /upsert does not support relationship fields: "hasStatus" in "update"/,
+    );
+  });
+
+  it('should ignore a null relationship field in create and update', () => {
     const result = compiler.compileMerge(
       { externalId: 'ABC-123' },
-      { externalId: 'ABC-123', hasStatus: { id: '1' } },
-      { hasStatus: { id: '2' } },
+      { externalId: 'ABC-123', hasStatus: null },
+      { hasStatus: null },
       bookNode,
     );
 
     expect(result.cypher).not.toContain('hasStatus');
-    // Only externalId should be in ON CREATE SET
-    expect(result.cypher).toContain('ON CREATE SET');
     expect(result.cypher).toContain('n.`externalId` = $onCreate_externalId');
   });
 

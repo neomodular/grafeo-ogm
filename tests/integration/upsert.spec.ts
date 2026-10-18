@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
+import { OGMError } from '../../src/errors';
 
 const URI = process.env.NEO4J_URI;
 const describeLive = URI ? describe : describe.skip;
@@ -24,6 +25,7 @@ const typeDefs = /* GraphQL */ `
     runId: String
     email: String @unique
     name: String
+    friends: [ItUpPerson!]! @relationship(type: "IT_UP_FRIEND", direction: OUT)
   }
 `;
 
@@ -111,5 +113,36 @@ describeLive('upsert — live Neo4j', () => {
       select: { id: true },
     } as never)) as Row;
     expect(res.id).toBe(`${runId}-mine`);
+  });
+
+  // v2.5.0 — relationship input in create / update was skipped: the node
+  // was written, the nested connect silently was not.
+  it('relationship input in create or update throws and writes nothing', async () => {
+    const e = email('rel');
+    const friend = email('rel-friend');
+    await run(
+      'CREATE (:ItUpPerson {id: randomUUID(), runId: $runId, email: $friend})',
+      { friend },
+    );
+    const friends = { connect: [{ where: { node: { email: friend } } }] };
+    await expect(
+      Person().upsert({
+        where: { email: e },
+        create: { email: e, runId, friends },
+        update: {},
+      }),
+    ).rejects.toThrow(/upsert does not support relationship fields/);
+    await expect(
+      Person().upsert({
+        where: { email: e },
+        create: { email: e, runId },
+        update: { friends },
+      }),
+    ).rejects.toThrow(OGMError);
+    const rows = await run(
+      'MATCH (p:ItUpPerson {email: $e}) RETURN count(p) AS c',
+      { e },
+    );
+    expect(rows[0].c).toBe(0);
   });
 });
