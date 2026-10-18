@@ -264,9 +264,9 @@ function emitRelationshipOperators(
       }
     }
 
-  // Aggregate filter operator
-  const aggInputName = `${parentType}${pascalField}AggregateInput`;
-  lines.push(`  ${fieldName}Aggregate?: InputMaybe<${aggInputName}>;`);
+  // No `<rel>Aggregate` filter key: the where compiler rejects it at
+  // runtime ("not yet supported"). Through v2.4.7 it was emitted for every
+  // relationship, so code using it compiled and then threw.
 
   if (isArray) {
     // Array relationship: full set of operators

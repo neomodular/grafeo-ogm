@@ -227,3 +227,36 @@ const i: G.IdAggregateSelection = { longest: 'b' };
     expect(errors).toEqual([]);
   });
 });
+
+describe('generated types omit unsupported <rel>Aggregate fields', () => {
+  // Through v2.4.7 every relationship produced a `<rel>Aggregate` field on
+  // the node type and a `<rel>Aggregate` where key. The selection never
+  // returns the field (always undefined) and the where compiler throws on
+  // the key, so both are gone from the generated surface.
+  it('rejects <rel>Aggregate in where and on the node type', async () => {
+    const { errors } = await typecheckGenerated(
+      `
+      type Author @node {
+        id: ID! @id
+        books: [Book!]! @relationship(type: "WROTE", direction: OUT)
+      }
+      type Book @node {
+        id: ID! @id
+      }
+    `,
+      `${PRELUDE}
+async function run() {
+  await ogm.model('Author').find({
+    // @ts-expect-error unsupported at runtime (the where compiler throws)
+    where: { booksAggregate: { count: 1 } },
+  });
+  await ogm.model('Author').find({ where: { books_SOME: { id: 'b' } } });
+}
+declare const author: G.Author;
+// @ts-expect-error never populated by the runtime
+author.booksAggregate;
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+});

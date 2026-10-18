@@ -15,6 +15,9 @@ import { mapScalarType, toPascalCase, wrapMaybe } from './helpers';
  * - Scalar properties (skipping `@cypher` fields)
  * - Relationship fields (array or singular, required or optional)
  * - Connection fields for every relationship
+ *
+ * Relationship aggregate fields (`<rel>Aggregate`) are not emitted: the
+ * runtime does not support them.
  */
 export function emitNodeTypes(schema: SchemaMetadata): string {
   const blocks: string[] = [];
@@ -76,8 +79,10 @@ function emitSingleNodeType(
   }
 
   // --- Relationship fields ---
+  // No `<rel>Aggregate` field: the runtime selection never populates it.
+  // Through v2.4.7 one was emitted per relationship and always read as
+  // `undefined`.
   for (const [, rel] of node.relationships) {
-    members.push(emitAggregateField(node.typeName, rel));
     members.push(emitRelationshipField(rel));
     members.push(emitConnectionField(node.typeName, rel));
   }
@@ -137,21 +142,6 @@ function emitRelationshipField(rel: RelationshipDefinition): string {
   const type = wrapMaybe(rel.target, rel.isRequired);
 
   return `  ${rel.fieldName}${optional}: ${type};`;
-}
-
-/**
- * Emits the aggregate field for a relationship.
- *
- * Example: `  drugsAggregate?: Maybe<ChartDrugDrugsAggregationSelection>;`
- */
-function emitAggregateField(
-  typeName: string,
-  rel: RelationshipDefinition,
-): string {
-  const pascalField = toPascalCase(rel.fieldName);
-  const aggType = `${typeName}${rel.target}${pascalField}AggregationSelection`;
-
-  return `  ${rel.fieldName}Aggregate?: Maybe<${aggType}>;`;
 }
 
 /**

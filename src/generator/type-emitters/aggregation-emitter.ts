@@ -59,6 +59,16 @@ export type DateTimeAggregateSelection = {
   max?: Maybe<Scalars["DateTime"]["output"]>;
 };`;
 
+/**
+ * Relationship aggregation types are still declared so existing imports
+ * of these names keep compiling, but nothing in the generated surface
+ * references them any more: relationship aggregates (`<rel>Aggregate`)
+ * are not supported at runtime, and through v2.4.7 the node-type field
+ * always read `undefined` while the where key threw.
+ */
+const UNSUPPORTED_REL_AGGREGATE_DOC =
+  '/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */';
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -125,7 +135,7 @@ function emitRelationshipAggregationSelection(
     lines.push(`  edge?: Maybe<${edgeAggType}>;`);
   }
 
-  const block = `export type ${typeName} = {\n${lines.join('\n')}\n};`;
+  const block = `${UNSUPPORTED_REL_AGGREGATE_DOC}\nexport type ${typeName} = {\n${lines.join('\n')}\n};`;
 
   // Also emit the NodeAggregateSelection type (scalar properties of the target)
   const targetNode = schema.nodes.get(rel.target);
@@ -184,7 +194,7 @@ function emitRelationshipAggregateInput(
     `  NOT?: InputMaybe<${typeName}>;`,
   ];
 
-  return `export type ${typeName} = {\n${lines.join('\n')}\n};`;
+  return `${UNSUPPORTED_REL_AGGREGATE_DOC}\nexport type ${typeName} = {\n${lines.join('\n')}\n};`;
 }
 
 /**
@@ -209,7 +219,7 @@ function emitInterfaceRelAggregateInput(
     `  NOT?: InputMaybe<${typeName}>;`,
   ];
 
-  return `export type ${typeName} = {\n${lines.join('\n')}\n};`;
+  return `${UNSUPPORTED_REL_AGGREGATE_DOC}\nexport type ${typeName} = {\n${lines.join('\n')}\n};`;
 }
 
 /**

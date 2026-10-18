@@ -186,7 +186,8 @@ describe('emitWhereTypes', () => {
     expect(output).toContain('booksConnection?');
     expect(output).toContain('booksConnection_ALL?');
     expect(output).toContain('booksConnection_SOME?');
-    expect(output).toContain('booksAggregate?');
+    // The where compiler rejects <rel>Aggregate keys, so none are emitted.
+    expect(output).not.toContain('booksAggregate');
   });
 
   it('emits limited operators for singular relationships', () => {
