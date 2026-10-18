@@ -309,7 +309,7 @@ npx grafeo generate --verify # CI gate: exit 1 if the file on disk is stale
 
 ### `grafeo db push`
 
-Synchronizes the **constraints and indexes** your SDL declares (`@id`/`@unique` → unique constraints, `@fulltext` → fulltext indexes, `@vector` → vector indexes) with the live database. Constraints and indexes only — **not data**. (`db push` is deliberately scoped; use a dedicated migration tool for data.)
+Synchronizes the **constraints and indexes** your SDL declares (`@unique` → unique constraints, `@fulltext` → fulltext indexes, `@vector` → vector indexes) with the live database. Constraints and indexes only — **not data**. (`db push` is deliberately scoped; use a dedicated migration tool for data.) `@id` alone creates **no** constraint: it only generates a UUID on create. Add `@unique` (`id: ID! @id @unique`) to have the database enforce uniqueness.
 
 ```bash
 npx grafeo db push --dry-run          # preview the plan — DO THIS FIRST
@@ -400,7 +400,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `@node` | Type | Marks a type as a Neo4j node. Optional `labels` argument for multi-label nodes |
 | `@relationship` | Field | Defines a relationship with `type`, `direction` (`IN`/`OUT`), and optional `properties` |
 | `@relationshipProperties` | Type | Marks a type as relationship properties (edge data) |
-| `@id` | Field | Auto-generates a UUID on create |
+| `@id` | Field | Auto-generates a UUID on create (creates no constraint — add `@unique` for one) |
 | `@unique` | Field | Creates a uniqueness constraint in Neo4j |
 | `@cypher` | Field | Computed field resolved via a custom Cypher statement. Scalar return types are resolved at runtime in `select` / `selectionSet`, `where`, and `options.sort` (see [Computed Fields with @cypher](#computed-fields-with-cypher)); node/interface return types remain projection-only |
 | `@default` | Field | Sets a default value on create |

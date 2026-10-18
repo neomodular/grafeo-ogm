@@ -460,4 +460,14 @@ describe('planSchemaSync (cli-db-push spec)', () => {
       ]);
     });
   });
+
+  // v2.4.8 README fix: the docs claimed `@id` creates a unique constraint.
+  // Only `@unique` does — pinned here so docs and behaviour stay aligned.
+  it('creates no constraint for @id without @unique', () => {
+    const plan = planSchemaSync(
+      parseSchema('type Tag { id: ID! @id\n name: String }'),
+      EMPTY,
+    );
+    expect(plan.create).toEqual([]);
+  });
 });
