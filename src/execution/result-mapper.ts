@@ -82,12 +82,14 @@ export class ResultMapper {
     )
       return value.toString();
 
-    // Neo4j Point → plain object
+    // Neo4j Point → plain object. v2.5.0 — `srid` is a Neo4j Integer on
+    // the driver's default (lossless) configuration; convert it like any
+    // other integer instead of leaking `{ low, high }`.
     if (neo4j.isPoint(value)) {
       const point: Record<string, unknown> = {
         x: value.x,
         y: value.y,
-        srid: value.srid,
+        srid: ResultMapper.convertNeo4jTypes(value.srid, depth + 1),
       };
       if (value.z !== undefined) point.z = value.z;
       return point;
