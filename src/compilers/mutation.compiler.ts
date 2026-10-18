@@ -829,22 +829,48 @@ export class MutationCompiler {
     const lines: string[] = [];
     const params: Record<string, unknown> = {};
 
-    // Validate and sanitize: only scalar properties allowed
+    // Validate and sanitize: only scalar properties allowed. The column set
+    // is the UNION of every item's keys — pre-2.4.6 it was `data[0]`'s
+    // keys only, so a field that only later items supplied was silently
+    // dropped (and a relationship field there was neither rejected nor
+    // written).
     const scalarKeys: string[] = [];
-    for (const key of Object.keys(data[0])) {
-      if (nodeDef.relationships.has(key))
-        throw new OGMError(
-          `createMany does not support relationship fields. Found: "${key}". Use create() for nested operations.`,
-        );
-      assertSafePropertyName(key, 'createMany property');
-      scalarKeys.push(key);
-    }
+    for (const [index, item] of data.entries())
+      for (const key of Object.keys(item)) {
+        if (item[key] === undefined || scalarKeys.includes(key)) continue;
+        if (nodeDef.relationships.has(key)) {
+          // Only the first item's relationship fields have ever been
+          // rejected; in later items they were (and still are) skipped
+          // unwritten. Rejecting them everywhere would make calls that
+          // succeed today throw — tracked as a separate, breaking change.
+          if (index > 0) continue;
+          throw new OGMError(
+            `createMany does not support relationship fields. Found: "${key}". Use create() for nested operations.`,
+          );
+        }
+        assertSafePropertyName(key, 'createMany property');
+        scalarKeys.push(key);
+      }
 
     // Identify @id (generated) fields that are NOT provided in data
     const generatedFields: string[] = [];
     for (const [, propDef] of nodeDef.properties)
       if (propDef.isGenerated && !scalarKeys.includes(propDef.name))
         generatedFields.push(propDef.name);
+
+    // A @id column supplied by SOME items only: the others still get a
+    // generated id (as create() would), never null.
+    const isPartialGenerated = (key: string) =>
+      Boolean(nodeDef.properties.get(key)?.isGenerated) &&
+      data.some((d) => d[key] === undefined || d[key] === null);
+    const columnExpr = (key: string) => {
+      const expr = wrapListItemExpr(
+        `item.${escapeIdentifier(key)}`,
+        data.map((d) => d[key]),
+        nodeDef.properties.get(key),
+      );
+      return isPartialGenerated(key) ? `coalesce(${expr}, randomUUID())` : expr;
+    };
 
     // Whole-column `@default`s: applied only when NO item supplies the
     // field. Per-item gaps inside a provided column stay null — one
@@ -861,15 +887,23 @@ export class MutationCompiler {
       )
         defaultedProps.push(propDef);
 
-    // Build sanitized items (strip undefined values)
+    // Build sanitized items (strip undefined values). A `@default` field
+    // whose column is supplied by only some items is filled per item for
+    // the others — exactly what create() gives an item that omits it. An
+    // explicit `null` is kept as null.
     const sanitizedItems = data.map((item) => {
       const sanitized: Record<string, unknown> = {};
-      for (const key of scalarKeys)
+      for (const key of scalarKeys) {
+        const propDef = nodeDef.properties.get(key);
         if (item[key] !== undefined)
-          sanitized[key] = coerceWriteValue(
-            item[key],
-            nodeDef.properties.get(key),
-          );
+          sanitized[key] = coerceWriteValue(item[key], propDef);
+        else if (
+          propDef?.defaultValue !== undefined &&
+          !propDef.isGenerated &&
+          !propDef.isCypher
+        )
+          sanitized[key] = resolveDefaultWriteValue(propDef);
+      }
       return sanitized;
     });
     params.items = sanitizedItems;
@@ -877,11 +911,16 @@ export class MutationCompiler {
     lines.push('UNWIND $items AS item');
 
     if (skipDuplicates) {
-      // Find unique/id fields present in data for MERGE key
+      // MERGE key: the unique/id fields EVERY item supplies — an item
+      // missing one would MERGE on null, which Neo4j rejects.
       const mergeKeys: string[] = [];
       for (const key of scalarKeys) {
         const propDef = nodeDef.properties.get(key);
-        if (propDef && (propDef.isUnique || propDef.isGenerated))
+        if (
+          propDef &&
+          (propDef.isUnique || propDef.isGenerated) &&
+          data.every((d) => d[key] !== undefined && d[key] !== null)
+        )
           mergeKeys.push(key);
       }
 
@@ -907,13 +946,7 @@ export class MutationCompiler {
       const onCreateSets: string[] = [];
       for (const key of scalarKeys)
         if (!mergeKeys.includes(key))
-          onCreateSets.push(
-            `n.${escapeIdentifier(key)} = ${wrapListItemExpr(
-              `item.${escapeIdentifier(key)}`,
-              data.map((d) => d[key]),
-              nodeDef.properties.get(key),
-            )}`,
-          );
+          onCreateSets.push(`n.${escapeIdentifier(key)} = ${columnExpr(key)}`);
 
       for (const field of generatedFields)
         onCreateSets.push(`n.${escapeIdentifier(field)} = randomUUID()`);
@@ -939,13 +972,7 @@ export class MutationCompiler {
       for (const field of generatedFields)
         propParts.push(`${escapeIdentifier(field)}: randomUUID()`);
       for (const key of scalarKeys)
-        propParts.push(
-          `${escapeIdentifier(key)}: ${wrapListItemExpr(
-            `item.${escapeIdentifier(key)}`,
-            data.map((d) => d[key]),
-            nodeDef.properties.get(key),
-          )}`,
-        );
+        propParts.push(`${escapeIdentifier(key)}: ${columnExpr(key)}`);
 
       for (const propDef of defaultedProps) {
         const paramName = `default_${propDef.name}`;
