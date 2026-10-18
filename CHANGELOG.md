@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.2 (2026-10-18) — a same-item disconnect-all no longer orphans the node it creates
+
+### 🐛 `create` ran before `disconnect` inside one nested update item
+
+Inside one nested update item, the operations ran in this order: delete, **create**, disconnect, connect, update. So `update: { posts: [{ disconnect: [{}], create: [{ node }] }] }`, the "replace everything with this new one" idiom, first linked the new node and then the disconnect-all removed that link too. The new node was left **orphaned**, and the parent had no related nodes. The same input to `updateMany` did this to every matched node.
+
+`create` now runs after `disconnect` and `connect`. The order is delete, disconnect, connect, create, update, which matches `@neo4j/graphql`. `create` still runs before `update`, so nothing else changes. Putting the two ops in separate items (`[{ disconnect: [{}] }, { create: [...] }]`) already worked and is unchanged.
+
+**Data written by earlier versions:** nodes created through this idiom exist but are unlinked. Look for nodes of the target type with no incoming relationship of that type.
+
 ## 2.4.1 (2026-10-18) — `upsert` generates the `@id` when it creates
 
 ### 🐛 A node created by `upsert` was stored without its `@id`
