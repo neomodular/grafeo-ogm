@@ -336,8 +336,9 @@ describe('Model — @cypher fields end-to-end', () => {
       expect(whereIdx).toBeGreaterThan(wherePreludeIdx);
       expect(selPreludeIdx).toBeGreaterThan(whereIdx);
       expect(sortPreludeIdx).toBeGreaterThan(selPreludeIdx);
-      expect(returnIdx).toBeGreaterThan(sortPreludeIdx);
-      expect(orderByIdx).toBeGreaterThan(returnIdx);
+      // v2.4.3 — ORDER BY runs on `WITH *` BEFORE the projection.
+      expect(orderByIdx).toBeGreaterThan(sortPreludeIdx);
+      expect(returnIdx).toBeGreaterThan(orderByIdx);
 
       // The sort prelude's WITH MUST carry forward `__sel_n_upperDrugName`
       // so the trailing RETURN can still reference it.

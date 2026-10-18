@@ -98,3 +98,17 @@ export function compileSortClause(args: {
     orderBy: sortItems.length ? `ORDER BY ${sortItems.join(', ')}` : '',
   };
 }
+
+/**
+ * ORDER BY / SKIP / LIMIT must run on a pass-through `WITH *` BEFORE the
+ * RETURN projection. After `RETURN n { ... }` the column `n` is the
+ * projected MAP, so `ORDER BY n.<field>` read a key the projection didn't
+ * select and every row sorted as null — sort (and therefore pagination)
+ * was silently ignored for any field not in the selection. Pre-2.4.3 the
+ * options trailed the RETURN. `WITH *` keeps every alias (`__sel_*`,
+ * `__sort_*`, `__typename`, ...) in scope, and the RETURN preserves the
+ * incoming row order. Paging before projecting is also cheaper.
+ */
+export function orderBeforeProjection(post: string): string[] {
+  return post ? ['WITH *', post] : [];
+}

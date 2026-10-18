@@ -313,8 +313,36 @@ describe('Model', () => {
       const returnIdx = cypher.indexOf('RETURN n {');
       const orderByIdx = cypher.indexOf('ORDER BY');
       expect(preIdx).toBeGreaterThan(-1);
-      expect(returnIdx).toBeGreaterThan(preIdx);
-      expect(orderByIdx).toBeGreaterThan(returnIdx);
+      // v2.4.3 — ORDER BY runs on `WITH *` BEFORE the projection; after
+      // `RETURN n {...}` the column `n` is the map, not the node.
+      expect(orderByIdx).toBeGreaterThan(preIdx);
+      expect(returnIdx).toBeGreaterThan(orderByIdx);
+      expect(cypher).toContain(
+        'WITH *\nORDER BY __sort_insensitiveDrugName ASC',
+      );
+    });
+
+    it('orders by a stored field BEFORE projecting it away (v2.4.3)', async () => {
+      await model.find({
+        selectionSet: '{ id }',
+        options: { sort: [{ title: 'DESC' }], offset: 1, limit: 2 },
+      });
+      const cypher = getCypher(mockSession);
+      expect(cypher).toContain(
+        [
+          'WITH *',
+          'ORDER BY n.`title` DESC',
+          'SKIP $options_offset',
+          'LIMIT $options_limit',
+          'RETURN n {',
+        ].join('\n'),
+      );
+      expect(cypher.trimEnd().endsWith('}')).toBe(true);
+    });
+
+    it('emits no WITH * when there are no options', async () => {
+      await model.find({ selectionSet: '{ id }' });
+      expect(getCypher(mockSession)).not.toContain('WITH *');
     });
 
     it('should mix stored and @cypher sorts in a single ORDER BY', async () => {

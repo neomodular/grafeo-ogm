@@ -23,7 +23,10 @@ import {
   WhereInput,
 } from './schema/types';
 import { CypherFieldScope } from './utils/cypher-field-projection';
-import { compileSortClause } from './utils/cypher-sort-projection';
+import {
+  compileSortClause,
+  orderBeforeProjection,
+} from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
@@ -438,19 +441,19 @@ export class InterfaceModel<
 
     if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (sortPre) cypherParts.push(sortPre);
-    cypherParts.push(`RETURN ${injected}`);
-    if (sortOrderBy) cypherParts.push(sortOrderBy);
 
     // Validate offset/limit BEFORE forwarding to the driver — pre-1.7.4
     // we forwarded raw values, so a negative `limit` either errored
     // out at the driver layer or triggered an unbounded scan depending
     // on driver version. Mirror the validation in `Model.compileOptions`.
+    const postParts: string[] = [];
+    if (sortOrderBy) postParts.push(sortOrderBy);
     if (params?.options?.offset !== undefined) {
       const offset = Math.trunc(Number(params.options.offset));
       if (!Number.isFinite(offset) || offset < 0)
         throw new OGMError('offset must be a non-negative integer');
       allParams.options_offset = neo4jInt(offset);
-      cypherParts.push(`SKIP $options_offset`);
+      postParts.push(`SKIP $options_offset`);
     }
     if (params?.options?.limit !== undefined) {
       const limit = Math.trunc(Number(params.options.limit));
@@ -458,8 +461,12 @@ export class InterfaceModel<
         throw new OGMError('limit must be a non-negative integer');
       const MAX_LIMIT = 10_000;
       allParams.options_limit = neo4jInt(Math.min(limit, MAX_LIMIT));
-      cypherParts.push(`LIMIT $options_limit`);
+      postParts.push(`LIMIT $options_limit`);
     }
+    // Same as Model.find: order/page BEFORE the projection, or ORDER BY
+    // reads the projected map instead of the node.
+    cypherParts.push(...orderBeforeProjection(postParts.join('\n')));
+    cypherParts.push(`RETURN ${injected}`);
 
     const cypher = cypherParts.join('\n');
     const result = await this.executor.execute(

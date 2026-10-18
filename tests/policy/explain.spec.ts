@@ -185,7 +185,10 @@ describe('Model.explainPolicies — guards (6.1)', () => {
   it('defaults the candidate limit to 100', async () => {
     const { bound, recorded } = setup(FORMS);
     await bound.model('Chart').explainPolicies();
-    expect(recorded[0].cypher.split('\n').pop()).toBe('LIMIT $options_limit');
+    // v2.4.3 — the LIMIT applies on `WITH *` right before the RETURN.
+    const lines = recorded[0].cypher.split('\n');
+    expect(lines[lines.length - 2]).toBe('LIMIT $options_limit');
+    expect(lines[lines.length - 1]).toMatch(/^RETURN /);
     expect((recorded[0].params.options_limit as Integer).toNumber()).toBe(100);
   });
 
@@ -595,16 +598,19 @@ describe('Model.explainPolicies — selection (6.8)', () => {
     // The policy fragment reads the where-scope alias inside the explain WITH.
     expect(lines[explainWith]).toContain('(__where_n_riskScore < $param0)');
 
-    // Every WITH after the explain projection must carry both vars.
+    // Every WITH after the explain projection must carry both vars
+    // (`WITH *`, the v2.4.3 order/page step, carries everything).
     for (const l of lines.slice(explainWith + 1))
-      if (l.startsWith('WITH '))
+      if (l.startsWith('WITH ') && l !== 'WITH *')
         expect(l).toMatch(/__explain_outcomes, __explain_visible/);
 
     expect(lines.find((l) => l.startsWith('RETURN '))).toMatch(
       /, __explain_outcomes, __explain_visible$/,
     );
     expect(lines).toContain('SKIP $options_offset');
-    expect(lines[lines.length - 1]).toBe('LIMIT $options_limit');
+    // v2.4.3 — paging runs on `WITH *` before the RETURN projection.
+    expect(lines[lines.length - 2]).toBe('LIMIT $options_limit');
+    expect(lines[lines.length - 1]).toMatch(/^RETURN /);
   });
 });
 

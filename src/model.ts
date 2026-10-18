@@ -40,7 +40,10 @@ import type {
 } from './policy/types';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
 import { CypherFieldScope } from './utils/cypher-field-projection';
-import { compileSortClause } from './utils/cypher-sort-projection';
+import {
+  compileSortClause,
+  orderBeforeProjection,
+} from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
@@ -687,8 +690,8 @@ export class Model<
 
     if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (opts.pre) cypherParts.push(opts.pre);
+    cypherParts.push(...orderBeforeProjection(opts.post));
     cypherParts.push(`RETURN ${returnClause}`);
-    if (opts.post) cypherParts.push(opts.post);
 
     const cypher = cypherParts.join('\n');
     const result = await this.executor.execute(
@@ -835,10 +838,10 @@ export class Model<
 
     if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (opts.pre) cypherParts.push(opts.pre);
+    cypherParts.push(...orderBeforeProjection(opts.post));
     cypherParts.push(
       `RETURN ${returnClause}, ${EXPLAIN_OUTCOMES}, ${EXPLAIN_VISIBLE}`,
     );
-    if (opts.post) cypherParts.push(opts.post);
 
     const result = await this.executor.execute(
       cypherParts.join('\n'),
