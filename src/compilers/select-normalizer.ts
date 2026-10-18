@@ -56,7 +56,13 @@ export class SelectNormalizer {
 
       assertSafeKey(fieldName, 'select input');
 
-      const isConnection = fieldName.endsWith('Connection');
+      // v2.5.0 — a `*Connection` key is a connection only when its base
+      // name is a relationship. Pre-2.5.0 every such key was routed to
+      // `normalizeConnection`, which silently dropped a scalar like
+      // `internetConnection: String`.
+      const isConnection =
+        fieldName.endsWith('Connection') &&
+        nodeDef.relationships.has(fieldName.slice(0, -'Connection'.length));
 
       if (isConnection) {
         const connectionNode = this.normalizeConnection(

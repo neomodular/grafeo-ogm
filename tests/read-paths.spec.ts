@@ -130,3 +130,27 @@ describe('inline-fragment @cypher fields on abstract types (v2.5.0)', () => {
     );
   });
 });
+
+describe('typed select keys ending in "Connection" (v2.5.0)', () => {
+  it('a scalar named *Connection is selected as a scalar', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      select: { id: true, internetConnection: true },
+    } as never);
+    expect(h.cypher()).toContain('RETURN n { .`id`, .`internetConnection` }');
+  });
+
+  it('a relationship connection is still a connection', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      select: {
+        postsConnection: {
+          select: { edges: { node: { select: { id: true } } } },
+        },
+      },
+    } as never);
+    expect(h.cypher()).toContain(
+      'postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { node: n0 { .`id` } }] }',
+    );
+  });
+});
