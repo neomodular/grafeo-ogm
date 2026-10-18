@@ -21,11 +21,20 @@ export function buildCypherFieldCall(
   statement: string,
   nodeVar: string,
   columnName: string,
+  /**
+   * v2.5.0 — run the statement only for nodes carrying this label (an
+   * implementer's field selected through an inline fragment on an
+   * abstract type). Other rows still keep their row, with `null`.
+   */
+  guardLabel?: string,
 ): string {
   const col = escapeIdentifier(columnName);
   return [
     `CALL {`,
     `  WITH ${nodeVar}`,
+    ...(guardLabel !== undefined
+      ? [`  WITH ${nodeVar} WHERE ${nodeVar}:${escapeIdentifier(guardLabel)}`]
+      : []),
     `  CALL {`,
     `    WITH ${nodeVar}`,
     `    WITH ${nodeVar} AS this`,
@@ -141,10 +150,22 @@ export class CypherFieldScope {
    * The same `fieldName` registered twice returns the same alias and DOES
    * NOT emit a duplicate prelude.
    */
-  register(fieldName: string, propDef: PropertyDefinition): string {
+  register(
+    fieldName: string,
+    propDef: PropertyDefinition,
+    /**
+     * v2.5.0 — project only for nodes with this label (see
+     * `buildCypherFieldCall`); keyed and aliased separately per label.
+     */
+    guardLabel?: string,
+  ): string {
     assertSafeIdentifier(fieldName, '@cypher field');
+    if (guardLabel !== undefined)
+      assertSafeIdentifier(guardLabel, '@cypher guard label');
 
-    const cached = this.aliases.get(fieldName);
+    const key =
+      guardLabel === undefined ? fieldName : `${guardLabel}:${fieldName}`;
+    const cached = this.aliases.get(key);
     if (cached) return cached;
 
     if (!propDef.cypherStatement)
@@ -155,21 +176,29 @@ export class CypherFieldScope {
     const columnName = propDef.cypherColumnName ?? fieldName;
     assertSafeIdentifier(columnName, '@cypher columnName');
 
-    const alias = `${this.aliasNamespace}_${this.nodeVar}_${fieldName}`;
+    const alias =
+      guardLabel === undefined
+        ? `${this.aliasNamespace}_${this.nodeVar}_${fieldName}`
+        : `${this.aliasNamespace}_${this.nodeVar}_${guardLabel}_${fieldName}`;
     assertSafeIdentifier(alias, '@cypher alias');
 
     const carry = [...this.preserveVars, ...this.carriedAliases];
     const carryStr = carry.length ? `, ${carry.join(', ')}` : '';
 
     this.callLines.push(
-      buildCypherFieldCall(propDef.cypherStatement, this.nodeVar, columnName),
+      buildCypherFieldCall(
+        propDef.cypherStatement,
+        this.nodeVar,
+        columnName,
+        guardLabel,
+      ),
     );
     this.callLines.push(
       `WITH ${this.nodeVar}${carryStr}, ${escapeIdentifier(columnName)} AS ${alias}`,
     );
 
     this.carriedAliases.push(alias);
-    this.aliases.set(fieldName, alias);
+    this.aliases.set(key, alias);
 
     return alias;
   }

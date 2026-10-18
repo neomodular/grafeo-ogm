@@ -66,6 +66,11 @@ export const typeDefs = /* GraphQL */ `
         statement: "RETURN this.rank * 10 AS dcount"
         columnName: "dcount"
       )
+    owners: Int
+      @cypher(
+        statement: "MATCH (this)<-[:LB_HAS_THING]-(u) RETURN count(u) AS owners"
+        columnName: "owners"
+      )
   }
 `;
 

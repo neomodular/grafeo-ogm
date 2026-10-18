@@ -33,6 +33,7 @@ function harness(withPolicies = false) {
   const bound = withPolicies ? ogm.withContext({}) : ogm;
   return {
     model: (name: string) => bound.model(name),
+    iface: (name: string) => bound.interfaceModel(name),
     cypher: () => last(session.run.mock.calls)[0] as string,
     params: () => last(session.run.mock.calls)[1] as Record<string, unknown>,
   };
@@ -83,6 +84,49 @@ describe('connection totalCount (v2.5.0)', () => {
       .find({ selectionSet: '{ postsConnection { edges { node { id } } } }' });
     expect(h.cypher()).toContain(
       'postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { node: n0 { .`id` } }] } }',
+    );
+  });
+});
+
+describe('inline-fragment @cypher fields on abstract types (v2.5.0)', () => {
+  it("InterfaceModel projects an implementer's @cypher field under a label guard", async () => {
+    const h = harness();
+    await h
+      .iface('LbThing')
+      .find({ selectionSet: '{ id ... on LbDoc { dcount } }' });
+    const cypher = h.cypher();
+    expect(cypher).toContain('  WITH n WHERE n:`LbDoc`\n  CALL {');
+    expect(cypher).toContain('`dcount` AS __sel_n_LbDoc_dcount');
+    expect(cypher).toContain(
+      '`dcount`: CASE WHEN n:`LbDoc` THEN __sel_n_LbDoc_dcount END',
+    );
+  });
+
+  it('stored fragment fields keep the plain projection', async () => {
+    const h = harness();
+    await h.iface('LbThing').find({
+      selectionSet: '{ id ... on LbPost { title } }',
+    });
+    expect(h.cypher()).toContain('.`id`, .`title` , __typename: __typename }');
+  });
+
+  it('nested interface targets project inline under CASE', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      selectionSet: '{ things { ... on LbDoc { dcount } } }',
+    });
+    expect(h.cypher()).toContain(
+      '`dcount`: CASE WHEN n0:`LbDoc` THEN head(COLLECT { WITH n0 AS this\n  RETURN this.rank * 10 AS dcount\n}) END',
+    );
+  });
+
+  it('a field selected both directly and in a fragment is unconditional', async () => {
+    const h = harness();
+    await h.iface('LbThing').find({
+      selectionSet: '{ ... on LbDoc { rank } rank }',
+    });
+    expect(h.cypher()).toContain(
+      "'LbDoc']]), .`rank` , __typename: __typename }",
     );
   });
 });

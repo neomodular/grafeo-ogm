@@ -9,7 +9,11 @@ import {
 
 import { OGMError } from '../errors';
 import type { PolicyContextBundle } from '../policy/types';
-import type { NodeDefinition, SchemaMetadata } from '../schema/types';
+import type {
+  NodeDefinition,
+  PropertyDefinition,
+  SchemaMetadata,
+} from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
 import {
   CypherFieldScope,
@@ -62,6 +66,13 @@ export interface SelectionNode {
    * projection carries `totalCount` alone (v2.5.0).
    */
   totalCountOnly?: boolean;
+  /**
+   * The concrete types whose inline fragments selected this field
+   * (`... on B { x }`); absent when it was selected unconditionally.
+   * v2.5.0 — lets an abstract-type projection resolve an implementer's
+   * own `@cypher` field against that implementer.
+   */
+  typeConditions?: string[];
 }
 
 /**
@@ -183,6 +194,19 @@ export class SelectionCompiler {
 
         assertSafeIdentifier(node.fieldName, 'selection field');
 
+        if (isAbstract && node.typeConditions) {
+          const conditional = this.compileFragmentScalar(
+            node,
+            nodeVar,
+            nodeDef,
+            cypherScope,
+          );
+          if (conditional) {
+            parts.push(conditional);
+            continue;
+          }
+        }
+
         // `@cypher` scalar fields normally project via a CALL { ... }
         // prelude registered on the surrounding pipeline's `cypherScope`.
         // Inside a nested relationship pattern comprehension preludes have
@@ -265,6 +289,51 @@ export class SelectionCompiler {
   }
 
   /**
+   * Project a scalar selected through inline fragments on an abstract type
+   * (v2.5.0) when at least one fragment's concrete type declares it as a
+   * `@cypher` field: `CASE WHEN n:B THEN <B's projection> … END`. Pre-2.5.0
+   * the field was looked up on the abstract type, where it doesn't exist,
+   * and projected as a stored property — always null.
+   *
+   * Returns `null` (caller keeps the regular projection, byte-identical)
+   * when the abstract type declares the field as `@cypher` itself, when a
+   * condition isn't a concrete type, or when no fragment type declares it
+   * as `@cypher`.
+   */
+  private compileFragmentScalar(
+    node: SelectionNode,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    cypherScope: CypherFieldScope | null,
+  ): string | null {
+    if (nodeDef.properties.get(node.fieldName)?.isCypher) return null;
+    const members: { def: NodeDefinition; prop: PropertyDefinition }[] = [];
+    for (const typeName of node.typeConditions ?? []) {
+      const def = this.schema.nodes.get(typeName);
+      if (!def) return null;
+      const prop = def.properties.get(node.fieldName);
+      if (prop) members.push({ def, prop });
+    }
+    if (!members.some((m) => m.prop.isCypher && m.prop.cypherStatement))
+      return null;
+
+    const branches = members.map(({ def, prop }) => {
+      let expr: string;
+      if (prop.isCypher && prop.cypherStatement)
+        expr = cypherScope
+          ? cypherScope.register(node.fieldName, prop, def.label)
+          : buildInlineCypherFieldExpr(
+              prop.cypherStatement,
+              nodeVar,
+              `${def.typeName}.${node.fieldName}`,
+            );
+      else expr = `${nodeVar}.${escapeIdentifier(node.fieldName)}`;
+      return `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`;
+    });
+    return `${escapeIdentifier(node.fieldName)}: CASE ${branches.join(' ')} END`;
+  }
+
+  /**
    * Parse a GraphQL selection set string into SelectionNode[].
    *
    * @param selectionSet - Raw string like "\{ id name drugs \{ id \} \}"
@@ -317,20 +386,41 @@ export class SelectionCompiler {
   /**
    * Convert a GraphQL SelectionSetNode into SelectionNode[].
    */
-  private convertSelectionSet(selectionSet: SelectionSetNode): SelectionNode[] {
+  private convertSelectionSet(
+    selectionSet: SelectionSetNode,
+    /** Type condition of the enclosing inline fragment, if any (v2.5.0). */
+    typeCondition?: string,
+  ): SelectionNode[] {
     const nodes: SelectionNode[] = [];
-    const seen = new Set<string>();
+    const seen = new Map<string, SelectionNode>();
 
     for (const sel of selectionSet.selections) {
-      // Handle inline fragments (... on Type { fields }) by merging their fields
+      // Handle inline fragments (... on Type { fields }) by merging their
+      // fields. v2.5.0 — each merged field remembers the fragment types
+      // that selected it (`typeConditions`), so an abstract-type
+      // projection can resolve an implementer's own field.
       if (sel.kind === Kind.INLINE_FRAGMENT) {
         const fragment = sel as InlineFragmentNode;
+        const condition = fragment.typeCondition?.name.value ?? typeCondition;
         if (fragment.selectionSet)
-          for (const merged of this.convertSelectionSet(fragment.selectionSet))
-            if (!seen.has(merged.fieldName)) {
-              seen.add(merged.fieldName);
+          for (const merged of this.convertSelectionSet(
+            fragment.selectionSet,
+            condition,
+          )) {
+            const existing = seen.get(merged.fieldName);
+            if (!existing) {
+              seen.set(merged.fieldName, merged);
               nodes.push(merged);
-            }
+            } else if (existing.typeConditions)
+              existing.typeConditions = merged.typeConditions
+                ? [
+                    ...new Set([
+                      ...existing.typeConditions,
+                      ...merged.typeConditions,
+                    ]),
+                  ]
+                : undefined;
+          }
 
         continue;
       }
@@ -339,8 +429,12 @@ export class SelectionCompiler {
       const field = sel as FieldNode;
       const fieldName = field.name.value;
 
-      if (seen.has(fieldName)) continue;
-      seen.add(fieldName);
+      const existing = seen.get(fieldName);
+      if (existing) {
+        // Also selected outside any fragment → unconditional.
+        if (typeCondition === undefined) delete existing.typeConditions;
+        continue;
+      }
 
       const hasChildren = !!field.selectionSet;
       const isConnection = fieldName.endsWith('Connection');
@@ -352,6 +446,9 @@ export class SelectionCompiler {
         isRelationship: hasChildren && !isConnection,
         isConnection,
       };
+
+      if (typeCondition !== undefined) node.typeConditions = [typeCondition];
+      seen.set(fieldName, node);
 
       if (hasChildren && field.selectionSet)
         if (isConnection)
