@@ -4,6 +4,11 @@
  * "this compiles" / "this is rejected" rather than a text match on the
  * emitter output.
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { generateTypes } from '../src/generator';
+import { SchemaParseError } from '../src/generator/generate-types';
 import { typecheckGenerated } from './helpers/generated-typecheck';
 
 const PRELUDE = `
@@ -126,5 +131,64 @@ type _i = Expect<Equal<keyof InterfaceModelMap, 'Entity'>>;
 `,
     );
     expect(errors).toEqual([]);
+  });
+});
+
+describe('generated type-name collisions', () => {
+  async function generate(typeDefs: string): Promise<void> {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grafeo-collide-'));
+    try {
+      await generateTypes({
+        typeDefs,
+        outFile: path.join(dir, 'out.ts'),
+        config: { formatOutput: false },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // Through v2.4.7 the generator wrote ~20 duplicate declarations (TS2300)
+  // for this schema and the output did not compile. The naming scheme is
+  // inherited from @neo4j/graphql and stays; the clash is reported instead.
+  it('throws naming both sources when two fields map to the same type names', async () => {
+    const typeDefs = `
+      type User @node {
+        id: ID! @id
+        postComments: [Comment!]! @relationship(type: "WROTE", direction: OUT)
+      }
+      type UserPost @node {
+        id: ID! @id
+        comments: [Comment!]! @relationship(type: "HAS", direction: OUT)
+      }
+      type Comment @node {
+        id: ID! @id
+      }
+    `;
+    const run = generate(typeDefs);
+    await expect(run).rejects.toThrow(SchemaParseError);
+    await expect(generate(typeDefs)).rejects.toThrow(
+      /UserPostCommentsConnectionWhere.*User\.postComments.*UserPost\.comments/s,
+    );
+  });
+
+  it('throws when a node name collides with a generated helper type', async () => {
+    await expect(
+      generate(`
+        type Book @node { id: ID! @id }
+        type BookWhere @node { id: ID! @id }
+      `),
+    ).rejects.toThrow(/"BookWhere".*type BookWhere.*type Book\b/s);
+  });
+
+  it('accepts schemas without collisions', async () => {
+    await expect(
+      generate(
+        fs.readFileSync(
+          path.join(__dirname, '..', 'examples', 'schema.graphql'),
+          'utf-8',
+        ),
+      ),
+    ).resolves.toBeUndefined();
   });
 });

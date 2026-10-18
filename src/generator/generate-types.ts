@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { parseSchema } from '../schema/parser';
 import type { SchemaMetadata } from '../schema/types';
+import { toPascalCase } from './type-emitters/helpers';
 import {
   emitHeader,
   emitImports,
@@ -118,6 +119,91 @@ function countExportedTypes(source: string): number {
   return count;
 }
 
+const DECLARATION_PATTERN =
+  /^export (?:declare )?(?:type|interface|enum|const enum|class|const|function) ([A-Za-z_$][\w$]*)/gm;
+
+/**
+ * Reject output that declares the same identifier twice. Generated names
+ * concatenate owner and field (`<Owner><PascalField>ConnectionWhere`, ...),
+ * a scheme inherited from @neo4j/graphql that must not change, so e.g.
+ * `User.postComments` and `UserPost.comments` both produce
+ * `UserPostCommentsConnectionWhere`. Through v2.4.7 such schemas generated
+ * a file with duplicate declarations (TS2300) that did not compile; now
+ * generation fails with the clashing names and the schema elements that
+ * produce them.
+ */
+function assertUniqueTypeNames(output: string, schema: SchemaMetadata): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const match of output.matchAll(DECLARATION_PATTERN)) {
+    const name = match[1];
+    if (seen.has(name)) duplicates.add(name);
+    seen.add(name);
+  }
+  if (duplicates.size === 0) return;
+
+  const MAX_LISTED = 5;
+  const lines = [...duplicates]
+    .slice(0, MAX_LISTED)
+    .map(
+      (name) =>
+        `  - "${name}" is produced by: ${describeNameSources(name, schema).join(', ')}`,
+    );
+  if (duplicates.size > MAX_LISTED)
+    lines.push(`  ... and ${duplicates.size - MAX_LISTED} more`);
+
+  throw new SchemaParseError(
+    `Generated type names collide (${duplicates.size} duplicate declaration` +
+      `${duplicates.size === 1 ? '' : 's'}); the generated file would not compile:\n` +
+      `${lines.join('\n')}\n` +
+      'Rename one of the clashing types or relationship fields.',
+  );
+}
+
+/**
+ * Best-effort attribution of a generated identifier to schema elements:
+ * relationship fields whose `<Owner><PascalField>` (or aggregation
+ * `<Owner><Target><PascalField>`) prefix it carries, plus types with that
+ * exact name. Falls back to types whose name prefixes it.
+ */
+function describeNameSources(name: string, schema: SchemaMetadata): string[] {
+  const sources: string[] = [];
+  const owners = [
+    ...[...schema.nodes.values()].map((n) => ({
+      name: n.typeName,
+      rels: n.relationships,
+    })),
+    ...[...schema.interfaces.values()].map((i) => ({
+      name: i.name,
+      rels: i.relationships,
+    })),
+  ];
+  for (const owner of owners)
+    for (const rel of owner.rels.values()) {
+      const pascal = toPascalCase(rel.fieldName);
+      if (
+        name.startsWith(`${owner.name}${pascal}`) ||
+        name.startsWith(`${owner.name}${rel.target}${pascal}`)
+      )
+        sources.push(`${owner.name}.${rel.fieldName}`);
+    }
+
+  const typeNames = [
+    ...schema.nodes.keys(),
+    ...schema.interfaces.keys(),
+    ...schema.relationshipProperties.keys(),
+    ...schema.enums.keys(),
+    ...(schema.unions?.keys() ?? []),
+  ];
+  for (const t of typeNames) if (t === name) sources.push(`type ${t}`);
+
+  if (sources.length < 2)
+    for (const t of typeNames.sort((a, b) => b.length - a.length))
+      if (t !== name && name.startsWith(t)) sources.push(`type ${t}`);
+
+  return sources.length > 0 ? [...new Set(sources)] : ['(unknown)'];
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -190,6 +276,7 @@ export async function generateTypes(
 
   // 6. Join sections -------------------------------------------------------
   let output = sections.join('\n\n');
+  assertUniqueTypeNames(output, metadata);
 
   // 7. Count types ---------------------------------------------------------
   const typeCount = countExportedTypes(output);
