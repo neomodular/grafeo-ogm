@@ -52,6 +52,16 @@ export interface SelectionNode {
     direction: 'ASC' | 'DESC';
     scope: 'node' | 'edge';
   }>;
+  /**
+   * Connection only: `totalCount` was selected (v2.5.0). Pre-2.5.0 it was
+   * silently dropped although the generated connection type declares it.
+   */
+  totalCount?: boolean;
+  /**
+   * Connection only: `totalCount` was selected WITHOUT `edges`, so the
+   * projection carries `totalCount` alone (v2.5.0).
+   */
+  totalCountOnly?: boolean;
 }
 
 /**
@@ -362,9 +372,13 @@ export class SelectionCompiler {
     selectionSet: SelectionSetNode,
     parentNode: SelectionNode,
   ): void {
+    let selectsEdges = false;
     for (const sel of selectionSet.selections) {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
+
+      if (field.name.value === 'totalCount') parentNode.totalCount = true;
+      if (field.name.value === 'edges') selectsEdges = true;
 
       if (field.name.value === 'edges' && field.selectionSet)
         for (const edgeSel of field.selectionSet.selections) {
@@ -382,6 +396,8 @@ export class SelectionCompiler {
             );
         }
     }
+    if (parentNode.totalCount && !selectsEdges)
+      parentNode.totalCountOnly = true;
   }
 
   /**
@@ -774,8 +790,17 @@ export class SelectionCompiler {
         userWhere: undefined,
       });
 
+    // v2.5.0 — `totalCount` counts the very comprehension `edges` lists
+    // (same pattern, same `where`, same target `read` policy), so it can
+    // never count a node the caller cannot see. Pre-2.5.0 it was dropped.
+    const totalCount = node.totalCount
+      ? `totalCount: size([${pattern}${whereClause} | 1])`
+      : '';
+    if (node.totalCountOnly) return `{ ${totalCount} }`;
+    const withTotal = totalCount ? `, ${totalCount}` : '';
+
     if (sortKeyTokens.length === 0)
-      return `{ edges: [${pattern}${whereClause} | ${innerMap}] }`;
+      return `{ edges: [${pattern}${whereClause} | ${innerMap}]${withTotal} }`;
 
     // Re-project only the user-facing keys so synthetic __skN scalars don't
     // leak out of the projection.
@@ -785,7 +810,7 @@ export class SelectionCompiler {
         : `{}`;
     return `{ edges: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
       ', ',
-    )}]) | ${outerProjection}] }`;
+    )}]) | ${outerProjection}]${withTotal} }`;
   }
 
   /**

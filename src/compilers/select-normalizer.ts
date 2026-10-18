@@ -295,6 +295,13 @@ export class SelectNormalizer {
     if (obj.select && typeof obj.select === 'object') {
       const selectObj = obj.select as Record<string, unknown>;
 
+      // v2.5.0 — `totalCount` was ignored (silently undefined).
+      if (selectObj.totalCount === true) {
+        node.totalCount = true;
+        if (selectObj.edges == null || selectObj.edges === false)
+          node.totalCountOnly = true;
+      }
+
       if (selectObj.edges && typeof selectObj.edges === 'object') {
         const edgesObj = selectObj.edges as Record<string, unknown>;
 
