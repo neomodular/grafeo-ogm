@@ -383,13 +383,15 @@ export class MutationCompiler {
       const prefix = `create${i}`;
       const nodeVar = i === 0 ? 'n' : `n_${i}`;
 
+      // Labels first: an unsafe label must fail as such, before any
+      // input-key check (v2.5.0 rejects unknown keys).
+      const labelStr = this.getCachedLabelString(nodeDef);
+
       const { propString, propParams } = this.buildCreateProperties(
         input,
         nodeDef,
         prefix,
       );
-
-      const labelStr = this.getCachedLabelString(nodeDef);
 
       lines.push(`CREATE (${nodeVar}:${labelStr} { ${propString} })`);
       mergeParams(params, propParams);
@@ -493,6 +495,7 @@ export class MutationCompiler {
         if (nodeDef.relationships.has(key)) continue;
         if (value === undefined) continue;
         assertSafePropertyName(key, 'update property');
+        assertKnownField(nodeDef, key, 'update');
         const propDef = nodeDef.properties.get(key);
         const paramName = `update_${key}`;
         const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -785,6 +788,7 @@ export class MutationCompiler {
         throw upsertRelationshipError(nodeDef, key, 'create');
       }
       assertSafePropertyName(key, 'create property');
+      assertKnownField(nodeDef, key, 'create');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onCreate_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -827,6 +831,7 @@ export class MutationCompiler {
         throw upsertRelationshipError(nodeDef, key, 'update');
       }
       assertSafePropertyName(key, 'update property');
+      assertKnownField(nodeDef, key, 'update');
       const propDef = nodeDef.properties.get(key);
       const paramName = `onMatch_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -939,6 +944,7 @@ export class MutationCompiler {
           );
         }
         assertSafePropertyName(key, 'createMany property');
+        assertKnownField(nodeDef, key, 'createMany');
         scalarKeys.push(key);
       }
 
@@ -1127,6 +1133,7 @@ export class MutationCompiler {
       if (nodeDef.relationships.has(key)) continue;
       if (value === undefined) continue;
       assertSafePropertyName(key, 'create property');
+      assertKnownField(nodeDef, key, 'create');
       const propDef = nodeDef.properties.get(key);
       const paramName = `${prefix}_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -2487,6 +2494,7 @@ export class MutationCompiler {
             if (targetNodeDef.relationships.has(prop)) continue;
             if (val === undefined) continue;
             assertSafePropertyName(prop, 'nested update property');
+            assertKnownField(targetNodeDef, prop, 'nested update');
             const nodePropDef = targetNodeDef.properties.get(prop);
             const paramName = `${itemPrefix}_set_${prop}`;
             setClauses.push(
@@ -2894,6 +2902,24 @@ export function unwrapAbstractCreateNode(
         `e.g. { node: { ${target.members[0] ?? 'Member'}: { … } } }. Allowed: ${target.members.map((m) => `"${m}"`).join(', ')}.`,
     );
   return [keys[0], nodeSpec[keys[0]] as Record<string, unknown>];
+}
+
+/**
+ * Reject a write key that is neither a property nor a relationship of the
+ * type (v2.5.0). Pre-2.5.0 only its spelling was checked, so a typo
+ * (`nmae`) was stored as a stray property and the intended field was left
+ * untouched — at every depth (nested creates and updates included).
+ */
+function assertKnownField(
+  nodeDef: NodeDefinition,
+  key: string,
+  input: 'create' | 'update' | 'createMany' | 'nested update',
+): void {
+  if (nodeDef.properties.has(key) || nodeDef.relationships.has(key)) return;
+  throw new OGMError(
+    `Unknown field "${key}" in the ${input} input of ${nodeDef.typeName}: it is neither a property nor a ` +
+      `relationship of the type. Declare it in the schema, or fix the key.`,
+  );
 }
 
 /**

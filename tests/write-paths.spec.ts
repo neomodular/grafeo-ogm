@@ -681,3 +681,84 @@ describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', 
     });
   });
 });
+
+describe('unknown write keys are rejected at every depth (v2.5.0)', () => {
+  const unknownField = /Unknown field "nmae" in the .* input of/;
+
+  it.each([
+    ['create', (o: OGM) => o.model('Owner').create({ input: [{ nmae: 'x' }] })],
+    [
+      'update',
+      (o: OGM) =>
+        o
+          .model('Owner')
+          .update({ where: { name: 'o' }, update: { nmae: 'x' } }),
+    ],
+    [
+      'updateMany',
+      (o: OGM) => o.model('Owner').updateMany({ data: { nmae: 'x' } }),
+    ],
+    [
+      'createMany',
+      (o: OGM) =>
+        o.model('Owner').createMany({ data: [{ name: 'a' }, { nmae: 'x' }] }),
+    ],
+    [
+      'upsert create',
+      (o: OGM) =>
+        o
+          .model('Owner')
+          .upsert({ where: { id: 'o1' }, create: { nmae: 'x' }, update: {} }),
+    ],
+    [
+      'upsert update',
+      (o: OGM) =>
+        o
+          .model('Owner')
+          .upsert({ where: { id: 'o1' }, create: {}, update: { nmae: 'x' } }),
+    ],
+    [
+      'a nested create',
+      (o: OGM) =>
+        o.model('Owner').create({
+          input: [{ posts: { create: [{ node: { nmae: 'x' } }] } }],
+        }),
+    ],
+    [
+      'a nested create under an interface',
+      (o: OGM) =>
+        o.model('Owner').create({
+          input: [{ pets: { create: [{ node: { Dog: { nmae: 'x' } } }] } }],
+        }),
+    ],
+    [
+      'a nested create inside update',
+      (o: OGM) =>
+        o.model('Owner').update({
+          update: { posts: [{ create: [{ node: { nmae: 'x' } }] }] },
+        }),
+    ],
+    [
+      'a nested update',
+      (o: OGM) =>
+        o.model('Owner').update({
+          update: { posts: [{ update: { node: { nmae: 'x' } } }] },
+        }),
+    ],
+  ])('%s', async (_label, call) => {
+    const recorded: Recorded[] = [];
+    await expect(() => call(plainOgm(recorded))).rejects.toThrow(unknownField);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it('declared properties and relationships still write', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        update: { name: 'p', posts: [{ update: { node: { title: 't' } } }] },
+      });
+    expect(recorded[0].cypher).toContain('SET n.`name` = $update_name');
+  });
+});

@@ -157,14 +157,15 @@ describe('Int/BigInt write coercion (issue #5)', () => {
       tags.forEach((tag, i) => expectInteger(tag, i + 1));
     });
 
-    it('leaves Float, String, and schema-unknown fields untouched', () => {
+    // v2.5.0 — a schema-unknown field is rejected (it used to be written
+    // as a stray property), so only declared fields are coerced here.
+    it('leaves Float and String fields untouched', () => {
       const result = compiler.compileCreate(
-        [{ rating: 4.5, title: 'x', freeform: 7 }],
+        [{ rating: 4.5, title: 'x' }],
         trackNode,
       );
       expect(result.params.create0_rating).toBe(4.5);
       expect(result.params.create0_title).toBe('x');
-      expect(result.params.create0_freeform).toBe(7);
     });
 
     it('passes through null and pre-built Integer values', () => {

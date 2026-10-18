@@ -412,4 +412,33 @@ describeLive('Write paths — live Neo4j', () => {
       expect(await postTags('p-n4')).toEqual([]);
     });
   });
+
+  // v2.5.0 — a typo'd key was stored as a stray property; it now throws
+  // before anything is written.
+  describe('unknown write keys', () => {
+    it('update / nested create with a typo throw and write nothing', async () => {
+      await seed(
+        `CREATE (:LcOwner {id: randomUUID(), runId: $runId, name: 'o-k1'})`,
+      );
+      await expect(
+        Owner().update({ where: { name: 'o-k1' }, update: { nmae: 'x' } }),
+      ).rejects.toThrow(/Unknown field "nmae"/);
+      await expect(
+        Owner().create({
+          input: [
+            {
+              runId,
+              name: 'o-k2',
+              posts: { create: [{ node: { titel: 'x' } }] },
+            },
+          ],
+        }),
+      ).rejects.toThrow(/Unknown field "titel"/);
+      const rows = await run(
+        `MATCH (n {runId: $runId}) WHERE n.nmae IS NOT NULL OR n.titel IS NOT NULL OR n.name = 'o-k2'
+         RETURN count(n) AS c`,
+      );
+      expect(rows[0].c).toBe(0);
+    });
+  });
 });
