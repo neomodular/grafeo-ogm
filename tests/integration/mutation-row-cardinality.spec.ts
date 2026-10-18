@@ -186,6 +186,64 @@ describeLive('Mutation row cardinality — live Neo4j', () => {
     expect(await chapterIds(bookId)).toEqual([`${bookId}-c3`]);
   });
 
+  // #10 — connect to a target that doesn't exist is a no-op (as in
+  // @neo4j/graphql): the SET commits AND the node is returned.
+  it('connect to a missing target is a no-op that still returns the node', async () => {
+    const bookId = await seedBook('conn-missing', 0);
+    const res = (await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      update: { title: 'set-anyway' },
+      connect: { chapters: [{ where: { node: { id: id('nope') } } }] },
+      select: { [plural]: { id: true, title: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([{ id: bookId, title: 'set-anyway' }]);
+    expect(await chapterIds(bookId)).toEqual([]);
+  });
+
+  it('single (non-array) connect to a missing target still returns the node', async () => {
+    const bookId = await seedBook('conn-missing-single', 0);
+    const res = (await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      update: { title: 'single' },
+      connect: { chapters: { where: { node: { id: id('nope') } } } },
+      select: { [plural]: { id: true, title: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([{ id: bookId, title: 'single' }]);
+  });
+
+  it('array connect to several targets returns the node once', async () => {
+    const bookId = await seedBook('conn-many', 0);
+    const a = id('conn-many-a');
+    const b = id('conn-many-b');
+    await run(
+      `CREATE (:ItCardChapter {id: $a, runId: $runId}), (:ItCardChapter {id: $b, runId: $runId})`,
+      { a, b },
+    );
+    const res = (await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      connect: {
+        chapters: [
+          { where: { node: { id: a } } },
+          { where: { node: { id: b } } },
+        ],
+      },
+      select: { [plural]: { id: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([{ id: bookId }]);
+    expect(await chapterIds(bookId)).toEqual([a, b].sort());
+  });
+
+  it('connect with an empty array still returns the node', async () => {
+    const bookId = await seedBook('conn-empty', 0);
+    const res = (await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      update: { title: 'empty-connect' },
+      connect: { chapters: [] },
+      select: { [plural]: { id: true, title: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([{ id: bookId, title: 'empty-connect' }]);
+  });
+
   it('disconnect on a node with no relationships still returns it', async () => {
     const bookId = await seedBook('empty', 0);
     const res = (await ogm.model('ItCardBook').update({
