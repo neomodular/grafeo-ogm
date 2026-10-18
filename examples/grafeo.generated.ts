@@ -1585,6 +1585,7 @@ export type AuthorSelectFields = {
           | { edge: Record<string, "ASC" | "DESC"> }
         >;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {
@@ -1627,6 +1628,7 @@ export type BookSelectFields = {
           | { edge: Record<string, "ASC" | "DESC"> }
         >;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {
@@ -1644,6 +1646,7 @@ export type BookSelectFields = {
           | { edge: Record<string, "ASC" | "DESC"> }
         >;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {
@@ -1660,6 +1663,7 @@ export type BookSelectFields = {
         where?: BookReviewsConnectionWhere;
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {
@@ -1685,6 +1689,7 @@ export type CategorySelectFields = {
         where?: CategoryBooksConnectionWhere;
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {
@@ -1711,6 +1716,7 @@ export type ReviewSelectFields = {
         where?: ReviewBookConnectionWhere;
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
+          totalCount?: boolean;
           edges?:
             | boolean
             | {

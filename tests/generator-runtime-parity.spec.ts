@@ -55,6 +55,33 @@ const fields: G.DrugSelectFields = { upperName: true };
   });
 });
 
+describe('generated connection SelectFields offer totalCount', () => {
+  // v2.4.8 — the runtime projects `totalCount` for a typed connection
+  // select, but the generated select type had no key for it.
+  const typeDefs = `
+    type Kid @node { id: ID! @id }
+    type Parent @node {
+      id: ID! @id
+      kids: [Kid!]! @relationship(type: "HAS_KID", direction: OUT)
+    }
+  `;
+
+  it('accepts select: { totalCount: true } on a connection', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+async function run() {
+  const rows = await ogm.model('Parent').find({
+    select: { id: true, kidsConnection: { select: { totalCount: true } } },
+  });
+  const count: number | undefined = rows[0].kidsConnection?.totalCount;
+}
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('generated CreateInput makes @default-ed required fields optional', () => {
   const typeDefs = `
     enum Status { DRAFT LIVE }

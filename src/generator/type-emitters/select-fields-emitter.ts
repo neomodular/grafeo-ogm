@@ -217,6 +217,9 @@ function emitConnectionField(
     `    where?: ${connWhereName};`,
     `    orderBy?: ${orderByArm};`,
     `    select: {`,
+    // v2.4.8 — the runtime projects `totalCount` (filtered by the same
+    // where + target read policy as `edges`); the select type now offers it.
+    `      totalCount?: boolean;`,
     `      edges?: boolean | {`,
     ...edgeMembers,
     `      };`,
