@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.7 (2026-10-18) — `db push --force-drop` only drops constraints grafeo created
+
+### 🐛 `--force-drop` could drop constraints on labels grafeo doesn't manage
+
+`db push` decided whether a live constraint was grafeo's from its **name alone**: any name that started with a known label and ended in `_unique` qualified. With `type Book` in the SDL, a DBA's `Book_Archive_code_unique` constraint on the **unrelated** label `Book_Archive` looked like "label `Book`, property `Archive_code`". `db push --force-drop --yes` then dropped it. A NODE KEY or existence constraint that happened to share the naming shape qualified too.
+
+A constraint is now treated as a droppable orphan only when its **definition** proves grafeo would have created it:
+
+- the type is `UNIQUENESS`
+- it covers exactly one label, and that label is in the schema
+- it covers exactly one property
+- its name is exactly `{Label}_{prop}_unique` for that label and property
+
+`db push` now reads `labelsOrTypes` and `properties` from `SHOW CONSTRAINTS` to check this. If a server doesn't report those columns, nothing is treated as droppable: a missed orphan only means "kept", while a wrong drop can lose a constraint. The set of constraints `--force-drop` can drop only ever shrinks.
+
 ## 2.4.6 (2026-10-18) — `createMany` writes every item's fields
 
 ### 🐛 `createMany` took its columns from the first item only
