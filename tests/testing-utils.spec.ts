@@ -79,6 +79,108 @@ describe('CypherAssert', () => {
         CypherAssert.assertContainsClause(cypher, 'WHERE', 'n.name'),
       ).toThrow(/does not contain pattern 'n.name'/);
     });
+
+    // v2.5.0 — the clause and the pattern were checked independently, and
+    // the clause check was a raw substring.
+    describe('scopes the pattern to the clause (v2.5.0)', () => {
+      const ok = (cypher: string, clause: string, pattern: string) =>
+        expect(() =>
+          CypherAssert.assertContainsClause(cypher, clause, pattern),
+        ).not.toThrow();
+      const notInClause = (cypher: string, clause: string, pattern: string) =>
+        expect(() =>
+          CypherAssert.assertContainsClause(cypher, clause, pattern),
+        ).toThrow(
+          new RegExp(`does not contain pattern '.*' within a '${clause}'`),
+        );
+      const noClause = (cypher: string, clause: string) =>
+        expect(() =>
+          CypherAssert.assertContainsClause(cypher, clause, 'x'),
+        ).toThrow(new RegExp(`does not contain clause '${clause}'`));
+
+      it('rejects a pattern that only appears in a later clause', () => {
+        notInClause(
+          'MATCH (n) WHERE n.age > $p RETURN n { .name }',
+          'WHERE',
+          'n { .name }',
+        );
+        ok('MATCH (n) WHERE n.age > $p RETURN n { .name }', 'RETURN', '.name');
+      });
+
+      it('rejects a pattern that only appears in an earlier clause', () => {
+        notInClause('MATCH (n:Book) RETURN n', 'RETURN', ':Book');
+      });
+
+      it('matches the clause keyword only as a word', () => {
+        noClause('MATCH (n) RETURN n SKIP $offset', 'SET');
+        noClause('MATCH (n:Asset) RETURN n.reset', 'SET');
+        noClause('MATCH (n) RETURN n { set: 1 }', 'SET');
+        noClause('MATCH (n) WHERE n.x = $set RETURN n', 'SET');
+        noClause("MATCH (n) WHERE n.x = 'SET' RETURN n", 'SET');
+        noClause('MATCH (n:`SET`) RETURN n', 'SET');
+        noClause('MATCH (n) // SET\nRETURN n', 'SET');
+      });
+
+      it('is case-insensitive on the keyword', () => {
+        ok('match (n) where n.x = 1 return n', 'WHERE', 'n.x = 1');
+      });
+
+      it('does not end a WHERE at STARTS WITH / ENDS WITH', () => {
+        ok(
+          'MATCH (n) WHERE n.a STARTS WITH $p AND n.b ENDS WITH $q RETURN n',
+          'WHERE',
+          'n.b ENDS WITH',
+        );
+        noClause('MATCH (n) WHERE n.a STARTS WITH $p RETURN n', 'WITH');
+      });
+
+      it('passes when any occurrence of the clause holds the pattern', () => {
+        ok(
+          'MATCH (a) WITH a MATCH (b:Book) WHERE b.x = a.x RETURN b',
+          'MATCH',
+          ':Book',
+        );
+      });
+
+      it('handles multi-word clauses', () => {
+        ok(
+          'MATCH (n) RETURN n ORDER BY n.name DESC SKIP 0',
+          'ORDER BY',
+          'n.name DESC',
+        );
+        notInClause(
+          'MATCH (n) RETURN n ORDER BY n.name SKIP 5',
+          'ORDER BY',
+          '5',
+        );
+        ok('MATCH (n) DETACH DELETE n', 'DELETE', 'n');
+        ok(
+          'MERGE (n {id: $id}) ON CREATE SET n.c = 1 ON MATCH SET n.m = 2',
+          'ON MATCH SET',
+          'n.m = 2',
+        );
+        notInClause(
+          'MERGE (n {id: $id}) ON CREATE SET n.c = 1 ON MATCH SET n.m = 2',
+          'ON CREATE SET',
+          'n.m',
+        );
+      });
+
+      it('finds clauses nested in brackets, bounded by the bracket', () => {
+        const cypher =
+          'MATCH (n) RETURN n { .id, books: [(n)-[:W]->(b) WHERE b.year > 2000 | b { .title }] }';
+        ok(cypher, 'WHERE', 'b.year > 2000');
+        notInClause(cypher, 'WHERE', '.title');
+        // A nested WHERE does not cut the enclosing RETURN short.
+        ok(cypher, 'RETURN', 'b { .title }');
+
+        const sub =
+          'MATCH (n) CALL { WITH n MATCH (n)-->(m) RETURN count(m) AS c } RETURN n, c';
+        ok(sub, 'MATCH', '(n)-->(m)');
+        notInClause(sub, 'MATCH', 'count(m)');
+        ok(sub, 'CALL', 'count(m) AS c');
+      });
+    });
   });
 
   describe('assertNotContainsClause()', () => {
