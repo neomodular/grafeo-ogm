@@ -1795,9 +1795,42 @@ describe('MutationCompiler', () => {
         whereResult,
       );
 
-      // Should use UNWIND since id is a scalar property
+      // Should use UNWIND since id is a scalar property: one batched
+      // statement, not the per-item CALL fallback (`_ccn_*`). Since #10
+      // the batch itself runs in a single row-preserving CALL.
       expect(result.cypher).toContain('UNWIND');
-      expect(result.cypher).not.toContain('CALL {');
+      expect(result.cypher.match(/CALL \{/g)).toHaveLength(1);
+      expect(result.cypher).not.toContain('_ccn_');
+      expect(result.cypher).toContain(
+        'RETURN count(*) AS _conn_contentResources\n}',
+      );
+    });
+
+    // #10 — a connect MATCH with no target yielded zero rows and dropped
+    // the updated node (the SET still committed); several targets
+    // multiplied it. Every connect must run in a row-preserving CALL.
+    it('isolates a single connect in a row-preserving CALL (#10)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'cat-1' },
+        undefined,
+        // Non-array spec → the single-connect path.
+        { contentResources: { where: { node: { id: 'missing' } } } },
+        undefined,
+        bookCategoryNode,
+        { cypher: 'n.id = $where_id', params: { where_id: 'cat-1' } },
+      );
+
+      const lines = result.cypher.split('\n');
+      const match = lines.findIndex((l) => l.startsWith('MATCH (target:'));
+      expect(match).toBeGreaterThan(-1);
+      expect(lines.slice(match - 3, match)).toEqual([
+        'WITH n',
+        'CALL {',
+        'WITH n',
+      ]);
+      const ret = lines.indexOf('RETURN count(*) AS _conn_contentResources');
+      expect(ret).toBeGreaterThan(match);
+      expect(lines[ret + 1]).toBe('}');
     });
 
     // v1.7.4 regression — heterogeneous array items used to silently

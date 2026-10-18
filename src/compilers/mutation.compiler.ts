@@ -1435,6 +1435,12 @@ export class MutationCompiler {
             },
           );
 
+          // Wrap in a CALL subquery: UNWIND + MATCH yields one row per
+          // matched target (zero when nothing matches), which would
+          // multiply — or drop — the updated node for every later clause.
+          // Connecting to no target is a no-op, as in @neo4j/graphql.
+          lines.push('WITH n');
+          lines.push('CALL {');
           lines.push('WITH n');
           lines.push(`UNWIND $${paramName} AS connItem`);
           lines.push(`MATCH (target:${targetLabelStr})`);
@@ -1514,6 +1520,9 @@ export class MutationCompiler {
             );
             lines.push(`SET ${setItems.join(', ')}`);
           }
+
+          lines.push(`RETURN count(*) AS _conn_${fieldName}`);
+          lines.push('}');
         }
       } else {
         // Single connect
@@ -1523,6 +1532,9 @@ export class MutationCompiler {
           | Record<string, unknown>
           | undefined;
 
+        // Same row-preserving isolation as the UNWIND path above.
+        lines.push('WITH n');
+        lines.push('CALL {');
         lines.push('WITH n');
         lines.push(`MATCH (target:${targetLabelStr})`);
 
@@ -1578,6 +1590,9 @@ export class MutationCompiler {
           });
           lines.push(`MERGE ${mergePattern}`);
         }
+
+        lines.push(`RETURN count(*) AS _conn_${fieldName}`);
+        lines.push('}');
       }
     }
 
