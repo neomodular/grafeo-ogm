@@ -34,6 +34,70 @@ describe('parseSchema - @relationship(direction:) validation', () => {
   );
 });
 
+describe('parseSchema - @declareRelationship resolution', () => {
+  const schemaWith = (movieRel: string, showRel: string): string => `
+    interface Production {
+      title: String!
+      actors: [Actor!]! @declareRelationship
+    }
+    type Movie implements Production @node {
+      title: String!
+      actors: [Actor!]! ${movieRel}
+    }
+    type Show implements Production @node {
+      title: String!
+      actors: [Actor!]! ${showRel}
+    }
+    type Actor @node {
+      name: String!
+    }
+    type ActedIn @relationshipProperties {
+      role: String
+    }
+  `;
+  const actedIn =
+    '@relationship(type: "ACTED_IN", direction: IN, properties: "ActedIn")';
+
+  // Through v2.4.7 the interface relationship kept `type: ''`, so every
+  // InterfaceModel operator on it threw `Invalid identifier ""`.
+  it('takes type, direction and properties from agreeing implementors', () => {
+    const iface = parseSchema(schemaWith(actedIn, actedIn)).interfaces.get(
+      'Production',
+    )!;
+    const rel = iface.relationships.get('actors')!;
+    expect(rel).toMatchObject({
+      type: 'ACTED_IN',
+      direction: 'IN',
+      properties: 'ActedIn',
+      target: 'Actor',
+      isArray: true,
+    });
+  });
+
+  it.each([
+    [
+      'type',
+      '@relationship(type: "STARS_IN", direction: IN, properties: "ActedIn")',
+    ],
+    [
+      'direction',
+      '@relationship(type: "ACTED_IN", direction: OUT, properties: "ActedIn")',
+    ],
+    ['properties', '@relationship(type: "ACTED_IN", direction: IN)'],
+  ])('rejects implementors that disagree on %s', (what, showRel) => {
+    expect(() => parseSchema(schemaWith(actedIn, showRel))).toThrow(OGMError);
+    expect(() => parseSchema(schemaWith(actedIn, showRel))).toThrow(
+      new RegExp(`Production\\.actors.*Movie.*Show.*${what}`),
+    );
+  });
+
+  it('rejects an implementor that does not declare the relationship', () => {
+    expect(() => parseSchema(schemaWith(actedIn, ''))).toThrow(
+      /Production\.actors.*Show\.actors.*@relationship/,
+    );
+  });
+});
+
 describe('parseSchema - list @default values', () => {
   const listDefaults = `
     enum Color { RED GREEN }

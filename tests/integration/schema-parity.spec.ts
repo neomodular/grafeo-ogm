@@ -29,6 +29,33 @@ const typeDefs = /* GraphQL */ `
     sizes: [Int!] @default(value: [1, 2])
     seenAt: [DateTime!] @default(value: ["2024-01-01T00:00:00Z"])
   }
+
+  interface LdProduction {
+    runId: String
+    title: String!
+    actors: [LdActor!]! @declareRelationship
+  }
+  type LdMovie implements LdProduction
+    @node(labels: ["LdMovie", "LdProduction"]) {
+    runId: String
+    title: String!
+    actors: [LdActor!]!
+      @relationship(type: "LD_ACTED_IN", direction: IN, properties: "LdActedIn")
+  }
+  type LdShow implements LdProduction
+    @node(labels: ["LdShow", "LdProduction"]) {
+    runId: String
+    title: String!
+    actors: [LdActor!]!
+      @relationship(type: "LD_ACTED_IN", direction: IN, properties: "LdActedIn")
+  }
+  type LdActor @node {
+    runId: String
+    name: String!
+  }
+  type LdActedIn @relationshipProperties {
+    role: String
+  }
 `;
 
 describeLive('schema parity — live Neo4j', () => {
@@ -82,5 +109,53 @@ describeLive('schema parity — live Neo4j', () => {
     } finally {
       await session.close();
     }
+  });
+
+  // Through v2.4.7 @declareRelationship parsed with type '' and every one
+  // of these threw `Invalid identifier ""`.
+  it('filters, selects and traverses @declareRelationship fields on an InterfaceModel', async () => {
+    const session = driver.session();
+    try {
+      await session.run(
+        `CREATE (a:LdActor {runId: $runId, name: 'Ana'}),
+                (b:LdActor {runId: $runId, name: 'Bo'}),
+                (m:LdMovie:LdProduction {runId: $runId, title: 'M'}),
+                (s:LdShow:LdProduction {runId: $runId, title: 'S'}),
+                (x:LdShow:LdProduction {runId: $runId, title: 'X'}),
+                (a)-[:LD_ACTED_IN {role: 'lead'}]->(m),
+                (b)-[:LD_ACTED_IN {role: 'host'}]->(s)`,
+        { runId },
+      );
+    } finally {
+      await session.close();
+    }
+
+    const Production = ogm.interfaceModel('LdProduction');
+    const withAna = await Production.find({
+      where: { runId, actors_SOME: { name: 'Ana' } },
+      selectionSet: '{ title actors { name } }',
+    });
+    expect(withAna).toEqual([
+      { __typename: 'LdMovie', title: 'M', actors: [{ name: 'Ana' }] },
+    ]);
+
+    const hosts = await Production.find({
+      where: { runId, actorsConnection_SOME: { edge: { role: 'host' } } },
+      selectionSet:
+        '{ title actorsConnection { edges { properties { role } node { name } } } }',
+    });
+    expect(hosts).toEqual([
+      {
+        __typename: 'LdShow',
+        title: 'S',
+        actorsConnection: {
+          edges: [{ properties: { role: 'host' }, node: { name: 'Bo' } }],
+        },
+      },
+    ]);
+
+    expect(await Production.count({ where: { runId, actors_NONE: {} } })).toBe(
+      1,
+    );
   });
 });

@@ -554,5 +554,57 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     metadata.nodes.set(typeName, nodeDef);
   }
 
+  resolveDeclaredRelationships(metadata);
+
   return metadata;
+}
+
+/**
+ * Fill in `@declareRelationship` interface relationships from the
+ * implementors' `@relationship` directives. Through v2.4.7 they kept
+ * `type: ''`, so every InterfaceModel operator on them (`actors_SOME`,
+ * `actorsConnection`, selecting `actors { ... }`) threw
+ * `Invalid identifier ""`. The InterfaceModel matches the shared interface
+ * label, so one type/direction/properties must hold for every implementor;
+ * if they disagree there is no single correct pattern and the schema is
+ * rejected. Interfaces with no implementors are left as declared.
+ */
+function resolveDeclaredRelationships(metadata: SchemaMetadata): void {
+  for (const iface of metadata.interfaces.values())
+    for (const rel of iface.relationships.values()) {
+      if (rel.type !== '') continue;
+      const where = `${iface.name}.${rel.fieldName}`;
+      let first: { owner: string; rel: RelationshipDefinition } | undefined;
+
+      for (const implName of iface.implementedBy) {
+        const implRel = metadata.nodes
+          .get(implName)
+          ?.relationships.get(rel.fieldName);
+        if (!implRel)
+          throw new OGMError(
+            `Cannot resolve @declareRelationship ${where}: implementor ` +
+              `${implName}.${rel.fieldName} has no @relationship directive.`,
+          );
+        if (!first) {
+          first = { owner: implName, rel: implRel };
+          continue;
+        }
+        const fields = ['type', 'direction', 'properties'] as const;
+        for (const key of fields)
+          if (implRel[key] !== first.rel[key])
+            throw new OGMError(
+              `Cannot resolve @declareRelationship ${where}: ` +
+                `${first.owner}.${rel.fieldName} and ${implName}.${rel.fieldName} ` +
+                `declare a different ${key} (${JSON.stringify(first.rel[key] ?? null)} vs ` +
+                `${JSON.stringify(implRel[key] ?? null)}). Every implementor must use ` +
+                `the same type, direction and properties.`,
+            );
+      }
+
+      if (!first) continue;
+      rel.type = first.rel.type;
+      rel.direction = first.rel.direction;
+      if (first.rel.properties !== undefined)
+        rel.properties = first.rel.properties;
+    }
 }
