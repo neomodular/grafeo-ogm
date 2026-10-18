@@ -121,7 +121,7 @@ describe('ResultMapper', () => {
       expect(result.srid).toBe(4979);
     });
 
-    // v2.5.0 — the lossless driver hands back `srid` as a Neo4j Integer.
+    // v2.4.8 — the lossless driver hands back `srid` as a Neo4j Integer.
     it('should convert an Integer Point srid to a number', () => {
       const point = new neo4j.types.Point(neo4j.int(7203), 1.5, 2.5);
       const result = ResultMapper.convertNeo4jTypes(point);

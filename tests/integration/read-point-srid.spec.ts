@@ -1,5 +1,5 @@
 /**
- * Live Point `srid` suite (v2.5.0).
+ * Live Point `srid` suite (v2.4.8).
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *

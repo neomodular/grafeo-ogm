@@ -1207,7 +1207,7 @@ export class Model<
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
       assertSafeIdentifier(field, 'aggregate field');
-      // v2.5.0 — a `@cypher` field has no stored property, so `min(n.f)`
+      // v2.4.8 — a `@cypher` field has no stored property, so `min(n.f)`
       // read nothing: null min/max/average and a sum of 0, silently.
       if (this.nodeDef.properties.get(field)?.isCypher)
         throw new OGMError(

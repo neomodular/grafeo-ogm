@@ -1,5 +1,5 @@
 /**
- * Live `_SINGLE` / `Connection_SINGLE` suite (v2.5.0).
+ * Live `_SINGLE` / `Connection_SINGLE` suite (v2.4.8).
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *

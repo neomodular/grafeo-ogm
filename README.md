@@ -1786,11 +1786,11 @@ const record = Neo4jRecordFactory.create({ title: 'Test Book', count: 2 });
 const count = Neo4jRecordFactory.integer(42);
 
 // Same fields and toString() as the driver's datetime($iso): the offset,
-// all nine fractional digits and an [Area/City] zone id are kept (v2.5.0).
+// all nine fractional digits and an [Area/City] zone id are kept (v2.4.8).
 const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00.123456789+02:00');
 
 // Properties are stored as given; use integer() where the driver would
-// return an Integer. The third argument (v2.5.0) sets identity / elementId.
+// return an Integer. The third argument (v2.4.8) sets identity / elementId.
 const node = Neo4jRecordFactory.node(
   ['Book'],
   { title: 'Mock', pages: Neo4jRecordFactory.integer(300) },

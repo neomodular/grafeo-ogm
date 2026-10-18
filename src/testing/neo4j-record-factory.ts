@@ -81,12 +81,12 @@ export class Neo4jRecordFactory {
    * Field values are plain numbers (what the driver returns with
    * `disableLosslessIntegers`), so `toString()` matches the driver's.
    *
-   * Before v2.5.0 the value was converted to UTC with the offset dropped,
+   * Before v2.4.8 the value was converted to UTC with the offset dropped,
    * and the fraction was cut to milliseconds.
    */
   static dateTime(isoString: string): unknown {
     const m = ISO_DATE_TIME.exec(isoString.trim());
-    // Strings without an offset or zone id keep the pre-v2.5.0 parse.
+    // Strings without an offset or zone id keep the pre-v2.4.8 parse.
     if (!m || (m[8] === undefined && m[9] === undefined))
       return Neo4jRecordFactory.legacyDateTime(isoString);
 
@@ -120,7 +120,7 @@ export class Neo4jRecordFactory {
     );
   }
 
-  /** The pre-v2.5.0 parse: through `Date`, in UTC, millisecond precision. */
+  /** The pre-v2.4.8 parse: through `Date`, in UTC, millisecond precision. */
   private static legacyDateTime(isoString: string): unknown {
     const d = new Date(isoString);
     return new neo4j.types.DateTime(
@@ -142,7 +142,7 @@ export class Neo4jRecordFactory {
    * an Integer, so pass `Neo4jRecordFactory.integer(n)` where a test needs
    * that; a JS number is never converted, because it may stand for a Float.
    *
-   * `options.identity` and `options.elementId` (v2.5.0) give mock nodes
+   * `options.identity` and `options.elementId` (v2.4.8) give mock nodes
    * distinct ids; without them every node has identity 0 and elementId "0".
    * A given identity alone yields elementId `String(identity)`, as the
    * driver does for a 4.x server.

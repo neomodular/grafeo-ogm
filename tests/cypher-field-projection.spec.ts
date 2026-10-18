@@ -169,7 +169,7 @@ describe('CypherFieldScope', () => {
   });
 });
 
-describe('inline @cypher projection of aggregating statements (v2.5.0)', () => {
+describe('inline @cypher projection of aggregating statements (v2.4.8)', () => {
   it.each([
     'MATCH (this)-[:W]->(p) RETURN count(p) AS c',
     'MATCH (this)-[:W]->(p) RETURN count(*) AS c',

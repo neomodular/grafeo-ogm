@@ -57,19 +57,19 @@ export interface SelectionNode {
     scope: 'node' | 'edge';
   }>;
   /**
-   * Connection only: `totalCount` was selected (v2.5.0). Pre-2.5.0 it was
+   * Connection only: `totalCount` was selected (v2.4.8). Pre-2.4.8 it was
    * silently dropped although the generated connection type declares it.
    */
   totalCount?: boolean;
   /**
    * Connection only: `totalCount` was selected WITHOUT `edges`, so the
-   * projection carries `totalCount` alone (v2.5.0).
+   * projection carries `totalCount` alone (v2.4.8).
    */
   totalCountOnly?: boolean;
   /**
    * The concrete types whose inline fragments selected this field
    * (`... on B { x }`); absent when it was selected unconditionally.
-   * v2.5.0 — lets an abstract-type projection resolve an implementer's
+   * v2.4.8 — lets an abstract-type projection resolve an implementer's
    * own `@cypher` field against that implementer.
    */
   typeConditions?: string[];
@@ -290,8 +290,8 @@ export class SelectionCompiler {
 
   /**
    * Project a scalar selected through inline fragments on an abstract type
-   * (v2.5.0) when at least one fragment's concrete type declares it as a
-   * `@cypher` field: `CASE WHEN n:B THEN <B's projection> … END`. Pre-2.5.0
+   * (v2.4.8) when at least one fragment's concrete type declares it as a
+   * `@cypher` field: `CASE WHEN n:B THEN <B's projection> … END`. Pre-2.4.8
    * the field was looked up on the abstract type, where it doesn't exist,
    * and projected as a stored property — always null.
    *
@@ -388,7 +388,7 @@ export class SelectionCompiler {
    */
   private convertSelectionSet(
     selectionSet: SelectionSetNode,
-    /** Type condition of the enclosing inline fragment, if any (v2.5.0). */
+    /** Type condition of the enclosing inline fragment, if any (v2.4.8). */
     typeCondition?: string,
   ): SelectionNode[] {
     const nodes: SelectionNode[] = [];
@@ -396,7 +396,7 @@ export class SelectionCompiler {
 
     for (const sel of selectionSet.selections) {
       // Handle inline fragments (... on Type { fields }) by merging their
-      // fields. v2.5.0 — each merged field remembers the fragment types
+      // fields. v2.4.8 — each merged field remembers the fragment types
       // that selected it (`typeConditions`), so an abstract-type
       // projection can resolve an implementer's own field.
       if (sel.kind === Kind.INLINE_FRAGMENT) {
@@ -573,11 +573,11 @@ export class SelectionCompiler {
   }
 
   /**
-   * A pattern comprehension sorted with `apoc.coll.sortMulti` (v2.5.0).
+   * A pattern comprehension sorted with `apoc.coll.sortMulti` (v2.4.8).
    * Each element is wrapped as `{ __node: <projection>, __skN: <sort
    * value> }` — sortMulti only reads top-level map keys — and unwrapped
    * after the sort, the same synthetic-key approach `compileConnection`
-   * uses. Pre-2.5.0 the projected maps were sorted by the field NAMES,
+   * uses. Pre-2.4.8 the projected maps were sorted by the field NAMES,
    * which the projection often doesn't contain (`select: { id: true }`,
    * `orderBy: { rank: 'DESC' }`), so the list wasn't sorted at all.
    */
@@ -922,9 +922,9 @@ export class SelectionCompiler {
         userWhere: undefined,
       });
 
-    // v2.5.0 — `totalCount` counts the very comprehension `edges` lists
+    // v2.4.8 — `totalCount` counts the very comprehension `edges` lists
     // (same pattern, same `where`, same target `read` policy), so it can
-    // never count a node the caller cannot see. Pre-2.5.0 it was dropped.
+    // never count a node the caller cannot see. Pre-2.4.8 it was dropped.
     const totalCount = node.totalCount
       ? `totalCount: size([${pattern}${whereClause} | 1])`
       : '';

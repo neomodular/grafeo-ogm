@@ -1682,7 +1682,7 @@ export class MutationCompiler {
         ) {
           // Blanket disconnect — remove every relationship of this type to
           // a target the caller can READ. Like the `where` branch below, a
-          // policy-bound context only unlinks nodes it can see; pre-2.5.0
+          // policy-bound context only unlinks nodes it can see; pre-2.4.4
           // the blanket form bound an anonymous `()` and also severed links
           // to policy-hidden nodes. Without policies there is no predicate
           // and the Cypher is unchanged.

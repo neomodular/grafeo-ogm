@@ -22,7 +22,7 @@ export function buildCypherFieldCall(
   nodeVar: string,
   columnName: string,
   /**
-   * v2.5.0 — run the statement only for nodes carrying this label (an
+   * v2.4.8 — run the statement only for nodes carrying this label (an
    * implementer's field selected through an inline fragment on an
    * abstract type). Other rows still keep their row, with `null`.
    */
@@ -65,7 +65,7 @@ export function buildInlineCypherFieldExpr(
   nodeVar: string,
   /**
    * `Type.field`, for the error raised when the statement aggregates.
-   * v2.5.0 — optional so ad-hoc callers keep compiling.
+   * v2.4.8 — optional so ad-hoc callers keep compiling.
    */
   fieldLabel?: string,
 ): string {
@@ -83,12 +83,12 @@ const AGGREGATING_CALL =
 
 /**
  * Refuse an aggregating `@cypher` statement where it would be projected
- * inline (v2.5.0). Neo4j 5 rejects ANY aggregating subquery expression
+ * inline (v2.4.8). Neo4j 5 rejects ANY aggregating subquery expression
  * nested inside a projection that also references outer variables —
  * "Aggregation column contains implicit grouping expressions" — and fails
  * the whole query. Verified on 5.26 for `head(COLLECT { ... })`, an inner
  * `CALL { }`, `CALL (this) { }`, `WITH count(x) AS c` and a COLLECT in
- * place of the pattern comprehension: none parse. Pre-2.5.0 the query
+ * place of the pattern comprehension: none parse. Pre-2.4.8 the query
  * reached the server and failed with that opaque error; the top-level
  * CALL-prelude projection is unaffected and keeps working.
  */
@@ -154,7 +154,7 @@ export class CypherFieldScope {
     fieldName: string,
     propDef: PropertyDefinition,
     /**
-     * v2.5.0 — project only for nodes with this label (see
+     * v2.4.8 — project only for nodes with this label (see
      * `buildCypherFieldCall`); keyed and aliased separately per label.
      */
     guardLabel?: string,

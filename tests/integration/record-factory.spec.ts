@@ -1,5 +1,5 @@
 /**
- * Live Neo4jRecordFactory suite (v2.5.0).
+ * Live Neo4jRecordFactory suite (v2.4.8).
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
  * NEO4J_USERNAME and NEO4J_PASSWORD, as in `examples/`). Read-only: it
@@ -7,7 +7,7 @@
  *
  * `Neo4jRecordFactory.dateTime` is meant to stand in for a value the
  * driver returns, so it must match `datetime(iso)` field for field. Before
- * v2.5.0 it dropped the offset and cut the fraction to milliseconds.
+ * v2.4.8 it dropped the offset and cut the fraction to milliseconds.
  */
 import neo4j, { Driver } from 'neo4j-driver';
 import { Neo4jRecordFactory } from '../../src/testing/neo4j-record-factory';

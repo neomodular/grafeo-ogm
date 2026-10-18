@@ -1,5 +1,5 @@
 /**
- * Compiled-Cypher regressions for the v2.5.0 read-path fixes. Each case
+ * Compiled-Cypher regressions for the v2.4.8 read-path fixes. Each case
  * has a live counterpart under `tests/integration/read-*.spec.ts`; these
  * pin the emitted shape (and cover what can't run live, e.g. APOC).
  */
@@ -39,7 +39,7 @@ function harness(withPolicies = false) {
   };
 }
 
-describe('connection totalCount (v2.5.0)', () => {
+describe('connection totalCount (v2.4.8)', () => {
   it('selectionSet totalCount + edges share one filtered comprehension', async () => {
     const h = harness(true);
     await h.model('LbUser').find({
@@ -88,7 +88,7 @@ describe('connection totalCount (v2.5.0)', () => {
   });
 });
 
-describe('inline-fragment @cypher fields on abstract types (v2.5.0)', () => {
+describe('inline-fragment @cypher fields on abstract types (v2.4.8)', () => {
   it("InterfaceModel projects an implementer's @cypher field under a label guard", async () => {
     const h = harness();
     await h
@@ -131,7 +131,7 @@ describe('inline-fragment @cypher fields on abstract types (v2.5.0)', () => {
   });
 });
 
-describe('typed select keys ending in "Connection" (v2.5.0)', () => {
+describe('typed select keys ending in "Connection" (v2.4.8)', () => {
   it('a scalar named *Connection is selected as a scalar', async () => {
     const h = harness();
     await h.model('LbUser').find({
@@ -155,7 +155,7 @@ describe('typed select keys ending in "Connection" (v2.5.0)', () => {
   });
 });
 
-describe('nested relationship orderBy (v2.5.0)', () => {
+describe('nested relationship orderBy (v2.4.8)', () => {
   // Verified by shape only: the live test database has no APOC.
   it('sorts on synthetic keys and strips them', async () => {
     const h = harness();
@@ -183,7 +183,7 @@ describe('nested relationship orderBy (v2.5.0)', () => {
   });
 });
 
-describe('aggregate on @cypher fields (v2.5.0)', () => {
+describe('aggregate on @cypher fields (v2.4.8)', () => {
   it('Model.aggregate refuses a @cypher field by name', async () => {
     const h = harness();
     await expect(
@@ -220,7 +220,7 @@ describe('aggregate on @cypher fields (v2.5.0)', () => {
   });
 });
 
-describe('where value coercion (v2.5.0)', () => {
+describe('where value coercion (v2.4.8)', () => {
   it('binds BigInt strings and bigints as Neo4j Integers', async () => {
     const h = harness();
     await h.model('LbUser').find({

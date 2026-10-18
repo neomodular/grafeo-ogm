@@ -56,8 +56,8 @@ export class SelectNormalizer {
 
       assertSafeKey(fieldName, 'select input');
 
-      // v2.5.0 — a `*Connection` key is a connection only when its base
-      // name is a relationship. Pre-2.5.0 every such key was routed to
+      // v2.4.8 — a `*Connection` key is a connection only when its base
+      // name is a relationship. Pre-2.4.8 every such key was routed to
       // `normalizeConnection`, which silently dropped a scalar like
       // `internetConnection: String`.
       const isConnection =
@@ -301,7 +301,7 @@ export class SelectNormalizer {
     if (obj.select && typeof obj.select === 'object') {
       const selectObj = obj.select as Record<string, unknown>;
 
-      // v2.5.0 — `totalCount` was ignored (silently undefined).
+      // v2.4.8 — `totalCount` was ignored (silently undefined).
       if (selectObj.totalCount === true) {
         node.totalCount = true;
         if (selectObj.edges == null || selectObj.edges === false)

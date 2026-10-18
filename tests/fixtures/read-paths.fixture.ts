@@ -1,6 +1,6 @@
 /**
  * Shared schema, policies and live-database harness for the read-path
- * suites (v2.5.0). Every live spec under `tests/integration/read-*.spec.ts`
+ * suites (v2.4.8). Every live spec under `tests/integration/read-*.spec.ts`
  * builds its OGM from this schema, tags every node it creates with its own
  * `runId` and removes them in `afterAll`, so the suites are safe to point
  * at a shared development database. Labels and indexes are `Lb`-prefixed.

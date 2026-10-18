@@ -153,7 +153,7 @@ describeLive('NLS enforcement — live Neo4j', () => {
     });
   });
 
-  // --- v2.5.0: blanket disconnect honours the target read policy ---------
+  // --- v2.4.8: blanket disconnect honours the target read policy ---------
   // `disconnect: [{}]` bound an anonymous target and severed links to
   // policy-HIDDEN charts too, while a `where`-scoped disconnect of the same
   // chart was (correctly) blocked.

@@ -141,9 +141,9 @@ describe('CypherAssert', () => {
       );
     });
 
-    // v2.5.0 — the comparison was JSON.stringify(a) === JSON.stringify(b),
+    // v2.4.8 — the comparison was JSON.stringify(a) === JSON.stringify(b),
     // which is key-order sensitive and throws a raw TypeError on bigint.
-    it('ignores object key order, at any depth (v2.5.0)', () => {
+    it('ignores object key order, at any depth (v2.4.8)', () => {
       expect(() =>
         CypherAssert.assertParams(
           { p: { x: 1, y: { a: 1, b: 2 } } },
@@ -152,13 +152,13 @@ describe('CypherAssert', () => {
       ).not.toThrow();
     });
 
-    it('keeps array order significant (v2.5.0)', () => {
+    it('keeps array order significant (v2.4.8)', () => {
       expect(() =>
         CypherAssert.assertParams({ p: [1, 2] }, { p: [2, 1] }),
       ).toThrow(/mismatch/);
     });
 
-    it('compares bigint values instead of throwing (v2.5.0)', () => {
+    it('compares bigint values instead of throwing (v2.4.8)', () => {
       expect(() =>
         CypherAssert.assertParams(
           { p: 9007199254740993n },
@@ -174,7 +174,7 @@ describe('CypherAssert', () => {
       );
     });
 
-    it('compares neo4j Integers by value, and not to plain numbers (v2.5.0)', () => {
+    it('compares neo4j Integers by value, and not to plain numbers (v2.4.8)', () => {
       expect(() =>
         CypherAssert.assertParams({ p: neo4j.int(5) }, { p: neo4j.int(5) }),
       ).not.toThrow();
@@ -229,9 +229,9 @@ describe('Neo4jRecordFactory', () => {
       expect(dt).toHaveProperty('second', 0);
     });
 
-    // v2.5.0 — expected values were recorded from `RETURN datetime($iso)`
+    // v2.4.8 — expected values were recorded from `RETURN datetime($iso)`
     // on Neo4j 5.26 (see tests/integration/record-factory.spec.ts). Before
-    // v2.5.0 the factory converted to UTC and dropped the offset, so
+    // v2.4.8 the factory converted to UTC and dropped the offset, so
     // `10:00+02:00` came back as `08:00Z`, and cut nanoseconds to millis.
     it.each([
       ['2024-01-01T10:00:00+02:00', '2024-01-01T10:00:00+02:00', 10, 0, 7200],
@@ -252,7 +252,7 @@ describe('Neo4jRecordFactory', () => {
       ['2024-07-01T10:00:00+0530', '2024-07-01T10:00:00+05:30', 10, 0, 19800],
       ['2024-07-01T10:00:00+05', '2024-07-01T10:00:00+05:00', 10, 0, 18000],
     ])(
-      'keeps the offset and nanoseconds of %s (v2.5.0)',
+      'keeps the offset and nanoseconds of %s (v2.4.8)',
       (iso, str, hour, nanosecond, offset) => {
         const dt = Neo4jRecordFactory.dateTime(iso) as Record<string, unknown>;
         expect(String(dt)).toBe(str);
@@ -262,7 +262,7 @@ describe('Neo4jRecordFactory', () => {
       },
     );
 
-    it('carries a zone id and resolves its offset (v2.5.0)', () => {
+    it('carries a zone id and resolves its offset (v2.4.8)', () => {
       const summer = Neo4jRecordFactory.dateTime(
         '2024-07-01T10:00:00[Europe/Berlin]',
       ) as Record<string, unknown>;
@@ -276,7 +276,7 @@ describe('Neo4jRecordFactory', () => {
       expect(winter.timeZoneOffsetSeconds).toBe(3600);
     });
 
-    it('maps through ResultMapper to the same string as a driver value (v2.5.0)', () => {
+    it('maps through ResultMapper to the same string as a driver value (v2.4.8)', () => {
       const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00+02:00');
       expect(ResultMapper.convertNeo4jTypes(dt)).toBe(
         '2024-01-01T10:00:00+02:00',
@@ -302,9 +302,9 @@ describe('Neo4jRecordFactory', () => {
       expect(node.elementId).toBe('0');
     });
 
-    // v2.5.0 — every factory node used to share identity 0 / elementId "0",
+    // v2.4.8 — every factory node used to share identity 0 / elementId "0",
     // with no way to give two mock nodes distinct ids.
-    it('accepts an identity and elementId (v2.5.0)', () => {
+    it('accepts an identity and elementId (v2.4.8)', () => {
       const node = Neo4jRecordFactory.node(
         ['Book'],
         { count: Neo4jRecordFactory.integer(5) },
@@ -320,14 +320,14 @@ describe('Neo4jRecordFactory', () => {
       expect(neo4j.isInt(node.properties.count)).toBe(true);
     });
 
-    it('derives elementId from identity when only identity is given (v2.5.0)', () => {
+    it('derives elementId from identity when only identity is given (v2.4.8)', () => {
       const node = Neo4jRecordFactory.node(['Book'], {}, { identity: 7 }) as {
         elementId: string;
       };
       expect(node.elementId).toBe('7');
     });
 
-    it('passes property values through unchanged (v2.5.0)', () => {
+    it('passes property values through unchanged (v2.4.8)', () => {
       // A JS number is not turned into an Integer: 2.0 may be a Float.
       const node = Neo4jRecordFactory.node(['Book'], { n: 5, f: 2.0 }) as {
         properties: Record<string, unknown>;

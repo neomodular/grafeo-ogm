@@ -3,7 +3,7 @@
  * `{"$bigint":"<digits>"}`, so two values compare equal regardless of key
  * order and a bigint never equals the number or string with its digits.
  *
- * Every pair that JSON.stringify called equal before v2.5.0 is still equal:
+ * Every pair that JSON.stringify called equal before v2.4.8 is still equal:
  * this only sorts keys and gives bigint (which used to throw a TypeError)
  * an encoding. A neo4j Integer stays `{"high":…,"low":…}`, so it equals an
  * Integer of the same value and not a plain number.
