@@ -570,6 +570,14 @@ export class InterfaceModel<
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
       assertSafeIdentifier(field, 'aggregate field');
+      // v2.5.0 — same as `Model.aggregate`: a `@cypher` field has no
+      // stored property to aggregate (pre-2.5.0: silent nulls / sum 0).
+      if (ifaceProps.get(field)?.isCypher)
+        throw new OGMError(
+          `Cannot aggregate @cypher field "${this.interfaceDef.name}.${field}": it is computed per node, not stored, ` +
+            `so min/max/average/sum would read a missing property. Aggregate a stored field, or compute the ` +
+            `aggregate in a custom Cypher query.`,
+        );
       const category = resolveInterfaceFieldCategory(field, ifaceProps);
       fieldTypeCategories.set(field, category);
       const escaped = escapeIdentifier(field);

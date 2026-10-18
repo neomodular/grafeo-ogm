@@ -1207,6 +1207,14 @@ export class Model<
     for (const [field, enabled] of Object.entries(params.aggregate)) {
       if (field === 'count' || !enabled) continue;
       assertSafeIdentifier(field, 'aggregate field');
+      // v2.5.0 — a `@cypher` field has no stored property, so `min(n.f)`
+      // read nothing: null min/max/average and a sum of 0, silently.
+      if (this.nodeDef.properties.get(field)?.isCypher)
+        throw new OGMError(
+          `Cannot aggregate @cypher field "${this.nodeDef.typeName}.${field}": it is computed per node, not stored, ` +
+            `so min/max/average/sum would read a missing property. Aggregate a stored field, or compute the ` +
+            `aggregate in a custom Cypher query.`,
+        );
       const category = resolveFieldAggregateCategory(field, this.nodeDef);
       fieldTypeCategories.set(field, category);
       const escaped = escapeIdentifier(field);

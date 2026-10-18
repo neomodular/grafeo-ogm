@@ -155,6 +155,43 @@ describe('typed select keys ending in "Connection" (v2.5.0)', () => {
   });
 });
 
+describe('aggregate on @cypher fields (v2.5.0)', () => {
+  it('Model.aggregate refuses a @cypher field by name', async () => {
+    const h = harness();
+    await expect(
+      h.model('LbUser').aggregate({ aggregate: { postCount: true } } as never),
+    ).rejects.toThrow(/Cannot aggregate @cypher field "LbUser\.postCount"/);
+  });
+
+  it('Model.aggregate on stored fields is unchanged', async () => {
+    const h = harness();
+    await h.model('LbUser').aggregate({ aggregate: { count: true } } as never);
+    expect(h.cypher()).toBe('MATCH (n:`LbUser`)\nRETURN count(n) AS count');
+  });
+
+  it('InterfaceModel.aggregate refuses an interface @cypher field', async () => {
+    const { driver } = mockDriver();
+    const ogm = new OGM({
+      driver,
+      typeDefs: /* GraphQL */ `
+        interface LbScored {
+          id: ID!
+          score: Int
+            @cypher(statement: "RETURN 1 AS score", columnName: "score")
+        }
+        type LbA implements LbScored @node {
+          id: ID!
+          score: Int
+            @cypher(statement: "RETURN 1 AS score", columnName: "score")
+        }
+      `,
+    });
+    await expect(
+      ogm.interfaceModel('LbScored').aggregate({ aggregate: { score: true } }),
+    ).rejects.toThrow(/Cannot aggregate @cypher field "LbScored\.score"/);
+  });
+});
+
 describe('where value coercion (v2.5.0)', () => {
   it('binds BigInt strings and bigints as Neo4j Integers', async () => {
     const h = harness();
