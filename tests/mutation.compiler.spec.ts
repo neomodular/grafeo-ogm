@@ -1259,6 +1259,39 @@ describe('MutationCompiler', () => {
       expect(create).toBeGreaterThan(conn);
     });
 
+    // v2.4.5 — a nested create inside update dropped `edge` properties.
+    it('sets edge properties on a nested create inside update', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        { tiers: [{ create: [{ node: {}, edge: { position: 2 } }] }] },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+      const create = result.cypher.match(/CREATE \(n\)<?-\[(\w+):/); // tiers is direction IN
+      // A nested create with no edge input keeps an anonymous relationship.
+      expect(create?.[1]).toBeDefined();
+      expect(result.cypher).toContain(`SET ${create![1]}.\`position\` = `);
+      const edgeParam = Object.keys(result.params).find((k) =>
+        k.endsWith('_edge_position'),
+      );
+      expect(edgeParam).toBeDefined();
+    });
+
+    it('keeps an anonymous relationship when a nested create has no edge', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        { tiers: [{ create: [{ node: {} }] }] },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+      expect(result.cypher).toMatch(/CREATE \(n\)<?-\[:/);
+      expect(result.cypher).not.toMatch(/_edge_/);
+    });
+
     it('isolates a nested disconnect in a row-preserving CALL (#8)', () => {
       const result = compiler.compileUpdate(
         { id: 'conc1' },

@@ -2102,10 +2102,22 @@ export class MutationCompiler {
                 ? ` { ${propString} }`
                 : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
 
+            // `edge` properties on the new relationship — the same input
+            // create() accepts. Pre-2.4.5 this path never read
+            // `createSpec.edge`, so they were silently dropped.
+            const edgeInput = createSpec.edge as
+              | Record<string, unknown>
+              | undefined;
+            const edgeEntries = Object.entries(edgeInput ?? {}).filter(
+              ([, v]) => v !== undefined,
+            );
+            const edgeVar = edgeEntries.length ? `${createVar}_e` : undefined;
+
             const relPattern = buildRelPattern({
               sourceVar,
               relDef,
               targetVar: createVar,
+              edgeVar,
             });
 
             // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
@@ -2119,6 +2131,21 @@ export class MutationCompiler {
             lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
             mergeParams(params, propParams);
             lines.push(`CREATE ${relPattern}`);
+
+            if (edgeVar) {
+              const setItems = edgeEntries.map(([prop, val]) => {
+                assertSafePropertyName(prop, 'edge property');
+                const edgePropDef = this.getEdgePropDef(relDef, prop);
+                const paramName = `${itemPrefix}_create${ci}_edge_${prop}`;
+                params[paramName] = coerceWriteValue(val, edgePropDef);
+                return `${edgeVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
+                  `$${paramName}`,
+                  val,
+                  edgePropDef,
+                )}`;
+              });
+              lines.push(`SET ${setItems.join(', ')}`);
+            }
 
             if (hasNestedOps) {
               lines.push(...nestedRelLines);
