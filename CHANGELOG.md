@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.4.4 (2026-10-18) — 🛡️ Security: a blanket `disconnect` honours the target's `read` policy
+
+> **Security release. Upgrade if you use `policies`.** OGMs without `policies` emit byte-identical Cypher and are unaffected.
+
+### 🛡️ `disconnect: [{}]` severed links to nodes the context's `read` policy hides
+
+v2.3.0 established that a policy-bound context must be able to **see** a node to unlink it. A `where`-scoped disconnect enforces this. But a disconnect item of `{}` or `null` (the "disconnect all" form) took a separate branch that bound an anonymous target and applied **no** policy, both top-level and nested:
+
+```ts
+// policy hides charts with secret: true
+await Tag.update({ where: { id: 't' }, disconnect: { charts: [{}] } });
+// pre-2.4.4: removed the link to the hidden chart too
+//            (and counted it in info.relationshipsDeleted)
+```
+
+So a context with `update` rights on the source node could remove relationships to nodes it isn't allowed to read, and use the deleted count to learn how many hidden related nodes exist. Both blanket branches now apply the same target `read` predicate as the `where`-scoped branch.
+
+### Behavior change, for policy-bound callers only
+
+`disconnect: [{}]` now removes only the relationships to targets the context can **read**. Links to hidden nodes are kept. The "replace all" idiom (`[{ disconnect: [{}] }, { connect: [...] }]`) therefore leaves hidden links in place. If a trusted path truly has to detach everything regardless of visibility, run it with `unsafe: { bypassPolicies: true }`, which stays audited, or with an OGM that has no policies.
+
+This ships as a patch because it is a security fix. Contexts that can read every related node, and OGMs without policies, see no change. The NLS live suite (`tests/integration/nls-enforcement.spec.ts`) adds top-level, nested and no-policy cases. Against Neo4j 5.26.32, the two bypass cases fail without the fix.
+
 ## 2.4.3 (2026-10-18) — sorting on a field you don't select works
 
 ### 🐛 `options.sort` was silently ignored for fields not in the selection
