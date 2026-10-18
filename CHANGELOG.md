@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.3.3 (2026-10-18) — `connect` no longer drops or duplicates the updated node
+
+### 🐛 A top-level `connect` changed how many rows the update returned ([#10](https://github.com/neomodular/grafeo-ogm/issues/10))
+
+A top-level `update({ connect })` compiled to an inline `MATCH (target …) MERGE …`, so the number of rows the update returned depended on how many targets matched:
+
+- **No target matched:** the node was dropped. The scalar `SET` **committed**, but the call returned `[]`, and any later connect or disconnect in the same call was skipped.
+- **Several targets matched** (an array connect, or a `where` matching more than one node): the updated node was returned once per target.
+
+Each top-level connect (the UNWIND fast path and the single-connect path) now runs inside `CALL { … RETURN count(*) }`, like disconnects since 2.3.2. **Connecting to a target that doesn't exist is now a no-op:** the update succeeds and returns the node, which matches `@neo4j/graphql`. Nested connects were already isolated this way.
+
+If you relied on an empty result to detect a missing connect target, check the relationship explicitly instead. The empty result was never a reliable signal, because the rest of the write had already committed.
+
 ## 2.3.2 (2026-10-18) — Disconnects no longer multiply the rest of the mutation
 
 ### 🐛 A disconnect ran later nested writes once per removed relationship ([#8](https://github.com/neomodular/grafeo-ogm/issues/8))
