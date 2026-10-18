@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.3.2 (2026-10-18) — Disconnects no longer multiply the rest of the mutation
+
+### 🐛 A disconnect ran later nested writes once per removed relationship ([#8](https://github.com/neomodular/grafeo-ogm/issues/8))
+
+A disconnect compiles to `OPTIONAL MATCH … DELETE`, which yields one row per matched relationship. It was emitted inline, so that fan-out carried into every later clause of the same `update`:
+
+- **Wrong data:** a nested `create` after a disconnect-all (`update: { chapters: [{ disconnect: [{}] }, { create: [...] }] }`) created one node **per previously connected node**. On a book with 3 chapters, it created 3 chapters instead of 1.
+- **Duplicate results:** the updated node was returned once per removed relationship, for nested disconnects and for top-level `disconnect` alike.
+
+Each disconnect, top-level and nested, now runs inside `CALL { … RETURN count(*) }`. That always yields exactly one row, so a disconnect can't multiply the rows of the rest of the statement, and it can't drop them either (a node with nothing to disconnect is still returned). The other nested ops (create, connect) already used this isolation.
+
+A new opt-in live suite, `tests/integration/mutation-row-cardinality.spec.ts`, asserts the database outcome: nodes created, links left, rows returned. Against Neo4j 5.26.32, its four fan-out cases fail without the fix.
+
 ## 2.3.1 (2026-10-18) — Mutations projecting `@cypher` fields work on Neo4j 5.x
 
 ### 🐛 `WITH` between the write clause and `@cypher` projection preludes ([#7](https://github.com/neomodular/grafeo-ogm/issues/7))
