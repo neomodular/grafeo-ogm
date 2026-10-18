@@ -1747,25 +1747,42 @@ import {
 
 ### CypherAssert
 
-Assert Cypher queries contain expected patterns:
+Assert on compiled Cypher and its parameters:
 
 ```typescript
-// Check that a Cypher string contains a fragment
-CypherAssert.assertContains(cypher, 'MATCH (n:`Book`)');
+// Equal after collapsing whitespace and renaming params to $p0, $p1, …
+CypherAssert.assertStructurallyEqual(cypher, 'MATCH (n:`Book`) RETURN n');
 
-// Check parameter values
+// A clause is present and contains a fragment
+CypherAssert.assertContainsClause(cypher, 'WHERE', 'n.price');
+
+// A fragment is absent
+CypherAssert.assertNotContainsClause(cypher, 'DELETE');
+
+// Only the listed keys are checked. Object key order doesn't matter;
+// bigints compare by value, and a neo4j Integer never equals a plain number.
 CypherAssert.assertParams(params, { param0: 'Graph Databases' });
 ```
 
 ### Neo4jRecordFactory
 
-Build mock Neo4j records for unit tests without a running database:
+Build mock Neo4j values for unit tests without a running database:
 
 ```typescript
-const records = Neo4jRecordFactory.create([
-  { id: '1', title: 'Test Book', published: '2024-01-01' },
-  { id: '2', title: 'Another Book', published: '2024-06-15' },
-]);
+const record = Neo4jRecordFactory.create({ title: 'Test Book', count: 2 });
+const count = Neo4jRecordFactory.integer(42);
+
+// Same fields and toString() as the driver's datetime($iso): the offset,
+// all nine fractional digits and an [Area/City] zone id are kept (v2.5.0).
+const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00.123456789+02:00');
+
+// Properties are stored as given; use integer() where the driver would
+// return an Integer. The third argument (v2.5.0) sets identity / elementId.
+const node = Neo4jRecordFactory.node(
+  ['Book'],
+  { title: 'Mock', pages: Neo4jRecordFactory.integer(300) },
+  { identity: 1, elementId: '4:test:1' },
+);
 ```
 
 ### SelectionSetFactory
@@ -1773,11 +1790,11 @@ const records = Neo4jRecordFactory.create([
 Build selection sets programmatically:
 
 ```typescript
-const selectionSet = SelectionSetFactory.build(`{
-  id
-  title
-  author { name }
-}`);
+SelectionSetFactory.gql(['id', 'title', { author: ['name'] }]);
+// => '{ id title author { name } }'
+
+SelectionSetFactory.select(['id', 'title', { author: ['name'] }]);
+// => { id: true, title: true, author: { select: { name: true } } }
 ```
 
 ---
