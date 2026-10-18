@@ -149,6 +149,7 @@ function getDirectiveArgValue(
 function parseField(
   field: FieldDefinitionNode,
   enumNames: Set<string>,
+  ownerName: string,
 ): { property?: PropertyDefinition; relationship?: RelationshipDefinition } {
   const { typeName, isArray, isRequired, isListItemRequired } = unwrapType(
     field.type,
@@ -173,10 +174,20 @@ function parseField(
       // Malformed directive, skip
       return {};
 
+    // Through v2.4.7 any value was cast to 'IN' | 'OUT' unchecked. Reads
+    // treat anything but 'IN' as OUT while writes treat anything but 'OUT'
+    // as IN, so e.g. `direction: "out"` wrote every edge reversed and the
+    // reads then could not see them. Reject at parse time instead.
+    if (direction !== 'IN' && direction !== 'OUT')
+      throw new OGMError(
+        `Invalid @relationship direction "${direction}" on ${ownerName}.${field.name.value}: ` +
+          `direction must be exactly "IN" or "OUT" (case-sensitive).`,
+      );
+
     const rel: RelationshipDefinition = {
       fieldName: field.name.value,
       type: relType,
-      direction: direction as 'IN' | 'OUT',
+      direction,
       target: typeName,
       isArray,
       isRequired,
@@ -413,7 +424,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
       const relationships = new Map<string, RelationshipDefinition>();
 
       for (const field of intDef.fields ?? []) {
-        const parsed = parseField(field, enumNames);
+        const parsed = parseField(field, enumNames, intDef.name.value);
         if (parsed.property)
           properties.set(parsed.property.name, parsed.property);
 
@@ -442,7 +453,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     if (relPropsTypeNames.has(typeName)) {
       const properties = new Map<string, PropertyDefinition>();
       for (const field of objDef.fields ?? []) {
-        const parsed = parseField(field, enumNames);
+        const parsed = parseField(field, enumNames, typeName);
         if (parsed.property)
           properties.set(parsed.property.name, parsed.property);
       }
@@ -460,7 +471,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     const relationships = new Map<string, RelationshipDefinition>();
 
     for (const field of objDef.fields ?? []) {
-      const parsed = parseField(field, enumNames);
+      const parsed = parseField(field, enumNames, typeName);
       if (parsed.property)
         properties.set(parsed.property.name, parsed.property);
 
