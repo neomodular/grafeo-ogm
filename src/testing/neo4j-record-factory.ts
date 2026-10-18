@@ -81,14 +81,18 @@ export class Neo4jRecordFactory {
    * Field values are plain numbers (what the driver returns with
    * `disableLosslessIntegers`), so `toString()` matches the driver's.
    *
-   * Before v2.4.8 the value was converted to UTC with the offset dropped,
-   * and the fraction was cut to milliseconds.
+   * A string with neither an offset nor a zone id is read as UTC, as Neo4j
+   * reads it with its default zone.
+   *
+   * Before v2.4.8 the value was converted to UTC with the offset dropped
+   * and the fraction cut to milliseconds; before v2.5.0 an offset-less
+   * string was read in the machine's local zone.
    */
   static dateTime(isoString: string): unknown {
     const m = ISO_DATE_TIME.exec(isoString.trim());
-    // Strings without an offset or zone id keep the pre-v2.4.8 parse.
-    if (!m || (m[8] === undefined && m[9] === undefined))
-      return Neo4jRecordFactory.legacyDateTime(isoString);
+    // A non-ISO string `Date` understands (e.g. RFC 2822) keeps the
+    // pre-v2.5.0 parse.
+    if (!m) return Neo4jRecordFactory.legacyDateTime(isoString);
 
     const [, y, mo, d, h, mi, s, frac, offset, zoneId] = m;
     const year = Number(y);
@@ -102,10 +106,12 @@ export class Neo4jRecordFactory {
     const offsetSeconds =
       offset !== undefined
         ? parseOffsetSeconds(offset)
-        : zoneOffsetSeconds(
-            zoneId!,
-            Date.UTC(year, month - 1, day, hour, minute, second),
-          );
+        : zoneId !== undefined
+          ? zoneOffsetSeconds(
+              zoneId,
+              Date.UTC(year, month - 1, day, hour, minute, second),
+            )
+          : 0;
 
     return new neo4j.types.DateTime(
       year,
@@ -120,9 +126,15 @@ export class Neo4jRecordFactory {
     );
   }
 
-  /** The pre-v2.4.8 parse: through `Date`, in UTC, millisecond precision. */
+  /** The pre-v2.5.0 parse: through `Date`, in UTC, millisecond precision. */
   private static legacyDateTime(isoString: string): unknown {
     const d = new Date(isoString);
+    // An Invalid Date used to reach the driver as NaN fields and fail there
+    // with an unrelated message.
+    if (Number.isNaN(d.getTime()))
+      throw new TypeError(
+        `Neo4jRecordFactory.dateTime: '${isoString}' is not an ISO-8601 date-time`,
+      );
     return new neo4j.types.DateTime(
       d.getUTCFullYear(),
       d.getUTCMonth() + 1,
@@ -142,7 +154,7 @@ export class Neo4jRecordFactory {
    * an Integer, so pass `Neo4jRecordFactory.integer(n)` where a test needs
    * that; a JS number is never converted, because it may stand for a Float.
    *
-   * `options.identity` and `options.elementId` (v2.4.8) give mock nodes
+   * `options.identity` and `options.elementId` (v2.5.0) give mock nodes
    * distinct ids; without them every node has identity 0 and elementId "0".
    * A given identity alone yields elementId `String(identity)`, as the
    * driver does for a 4.x server.

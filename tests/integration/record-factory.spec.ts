@@ -59,6 +59,11 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     '2024-07-01T10:00:00+02:00[Europe/Berlin]',
     '2024-07-01T10:00:00[Europe/Berlin]',
     '2024-01-15T10:00:00[Europe/Berlin]',
+    // No offset: Neo4j reads these as UTC (its default zone).
+    '2024-07-01T10:00:00',
+    '2024-07-01T10:00',
+    '2024-07-01T10:00:00.987654321',
+    '2024-07-01',
   ])('matches the driver for %s', async (iso) => {
     const session = driver.session();
     let fromDriver: Record<string, unknown>;
