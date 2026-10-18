@@ -49,3 +49,52 @@ const fields: G.DrugSelectFields = { upperName: true };
     expect(errors).toEqual([]);
   });
 });
+
+describe('generated CreateInput makes @default-ed required fields optional', () => {
+  const typeDefs = `
+    enum Status { DRAFT LIVE }
+    type Post @node {
+      id: ID! @id
+      title: String!
+      status: Status! @default(value: DRAFT)
+      views: Int! @default(value: 0)
+    }
+  `;
+
+  it('accepts a create that omits defaulted fields, still requires the rest', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+async function run() {
+  await ogm.model('Post').create({ input: [{ title: 'hello' }] });
+  await ogm.model('Post').create({
+    input: [{ title: 'hello', status: G.Status.Live, views: 3 }],
+  });
+}
+// @ts-expect-error title has no default and stays required
+const missingTitle: G.PostCreateInput = {};
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps defaulted edge properties required (edge writes apply no defaults)', async () => {
+    const { generated, errors } = await typecheckGenerated(
+      `
+      type Post @node {
+        id: ID! @id
+        likes: [Post!]! @relationship(type: "LIKES", direction: OUT, properties: "Liked")
+      }
+      type Liked @relationshipProperties {
+        weight: Int! @default(value: 1)
+      }
+    `,
+      'export {};',
+    );
+    expect(errors).toEqual([]);
+    const block = generated.match(
+      /export type LikedCreateInput = \{[^}]*\}/,
+    )?.[0];
+    expect(block).toContain('weight: Scalars["Int"]["input"];');
+  });
+});

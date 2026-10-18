@@ -197,7 +197,7 @@ function emitCreateInput(node: NodeDefinition, schema: SchemaMetadata): string {
   for (const [, prop] of node.properties) {
     if (prop.isCypher) continue;
     if (prop.isGenerated) continue;
-    members.push(emitCreateScalarField(prop, schema));
+    members.push(emitCreateScalarField(prop, schema, true));
   }
 
   for (const [, rel] of node.relationships) {
@@ -218,14 +218,24 @@ function emitCreateInput(node: NodeDefinition, schema: SchemaMetadata): string {
   return `export type ${node.typeName}CreateInput = {\n${members.join('\n')}\n};`;
 }
 
+/**
+ * `defaultsApplied` says whether the runtime fills in `@default` values
+ * for this input. Node creates (create / createMany / upsert / nested
+ * create) do, so a required field with a default may be omitted — through
+ * v2.4.7 it stayed required. Edge-property writes do NOT apply defaults,
+ * so relationship-properties inputs keep the field required; making it
+ * optional there would let an omitted value silently go unwritten.
+ */
 function emitCreateScalarField(
   prop: PropertyDefinition,
   schema: SchemaMetadata,
+  defaultsApplied: boolean,
 ): string {
   const tsType = mapInputScalar(prop.type, schema.enums);
   const wrapped = prop.isArray ? `Array<${tsType}>` : tsType;
+  const hasDefault = defaultsApplied && prop.defaultValue !== undefined;
 
-  if (prop.required) return `  ${prop.name}: ${wrapped};`;
+  if (prop.required && !hasDefault) return `  ${prop.name}: ${wrapped};`;
   return `  ${prop.name}?: InputMaybe<${wrapped}>;`;
 }
 
@@ -760,7 +770,7 @@ function emitRelPropCreateInput(
   for (const [, prop] of relProp.properties) {
     if (prop.isCypher) continue;
     if (prop.isGenerated) continue;
-    members.push(emitCreateScalarField(prop, schema));
+    members.push(emitCreateScalarField(prop, schema, false));
   }
 
   return `export type ${relProp.typeName}CreateInput = {\n${members.join('\n')}\n};`;
