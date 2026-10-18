@@ -9,6 +9,13 @@ export interface SubgraphReferenceRelationship {
 export interface SubgraphConfig {
   ownedLabels: string[];
   /**
+   * Label the root node must carry; defaults to `ownedLabels[0]` (v2.5.0).
+   * The root is matched as `(:rootLabel {id})`. Before v2.5.0 it was
+   * matched by `id` alone, so a node of any label with that id became a
+   * root, and the lookup scanned every node.
+   */
+  rootLabel?: string;
+  /**
    * Relationship types the traversal follows from the root. A bare
    * `'TYPE'` is followed OUTGOING only; write `'<TYPE'` for incoming and
    * `'<TYPE>'` for both directions (v2.5.0). Before v2.5.0 a bare type was

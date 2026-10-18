@@ -31,6 +31,20 @@ const OWNED_RELATIONSHIP = /^<?[A-Za-z_][A-Za-z0-9_]*>?$/;
  * climbed back up to Book B and deleted it too, and deleting a Chapter
  * deleted its parent Book.
  */
+/**
+ * The escaped label the root is matched with: `rootLabel`, else the first
+ * owned label (v2.5.0). Called after validateConfig, which checked both.
+ */
+function rootLabelOf(config: SubgraphConfig): string {
+  return assertSafeLabel(config.rootLabel ?? config.ownedLabels[0]);
+}
+
+/**
+ * Message of the apoc.util.validate guards in the clone query, without the
+ * `Failed to invoke procedure … java.lang.RuntimeException:` wrapper.
+ */
+const CLONE_GUARD_MESSAGE = /cloneSubgraph: (\d+ owned node\(s\) [^\n]*)/;
+
 function ownedRelationshipFilter(config: SubgraphConfig): string {
   return config.ownedRelationships
     .map((rel) => {
@@ -80,6 +94,7 @@ function validateConfig(
     );
 
   for (const label of config.ownedLabels) assertSafeLabel(label);
+  if (config.rootLabel !== undefined) assertSafeLabel(config.rootLabel);
 
   for (const rel of config.ownedRelationships)
     if (!OWNED_RELATIONSHIP.test(rel))
@@ -149,10 +164,11 @@ export async function cloneSubgraph(
   } catch (error) {
     if (error instanceof SubgraphOperationError) throw error;
 
+    const message = error instanceof Error ? error.message : String(error);
     throw new SubgraphOperationError(
       'clone',
       sourceRootId,
-      error instanceof Error ? error.message : String(error),
+      CLONE_GUARD_MESSAGE.exec(message)?.[1] ?? message,
       error instanceof Error ? error : undefined,
     );
   }
@@ -181,11 +197,12 @@ export async function deleteSubgraph(
 
   const relFilter = ownedRelationshipFilter(config);
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');
+  const rootLabel = rootLabelOf(config);
 
   try {
     const result = await transaction.run(
       `
-      MATCH (source {id: $rootId})
+      MATCH (source:${rootLabel} {id: $rootId})
       CALL apoc.path.subgraphAll(source, {
         relationshipFilter: $relFilter,
         labelFilter: $labelFilter,
@@ -238,19 +255,36 @@ async function executeApocClone(
 ): Promise<SubgraphCloneResult> {
   const relFilter = ownedRelationshipFilter(config);
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');
+  const rootLabel = rootLabelOf(config);
 
   // Step 1: Collect subgraph and clone it
   // APOC cloneSubgraph returns: input=INTEGER (original internal ID), output=NODE (clone).
   // skipProperties: ['id'] avoids unique constraint violations during clone.
   // We use `input` (internal ID) to match back to the original's app-level id.
+  //
+  // v2.5.0 — nodeMapping is keyed by the original's `id`, so an owned node
+  // with no id (or one sharing an id with another owned node) cannot be
+  // mapped: before v2.5.0 they collapsed onto one key, and only one of them
+  // got a new UUID. The apoc.util.validate guards abort before anything is
+  // cloned.
   const result = await transaction.run(
     `
-    MATCH (source {id: $sourceId})
+    MATCH (source:${rootLabel} {id: $sourceId})
     CALL apoc.path.subgraphAll(source, {
       relationshipFilter: $relFilter,
       labelFilter: $labelFilter,
       maxLevel: $maxLevel
     }) YIELD nodes, relationships
+    WITH nodes, relationships, [n IN nodes WHERE n.id IS NOT NULL | n.id] AS ids
+    WITH nodes, relationships,
+         size(nodes) - size(ids) AS missingIds,
+         size(ids) - size(apoc.coll.toSet(ids)) AS duplicateIds
+    CALL apoc.util.validate(missingIds > 0,
+      'cloneSubgraph: %d owned node(s) have no \`id\`; every owned node needs a unique \`id\` to be mapped to its clone',
+      [missingIds])
+    CALL apoc.util.validate(duplicateIds > 0,
+      'cloneSubgraph: %d owned node(s) share an \`id\` with another owned node; every owned node needs a unique \`id\` to be mapped to its clone',
+      [duplicateIds])
     CALL apoc.refactor.cloneSubgraph(nodes, relationships, {skipProperties: ['id']})
     YIELD input, output, error
     WHERE output IS NOT NULL

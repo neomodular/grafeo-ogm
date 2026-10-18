@@ -1046,6 +1046,8 @@ Clone or delete entire subgraphs using APOC procedures. Requires the APOC plugin
 
 The traversal starts at the root and follows `ownedRelationships` into nodes carrying one of `ownedLabels`. A bare type such as `'HAS_CHAPTER'` is followed **outgoing only**; write `'<CHILD_OF'` to follow a relationship incoming, or `'<LINKED>'` to follow it both ways. Before v2.5.0 a bare type was followed both ways, so deleting one book could climb from a chapter it shared with another book up to that book and delete it too; add `<…>` to keep the old behavior for a type.
 
+The root is matched as `(:rootLabel {id: rootId})`, with `rootLabel` defaulting to the first entry of `ownedLabels` (v2.5.0; before, a node of any label with that id was a root). Set `rootLabel` when the root is not of that label — a delete whose root isn't found deletes nothing and returns `deletedCount: 0`. `cloneSubgraph` maps every owned node by its `id`, so it refuses, before cloning anything, a subgraph in which an owned node has no `id` or shares one with another owned node.
+
 ```typescript
 import { cloneSubgraph, deleteSubgraph } from 'grafeo-ogm';
 
@@ -1071,12 +1073,13 @@ const cloneResult = await cloneSubgraph(
 // v1.13.0+ — post-process only the nodes of one label, no broad-IN filtering:
 const chapterIds = cloneResult.nodesByLabel.get('Chapter') ?? [];
 
-// Delete a subgraph
+// Delete a subgraph rooted at a Chapter: its sections, not its Book
 const deleteResult = await deleteSubgraph(
-  'root-node-id',
+  'chapter-node-id',
   {
-    ownedLabels: ['Book', 'Chapter'],
-    ownedRelationships: ['HAS_CHAPTER'],
+    rootLabel: 'Chapter', // v2.5.0+ — defaults to ownedLabels[0]
+    ownedLabels: ['Chapter', 'Section'],
+    ownedRelationships: ['HAS_SECTION'], // outgoing; '<TYPE' incoming, '<TYPE>' both
     maxLevel: 5,
     referenceRelationships: [],
   },

@@ -603,3 +603,109 @@ describe.each([
     },
   );
 });
+
+// v2.5.0 — the root was matched as `MATCH (source {id: $rootId})`: any
+// node of any label with that id became a root, through an AllNodesScan.
+describe.each([
+  [
+    'deleteSubgraph',
+    (config: SubgraphConfig, tx: Transaction) =>
+      deleteSubgraph('root-1', config, tx),
+  ],
+  [
+    'cloneSubgraph',
+    (config: SubgraphConfig, tx: Transaction) =>
+      cloneSubgraph('root-1', config, tx),
+  ],
+])('%s root label (v2.5.0)', (_name, op) => {
+  const base: SubgraphConfig = {
+    ownedLabels: ['Book', 'Chapter'],
+    ownedRelationships: ['HAS_CHAPTER'],
+    maxLevel: 5,
+    referenceRelationships: [],
+  };
+
+  const firstQuery = async (config: SubgraphConfig) => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            deletedCount: 0,
+            originalId: 'root-1',
+            cloneElementId: 'e1',
+          }),
+        ],
+      },
+      { records: [mockRecord({ elemId: 'e1', newId: 'n1' })] },
+    ]);
+    await op(config, tx);
+    return (tx.run as jest.Mock).mock.calls[0][0] as string;
+  };
+
+  it('defaults the root label to the first owned label', async () => {
+    expect(await firstQuery(base)).toMatch(
+      /MATCH \(source:`Book` \{id: \$\w+\}\)/,
+    );
+  });
+
+  it('uses rootLabel when given', async () => {
+    const q = await firstQuery({ ...base, rootLabel: 'Chapter' });
+    expect(q).toMatch(/MATCH \(source:`Chapter` \{id: \$\w+\}\)/);
+    expect(q).not.toMatch(/MATCH \(source \{/);
+  });
+
+  it('rejects an unsafe rootLabel before running any Cypher', async () => {
+    const tx = createMockTransaction();
+    await expect(
+      op({ ...base, rootLabel: 'Book) DETACH DELETE (x' }, tx),
+    ).rejects.toThrow();
+    expect(tx.run).not.toHaveBeenCalled();
+  });
+});
+
+// v2.5.0 — nodeMapping is keyed by the original node's `id`. Owned nodes
+// without one all collapsed onto the `null` key, so only one of them was
+// given a new UUID and the rest kept a null id and no mapping.
+describe('cloneSubgraph owned-node ids (v2.5.0)', () => {
+  const base: SubgraphConfig = {
+    ownedLabels: ['Book', 'Chapter'],
+    ownedRelationships: ['HAS_CHAPTER'],
+    maxLevel: 5,
+    referenceRelationships: [],
+  };
+
+  it('validates ids before cloning, in the same query', async () => {
+    const tx = createMockTransaction([
+      {
+        records: [mockRecord({ originalId: 'root-1', cloneElementId: 'e1' })],
+      },
+      { records: [mockRecord({ elemId: 'e1', newId: 'n1' })] },
+    ]);
+    await cloneSubgraph('root-1', base, tx);
+    const q = (tx.run as jest.Mock).mock.calls[0][0] as string;
+    const missing = q.indexOf('have no `id`');
+    const duplicate = q.indexOf('share an `id`');
+    const clone = q.indexOf('apoc.refactor.cloneSubgraph');
+    expect(missing).toBeGreaterThan(-1);
+    expect(duplicate).toBeGreaterThan(-1);
+    expect(missing).toBeLessThan(clone);
+    expect(duplicate).toBeLessThan(clone);
+  });
+
+  it('surfaces the validation failure as a SubgraphOperationError', async () => {
+    const tx = {
+      run: jest
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'Failed to invoke procedure `apoc.util.validate`: Caused by: java.lang.RuntimeException: ' +
+              'cloneSubgraph: 2 owned node(s) have no `id`; every owned node needs a unique `id`',
+          ),
+        ),
+    } as unknown as Transaction;
+    const err = await cloneSubgraph('root-1', base, tx).catch((e) => e);
+    expect(err).toBeInstanceOf(SubgraphOperationError);
+    expect(err.message).toMatch(/2 owned node\(s\) have no `id`/);
+    expect(err.message).not.toMatch(/java\.lang/);
+  });
+});

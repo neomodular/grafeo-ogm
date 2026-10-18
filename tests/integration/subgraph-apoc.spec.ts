@@ -7,10 +7,12 @@
  * NEO4J_APOC_PASSWORD. Every node it creates carries this run's `runId`
  * and is removed in `afterEach`.
  *
- * Pins a traversal bug from before v2.5.0: owned relationships were
- * expanded in BOTH directions, so deleting Book A climbed from a shared
- * Chapter back up to Book B and deleted it, and deleting a Chapter deleted
- * its parent Book.
+ * Pins two traversal bugs from before v2.5.0:
+ * - owned relationships were expanded in BOTH directions, so deleting
+ *   Book A climbed from a shared Chapter back up to Book B and deleted it,
+ *   and deleting a Chapter deleted its parent Book;
+ * - the root was matched with no label, and owned nodes without an `id`
+ *   collapsed onto one `null` key in the clone's nodeMapping.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -123,7 +125,9 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
   it('deleting a chapter does not delete its parent book', async () => {
     await seedSharedChapter();
 
-    const res = await inTx((tx) => deleteSubgraph('c-a', bookConfig, tx));
+    const res = await inTx((tx) =>
+      deleteSubgraph('c-a', { ...bookConfig, rootLabel: 'LeChapter' }, tx),
+    );
 
     expect(res.deletedCount).toBe(1);
     expect(await ids('LeBook')).toEqual(['book-a', 'book-b']);
@@ -151,6 +155,7 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
         'c-a',
         {
           ...bookConfig,
+          rootLabel: 'LeChapter',
           ownedRelationships: ['<LE_HAS_CHAPTER'],
         },
         tx,
@@ -176,5 +181,59 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
     );
 
     expect(await ids('LeBook')).toEqual([]);
+  });
+
+  it('the root must carry the root label', async () => {
+    // An unrelated node of another label happens to share the id.
+    await run(
+      `CREATE (:LeBook {id: 'dup', runId: $runId}),
+              (:LeOther {id: 'dup', runId: $runId})`,
+    );
+
+    const res = await inTx((tx) => deleteSubgraph('dup', bookConfig, tx));
+
+    expect(res.deletedCount).toBe(1);
+    expect(await ids('LeOther')).toEqual(['dup']);
+  });
+
+  it('refuses to clone when an owned node has no id, and clones nothing', async () => {
+    await run(
+      `CREATE (a:LeBook {id: 'book-a', runId: $runId}),
+              (c1:LeChapter {runId: $runId}),
+              (c2:LeChapter {runId: $runId}),
+              (a)-[:LE_HAS_CHAPTER]->(c1),
+              (a)-[:LE_HAS_CHAPTER]->(c2)`,
+    );
+
+    await expect(
+      inTx((tx) => cloneSubgraph('book-a', bookConfig, tx)),
+    ).rejects.toThrow(/2 owned node\(s\) have no `id`/);
+
+    const rows = await run('MATCH (n {runId: $runId}) RETURN count(n) AS c');
+    expect(rows[0].c).toBe(3);
+  });
+
+  it('refuses to clone when two owned nodes share an id', async () => {
+    await run(
+      `CREATE (a:LeBook {id: 'book-a', runId: $runId}),
+              (c1:LeChapter {id: 'same', runId: $runId}),
+              (c2:LeChapter {id: 'same', runId: $runId}),
+              (a)-[:LE_HAS_CHAPTER]->(c1),
+              (a)-[:LE_HAS_CHAPTER]->(c2)`,
+    );
+
+    await expect(
+      inTx((tx) => cloneSubgraph('book-a', bookConfig, tx)),
+    ).rejects.toThrow(/1 owned node\(s\) share an `id`/);
+  });
+
+  it('a delete with a root id of another label is a no-op', async () => {
+    await seedSharedChapter();
+
+    // 'c-a' is a LeChapter; the default root label is LeBook.
+    const res = await inTx((tx) => deleteSubgraph('c-a', bookConfig, tx));
+
+    expect(res.deletedCount).toBe(0);
+    expect(await ids('LeChapter')).toEqual(['c-a', 'c-shared']);
   });
 });
