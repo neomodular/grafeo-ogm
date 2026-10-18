@@ -404,6 +404,46 @@ describe('MutationCompiler.compileMerge()', () => {
     expect(result.params.merge_externalId).toBe('ABC-123');
   });
 
+  // Pre-2.4.1 nothing generated the `@id` on the ON CREATE branch, so an
+  // upsert that created a node stored it without its id.
+  it('generates the @id on ON CREATE when neither create nor the MERGE key supplies it', () => {
+    const result = compiler.compileMerge(
+      { externalId: 'ABC-123' },
+      { externalId: 'ABC-123', title: 'New Book' },
+      { title: 'Updated Book' },
+      bookNode,
+    );
+    const onCreate = result.cypher
+      .split('\n')
+      .find((l) => l.startsWith('ON CREATE SET'));
+    expect(onCreate).toContain('n.`id` = randomUUID()');
+    // ...and never on the ON MATCH branch.
+    const onMatch = result.cypher
+      .split('\n')
+      .find((l) => l.startsWith('ON MATCH SET'));
+    expect(onMatch).not.toContain('randomUUID');
+  });
+
+  it('keeps a caller-supplied or MERGE-key @id instead of generating one', () => {
+    const supplied = compiler.compileMerge(
+      { externalId: 'ABC-123' },
+      { id: 'mine', externalId: 'ABC-123' },
+      {},
+      bookNode,
+    );
+    expect(supplied.cypher).not.toContain('randomUUID');
+    expect(supplied.params.onCreate_id).toBe('mine');
+
+    const keyed = compiler.compileMerge(
+      { id: 'k1' },
+      { title: 'T' },
+      {},
+      bookNode,
+    );
+    expect(keyed.cypher).not.toContain('randomUUID');
+    expect(keyed.cypher).toContain('`id`: $merge_id');
+  });
+
   it('should produce ON CREATE SET with create properties', () => {
     const result = compiler.compileMerge(
       { externalId: 'ABC-123' },

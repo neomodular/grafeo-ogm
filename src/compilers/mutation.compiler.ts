@@ -718,6 +718,16 @@ export class MutationCompiler {
       createSets.push(`n.${escapeIdentifier(propDef.name)} = ${valueExpr}`);
       params[paramName] = bound;
     }
+    // `@id` values are generated on the ON CREATE branch exactly as
+    // create() generates them — unless the caller supplied one in `create`
+    // or it is already fixed by the MERGE key. Pre-2.4.1 nothing generated
+    // it, so an upsert that created a node stored it without its `@id`.
+    for (const [, propDef] of nodeDef.properties) {
+      if (!propDef.isGenerated) continue;
+      if (create[propDef.name] !== undefined) continue;
+      if (mergeKeyNames.includes(propDef.name)) continue;
+      createSets.push(`n.${escapeIdentifier(propDef.name)} = randomUUID()`);
+    }
     if (createSets.length > 0)
       lines.push(`ON CREATE SET ${createSets.join(', ')}`);
 
