@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.5 (2026-10-18) — `create` with several inputs returns every node
+
+### 🐛 Only the first created node was returned ([#12](https://github.com/neomodular/grafeo-ogm/issues/12))
+
+`create({ input: [a, b, c] })` created all three nodes, but returned only the first. Each input binds its own Cypher variable (`n`, `n_1`, `n_2`, …), and the statement ended in a bare `RETURN n`. The response's entity array (`{ <plural>: [...] }`) now holds every created node, in input order. That covers `select`, `selectionSet`, `@cypher` projections and nested relationship selections. The `info` counters were always correct. A single-input `create` emits the same Cypher as before.
+
+The live suites now include multi-input creates, with nested creates and with `@cypher` projection. Against Neo4j 5.26.32, all three cases fail without the fix.
+
 ## 2.3.4 (2026-10-18) — Fulltext `AND` and `NOT` work
 
 ### 🐛 Fulltext `AND` failed for every input ([#11](https://github.com/neomodular/grafeo-ogm/issues/11))
