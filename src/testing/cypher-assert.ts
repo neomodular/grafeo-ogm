@@ -1,4 +1,27 @@
 /**
+ * JSON with object keys sorted at every depth and bigints written as
+ * `{"$bigint":"<digits>"}`, so two values compare equal regardless of key
+ * order and a bigint never equals the number or string with its digits.
+ *
+ * Every pair that JSON.stringify called equal before v2.5.0 is still equal:
+ * this only sorts keys and gives bigint (which used to throw a TypeError)
+ * an encoding. A neo4j Integer stays `{"high":…,"low":…}`, so it equals an
+ * Integer of the same value and not a plain number.
+ */
+function canonicalJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (typeof v === 'bigint') return { $bigint: v.toString() };
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(v).sort())
+        sorted[k] = (v as Record<string, unknown>)[k];
+      return sorted;
+    }
+    return v;
+  });
+}
+
+/**
  * Structural Cypher comparison utility that normalizes whitespace
  * and parameter names for deterministic test assertions.
  */
@@ -91,8 +114,8 @@ export class CypherAssert {
           `Missing param key '${key}' in actual params: ${JSON.stringify(actual)}`,
         );
 
-      const actualVal = JSON.stringify(actual[key]);
-      const expectedVal = JSON.stringify(expected[key]);
+      const actualVal = canonicalJson(actual[key]);
+      const expectedVal = canonicalJson(expected[key]);
       if (actualVal !== expectedVal)
         throw new Error(
           `Param '${key}' mismatch:\n  Actual:   ${actualVal}\n  Expected: ${expectedVal}`,

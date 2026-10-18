@@ -140,6 +140,53 @@ describe('CypherAssert', () => {
         /mismatch/,
       );
     });
+
+    // v2.5.0 — the comparison was JSON.stringify(a) === JSON.stringify(b),
+    // which is key-order sensitive and throws a raw TypeError on bigint.
+    it('ignores object key order, at any depth (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertParams(
+          { p: { x: 1, y: { a: 1, b: 2 } } },
+          { p: { y: { b: 2, a: 1 }, x: 1 } },
+        ),
+      ).not.toThrow();
+    });
+
+    it('keeps array order significant (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertParams({ p: [1, 2] }, { p: [2, 1] }),
+      ).toThrow(/mismatch/);
+    });
+
+    it('compares bigint values instead of throwing (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertParams(
+          { p: 9007199254740993n },
+          { p: 9007199254740993n },
+        ),
+      ).not.toThrow();
+      expect(() => CypherAssert.assertParams({ p: 1n }, { p: 2n })).toThrow(
+        /Param 'p' mismatch/,
+      );
+      // A bigint is not the number with the same digits.
+      expect(() => CypherAssert.assertParams({ p: 1n }, { p: 1 })).toThrow(
+        /mismatch/,
+      );
+    });
+
+    it('compares neo4j Integers by value, and not to plain numbers (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertParams({ p: neo4j.int(5) }, { p: neo4j.int(5) }),
+      ).not.toThrow();
+      expect(() =>
+        CypherAssert.assertParams({ p: neo4j.int(5) }, { p: neo4j.int(6) }),
+      ).toThrow(/mismatch/);
+      // Int writes bind an Integer so they are not sent as Float — a test
+      // asserting a plain number must still catch a missing coercion.
+      expect(() =>
+        CypherAssert.assertParams({ p: neo4j.int(5) }, { p: 5 }),
+      ).toThrow(/mismatch/);
+    });
   });
 });
 
