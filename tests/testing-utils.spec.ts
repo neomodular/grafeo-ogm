@@ -292,6 +292,48 @@ describe('Neo4jRecordFactory', () => {
       expect(node.labels).toEqual(['Book']);
       expect(node.properties).toEqual({ title: 'Aspirin' });
     });
+
+    it('keeps the identity 0 / elementId "0" default', () => {
+      const node = Neo4jRecordFactory.node(['Book'], {}) as {
+        identity: unknown;
+        elementId: string;
+      };
+      expect(neo4j.integer.toNumber(node.identity as number)).toBe(0);
+      expect(node.elementId).toBe('0');
+    });
+
+    // v2.5.0 — every factory node used to share identity 0 / elementId "0",
+    // with no way to give two mock nodes distinct ids.
+    it('accepts an identity and elementId (v2.5.0)', () => {
+      const node = Neo4jRecordFactory.node(
+        ['Book'],
+        { count: Neo4jRecordFactory.integer(5) },
+        { identity: 22, elementId: '4:db:22' },
+      ) as {
+        identity: unknown;
+        elementId: string;
+        properties: Record<string, unknown>;
+      };
+      expect(neo4j.isInt(node.identity)).toBe(true);
+      expect(neo4j.integer.toNumber(node.identity as number)).toBe(22);
+      expect(node.elementId).toBe('4:db:22');
+      expect(neo4j.isInt(node.properties.count)).toBe(true);
+    });
+
+    it('derives elementId from identity when only identity is given (v2.5.0)', () => {
+      const node = Neo4jRecordFactory.node(['Book'], {}, { identity: 7 }) as {
+        elementId: string;
+      };
+      expect(node.elementId).toBe('7');
+    });
+
+    it('passes property values through unchanged (v2.5.0)', () => {
+      // A JS number is not turned into an Integer: 2.0 may be a Float.
+      const node = Neo4jRecordFactory.node(['Book'], { n: 5, f: 2.0 }) as {
+        properties: Record<string, unknown>;
+      };
+      expect(node.properties).toEqual({ n: 5, f: 2.0 });
+    });
   });
 });
 

@@ -137,8 +137,27 @@ export class Neo4jRecordFactory {
 
   /**
    * Create a mock Neo4j Node.
+   *
+   * `properties` are stored as given. The driver returns an Int property as
+   * an Integer, so pass `Neo4jRecordFactory.integer(n)` where a test needs
+   * that; a JS number is never converted, because it may stand for a Float.
+   *
+   * `options.identity` and `options.elementId` (v2.5.0) give mock nodes
+   * distinct ids; without them every node has identity 0 and elementId "0".
+   * A given identity alone yields elementId `String(identity)`, as the
+   * driver does for a 4.x server.
    */
-  static node(labels: string[], properties: Record<string, unknown>): unknown {
-    return new neo4j.types.Node(neo4j.int(0), labels, properties);
+  static node(
+    labels: string[],
+    properties: Record<string, unknown>,
+    options: { identity?: number | Integer; elementId?: string } = {},
+  ): unknown {
+    const identity = neo4j.int(options.identity ?? 0);
+    return new neo4j.types.Node(
+      identity,
+      labels,
+      properties,
+      options.elementId ?? identity.toString(),
+    );
   }
 }
