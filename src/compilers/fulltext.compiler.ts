@@ -344,10 +344,14 @@ export class FulltextCompiler {
     // empty results for IN-direction relationship fulltext queries.
     const endpointFn = relDef.direction === 'IN' ? 'endNode' : 'startNode';
 
+    // v2.5.0 — the index yields one row per matching RELATIONSHIP; group
+    // by the endpoint so a node with several matching relationships comes
+    // back once, with its best score. Pre-2.5.0 it came back once per
+    // relationship, inflating `count` and cutting `limit` pages short.
     const cypher = [
       `CALL db.index.fulltext.queryRelationships('${indexName}', $${paramName})`,
       `YIELD relationship AS rel, score`,
-      `WITH ${endpointFn}(rel) AS ${nodeVar}, score`,
+      `WITH ${endpointFn}(rel) AS ${nodeVar}, max(score) AS score`,
     ].join('\n');
 
     const result: FulltextResult = { cypher, params };

@@ -470,6 +470,10 @@ describe('FulltextCompiler - relationship index via compile()', () => {
     expect(result.cypher).toContain('db.index.fulltext.queryRelationships');
     expect(result.cypher).toContain('CommentTextSearch');
     expect(result.cypher).toContain('startNode(rel)');
+    // v2.5.0 — one row per node (best score), not one per relationship.
+    expect(result.cypher).toContain(
+      'WITH startNode(rel) AS n, max(score) AS score',
+    );
   });
 
   // v1.7.4 regression — IN-direction relationship fulltext used to
