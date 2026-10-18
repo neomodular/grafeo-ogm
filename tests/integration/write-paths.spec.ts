@@ -309,4 +309,107 @@ describeLive('Write paths — live Neo4j', () => {
       expect(await linked('o-b1', 'LC_WROTE')).toEqual(['p-b1', 'q-b1']);
     });
   });
+
+  describe('nested connect / disconnect inside a connect / disconnect item', () => {
+    async function postTags(title: string): Promise<string[]> {
+      const rows = await run(
+        `MATCH (:LcPost {runId: $runId, title: $title})-[:LC_TAGGED]->(t) RETURN t.name AS n ORDER BY n`,
+        { title },
+      );
+      return rows.map((r) => r.n as string);
+    }
+
+    it('update.connect: connect inside a connect item links the deeper node', async () => {
+      await seed(
+        `CREATE (:LcOwner {id: randomUUID(), runId: $runId, name: 'o-n1'})
+         CREATE (:LcPost {id: randomUUID(), runId: $runId, title: 'p-n1'})
+         CREATE (:LcTag {id: randomUUID(), runId: $runId, name: 't-n1'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-n1' },
+        connect: {
+          posts: [
+            {
+              where: { node: { title: 'p-n1' } },
+              connect: [{ tags: [{ where: { node: { name: 't-n1' } } }] }],
+            },
+          ],
+        },
+      });
+      expect(await linked('o-n1', 'LC_WROTE')).toEqual(['p-n1']);
+      expect(await postTags('p-n1')).toEqual(['t-n1']);
+    });
+
+    it('create: connect inside a nested connect item links the deeper node', async () => {
+      await seed(
+        `CREATE (:LcPost {id: randomUUID(), runId: $runId, title: 'p-n2'})
+         CREATE (:LcTag {id: randomUUID(), runId: $runId, name: 't-n2'})`,
+      );
+      await Owner().create({
+        input: [
+          {
+            runId,
+            name: 'o-n2',
+            posts: {
+              connect: [
+                {
+                  where: { node: { title: 'p-n2' } },
+                  connect: [{ tags: [{ where: { node: { name: 't-n2' } } }] }],
+                },
+              ],
+            },
+          },
+        ],
+      });
+      expect(await linked('o-n2', 'LC_WROTE')).toEqual(['p-n2']);
+      expect(await postTags('p-n2')).toEqual(['t-n2']);
+    });
+
+    it('update.disconnect: disconnect inside a disconnect item unlinks the deeper node', async () => {
+      await seed(
+        `CREATE (o:LcOwner {id: randomUUID(), runId: $runId, name: 'o-n3'})
+         CREATE (o)-[:LC_WROTE]->(p:LcPost {id: randomUUID(), runId: $runId, title: 'p-n3'})
+         CREATE (p)-[:LC_TAGGED]->(:LcTag {id: randomUUID(), runId: $runId, name: 't-n3'})
+         CREATE (p)-[:LC_TAGGED]->(:LcTag {id: randomUUID(), runId: $runId, name: 'keep-n3'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-n3' },
+        disconnect: {
+          posts: [
+            {
+              where: { node: { title: 'p-n3' } },
+              disconnect: { tags: [{ where: { node: { name: 't-n3' } } }] },
+            },
+          ],
+        },
+      });
+      expect(await linked('o-n3', 'LC_WROTE')).toEqual([]);
+      expect(await postTags('p-n3')).toEqual(['keep-n3']);
+    });
+
+    it('nested update: disconnect inside a disconnect item unlinks the deeper node', async () => {
+      await seed(
+        `CREATE (o:LcOwner {id: randomUUID(), runId: $runId, name: 'o-n4'})
+         CREATE (o)-[:LC_WROTE]->(p:LcPost {id: randomUUID(), runId: $runId, title: 'p-n4'})
+         CREATE (p)-[:LC_TAGGED]->(:LcTag {id: randomUUID(), runId: $runId, name: 't-n4'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-n4' },
+        update: {
+          posts: [
+            {
+              disconnect: [
+                {
+                  where: { node: { title: 'p-n4' } },
+                  disconnect: { tags: [{ where: { node: { name: 't-n4' } } }] },
+                },
+              ],
+            },
+          ],
+        },
+      });
+      expect(await linked('o-n4', 'LC_WROTE')).toEqual([]);
+      expect(await postTags('p-n4')).toEqual([]);
+    });
+  });
 });

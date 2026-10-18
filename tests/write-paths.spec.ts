@@ -21,6 +21,7 @@ const typeDefs = /* GraphQL */ `
     name: String
     breed: String
     ownerId: String
+    toys: [Tag!]! @relationship(type: "PLAYS", direction: OUT)
   }
   type Cat implements Pet @node {
     id: ID! @id
@@ -39,6 +40,7 @@ const typeDefs = /* GraphQL */ `
   type Tag @node {
     id: ID! @id
     name: String
+    ownerId: String
   }
   type Post @node {
     id: ID! @id
@@ -118,6 +120,7 @@ function policyOgm(recorded: Recorded[]): OGM {
           when: (_c, input) => input.name !== 'forbidden',
         }),
       ],
+      Tag: [permissive({ operations: ['read'], when: scoped })],
     },
   });
 }
@@ -502,5 +505,179 @@ describe('array connect with a bare-property where (v2.5.0)', () => {
     expect(recorded[0].params.connect_posts).toEqual([
       { where: { node: { title: 'a' } } },
     ]);
+  });
+});
+
+describe('connect / disconnect nested in a connect / disconnect item (v2.5.0)', () => {
+  it('update.connect: the nested connect links the connected node, inside its CALL', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: {
+          posts: [
+            {
+              where: { node: { title: 'p' } },
+              connect: [{ tags: [{ where: { node: { name: 't' } } }] }],
+            },
+          ],
+        },
+      });
+    const { cypher } = recorded[0];
+    // A connect item with a nested connect never takes the UNWIND path.
+    expect(cypher).not.toContain('UNWIND $connect_posts');
+    expect(cypher).toContain(
+      [
+        'MERGE (n)-[:`WROTE`]->(target_posts_0)',
+        'WITH n, target_posts_0',
+        'CALL {',
+        'WITH n, target_posts_0',
+        'UNWIND $target_posts_0_connect_tags AS connItem',
+        'MATCH (target_posts_0_target:`Tag`)',
+        'WHERE target_posts_0_target.`name` = connItem.where.node.name',
+        'MERGE (target_posts_0)-[:`TAGGED`]->(target_posts_0_target)',
+        'RETURN count(*) AS _conn_target_posts_0_tags',
+        '}',
+        'RETURN count(*) AS _ccn_posts_0',
+        '}',
+      ].join('\n'),
+    );
+  });
+
+  it('create and nested-update connects accept a nested connect too', async () => {
+    const recorded: Recorded[] = [];
+    const Owner = plainOgm(recorded).model('Owner');
+    const nestedConnect = {
+      where: { node: { title: 'p' } },
+      connect: { tags: { where: { node: { name: 't' } } } },
+    };
+    await Owner.create({ input: [{ posts: { connect: [nestedConnect] } }] });
+    await Owner.update({
+      where: { name: 'o' },
+      update: { posts: [{ connect: [nestedConnect] }] },
+    });
+    expect(recorded[0].cypher).toContain(
+      'MERGE (n_cn0)-[:`TAGGED`]->(n_cn0_target)',
+    );
+    expect(recorded[1].cypher).toContain(
+      'MERGE (n_conn0)-[:`TAGGED`]->(n_conn0_target)',
+    );
+  });
+
+  it('update.disconnect: the nested disconnect unlinks the disconnected node onward', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        disconnect: {
+          posts: [
+            {
+              where: { node: { title: 'p' } },
+              disconnect: { tags: [{ where: { node: { name: 't' } } }] },
+            },
+          ],
+        },
+      });
+    expect(recorded[0].cypher).toContain(
+      [
+        'DELETE r_posts_0',
+        'WITH n, target_posts_0',
+        'CALL {',
+        'WITH n, target_posts_0',
+        'OPTIONAL MATCH (target_posts_0)-[target_posts_0_r_tags_0:`TAGGED`]->(target_posts_0_target_tags_0:`Tag`)',
+        'WHERE target_posts_0_target_tags_0.`name` = $param2',
+        'DELETE target_posts_0_r_tags_0',
+        'RETURN count(*) AS _target_posts_0_r_tags_0',
+        '}',
+        'RETURN count(*) AS _r_posts_0',
+      ].join('\n'),
+    );
+  });
+
+  it('nested update: a disconnect item with only a nested disconnect binds its target', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        update: {
+          posts: [{ disconnect: [{ disconnect: { tags: [{}] } }] }],
+        },
+      });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain(
+      'OPTIONAL MATCH (n)-[r_disc_posts_0_0:`WROTE`]->(n_disc0:`Post`)',
+    );
+    expect(cypher).toContain(
+      'OPTIONAL MATCH (n_disc0)-[n_disc0_r_tags_0:`TAGGED`]->()',
+    );
+  });
+
+  it('a nested connect / disconnect under a flat interface relationship throws', async () => {
+    const recorded: Recorded[] = [];
+    const Owner = plainOgm(recorded).model('Owner');
+    await expect(() =>
+      Owner.update({
+        connect: { pets: [{ where: {}, connect: [{ toys: [] }] }] },
+      }),
+    ).rejects.toThrow(OGMError);
+    await expect(() =>
+      Owner.update({
+        disconnect: { pets: [{ where: {}, disconnect: { toys: [] } }] },
+      }),
+    ).rejects.toThrow(OGMError);
+  });
+
+  describe('target policies', () => {
+    it('every level of a nested connect carries its own target read policy', async () => {
+      const recorded: Recorded[] = [];
+      await policyOgm(recorded)
+        .withContext({ uid: 'u1' })
+        .model('Owner')
+        .update({
+          where: { name: 'o' },
+          connect: {
+            pets: {
+              Dog: [
+                {
+                  where: { node: { name: 'Rex' } },
+                  connect: [{ toys: [{ where: { node: { name: 'ball' } } }] }],
+                },
+              ],
+            },
+            posts: [
+              {
+                where: { node: { title: 'p' } },
+                connect: [{ tags: [{ where: { node: { name: 't' } } }] }],
+              },
+            ],
+          },
+        });
+      const { cypher } = recorded[0];
+      expect(cypher).toMatch(
+        /target_pets_Dog_0\.`name` = \$param\d+ AND \(target_pets_Dog_0\.`ownerId` = \$param\d+\)/,
+      );
+      expect(cypher).toMatch(
+        /WHERE target_posts_0_target\.`name` = connItem\.where\.node\.name AND \(target_posts_0_target\.`ownerId` = \$param\d+\)/,
+      );
+    });
+
+    it('a nested disconnect carries the deeper target read policy', async () => {
+      const recorded: Recorded[] = [];
+      await policyOgm(recorded)
+        .withContext({ uid: 'u1' })
+        .model('Owner')
+        .update({
+          where: { name: 'o' },
+          disconnect: {
+            posts: [{ where: {}, disconnect: { tags: [{}] } }],
+          },
+        });
+      expect(recorded[0].cypher).toMatch(
+        /OPTIONAL MATCH \(target_posts_0\)-\[target_posts_0_r_tags_0:`TAGGED`\]->\(target_posts_0_target_tags_0\)\nWHERE \(target_posts_0_target_tags_0\.`ownerId` = \$param\d+\)/,
+      );
+    });
   });
 });

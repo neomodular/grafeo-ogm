@@ -43,6 +43,8 @@ export interface MutationResult {
  */
 interface WriteScope {
   sourceVar: string;
+  /** Every variable the WITH carries (ancestors + `sourceVar`). */
+  carryVars: string[];
   withClause: string;
   varPrefix: string;
   depth: number;
@@ -51,10 +53,34 @@ interface WriteScope {
 /** The root node `n` of an update — the pre-2.5.0 names, unprefixed. */
 const TOP_SCOPE: WriteScope = {
   sourceVar: 'n',
+  carryVars: ['n'],
   withClause: 'WITH n',
   varPrefix: '',
   depth: 0,
 };
+
+/** Max depth of connects nested in connects (disconnects likewise). */
+const MAX_NESTED_LINK_DEPTH = 5;
+
+/**
+ * The scope of a connect / disconnect nested in an item whose target is
+ * bound as `targetVar`: that node becomes the source, everything in scope
+ * stays carried, and its own names are prefixed by it.
+ */
+function nestedScope(carryVars: string[], targetVar: string, depth: number) {
+  if (depth >= MAX_NESTED_LINK_DEPTH)
+    throw new OGMError(
+      `Nested connect / disconnect deeper than ${MAX_NESTED_LINK_DEPTH} levels is not supported.`,
+    );
+  const vars = [...new Set([...carryVars, targetVar])];
+  return {
+    sourceVar: targetVar,
+    carryVars: vars,
+    withClause: `WITH ${vars.join(', ')}`,
+    varPrefix: `${targetVar}_`,
+    depth: depth + 1,
+  } satisfies WriteScope;
+}
 
 /**
  * Compiles create, update, delete, and label mutations into Cypher + params.
@@ -236,6 +262,8 @@ export class MutationCompiler {
     targetNodeDef: NodeDefinition,
   ): boolean {
     for (const item of items) {
+      // A nested `connect` is per item (v2.5.0): the UNWIND cannot run it.
+      if (item.connect != null) return false;
       const where = item.where;
       if (where === undefined) continue;
       if (!isPlainObject(where)) return false;
@@ -1348,87 +1376,32 @@ export class MutationCompiler {
         : [relInput.connect as Record<string, unknown>];
 
       for (let ci = 0; ci < connectItems.length; ci++) {
-        const connectSpec = connectItems[ci];
-        const whereSpec = connectSpec.where as
-          | Record<string, unknown>
-          | undefined;
-        const edgeInput = connectSpec.edge as
-          | Record<string, unknown>
-          | undefined;
-
         // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline
-        lines.push(withClause);
-        lines.push(`CALL {`);
-        lines.push(withClause);
-
-        const connectVar = `${nodeVar}_cn${startCounter + counter}`;
+        const index = startCounter + counter;
         counter++;
-
-        const { match, labelPredicate } = this.targetMatch(
-          targetNodeDef,
-          connectVar,
-        );
-        lines.push(match);
-
-        const connectConditions = [
-          labelPredicate,
-          this.compileTargetWhere(
-            whereSpec,
-            connectVar,
-            targetNodeDef,
-            params,
-            policyContext,
-            paramCounter,
-          ),
-          this.buildTargetPolicyPredicate(
-            targetNodeDef,
-            connectVar,
-            params,
-            policyContext,
-            paramCounter,
-          ),
-        ].filter((c): c is string => Boolean(c));
-        if (connectConditions.length > 0)
-          lines.push(`WHERE ${connectConditions.join(' AND ')}`);
-
-        if (edgeInput && Object.keys(edgeInput).length > 0) {
-          // Use bare target var (no label) since connectVar is already bound by MATCH.
-          // Including labels on a bound variable in MERGE causes Neo4j to reject it.
-          const relVar = `r_conn_${startCounter + counter - 1}`;
-          assertSafeIdentifier(relDef.type, 'relationship type');
-          const escapedRelType = escapeIdentifier(relDef.type);
-          const mergePattern =
-            relDef.direction === 'OUT'
-              ? `(${nodeVar})-[${relVar}:${escapedRelType}]->(${connectVar})`
-              : `(${nodeVar})<-[${relVar}:${escapedRelType}]-(${connectVar})`;
-          lines.push(`MERGE ${mergePattern}`);
-          const setItems: string[] = [];
-          for (const [prop, val] of Object.entries(edgeInput)) {
-            if (val === undefined) continue;
-            assertSafePropertyName(prop, 'edge property');
-            const edgePropDef = this.getEdgePropDef(relDef, prop);
-            const paramName = `${prefix}_conn${ci}_edge_${prop}`;
-            setItems.push(
-              `r_conn_${startCounter + counter - 1}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                `$${paramName}`,
-                val,
-                edgePropDef,
-              )}`,
-            );
-            params[paramName] = coerceWriteValue(val, edgePropDef);
-          }
-          if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
-        } else {
-          const relPattern = buildRelPattern({
-            sourceVar: nodeVar,
+        lines.push(
+          ...this.buildConnectItem({
+            connectSpec: connectItems[ci],
             relDef,
-            targetVar: connectVar,
-          });
-          lines.push(`MERGE ${relPattern}`);
-        }
-
-        lines.push(`RETURN count(*) AS _ccn_${prefix}_${ci}`);
-        lines.push(`}`);
+            targetNodeDef,
+            sourceVar: nodeVar,
+            withClause,
+            connectVar: `${nodeVar}_cn${index}`,
+            relVar: `r_conn_${index}`,
+            edgeParamPrefix: `${prefix}_conn${ci}`,
+            returnAlias: `_ccn_${prefix}_${ci}`,
+            params,
+            policyContext,
+            paramCounter,
+            scope: {
+              sourceVar: nodeVar,
+              carryVars: allVars,
+              withClause,
+              varPrefix: '',
+              depth: 0,
+            },
+          }),
+        );
       }
     }
 
@@ -1788,6 +1761,35 @@ export class MutationCompiler {
       lines.push(`MERGE ${relPattern}`);
     }
 
+    // A `connect` nested in the item links the CONNECTED node onward
+    // (`connect: { posts: [{ where, connect: { tags: [...] } }] }`), with
+    // the same policy predicates at its level. Pre-2.5.0 it was ignored.
+    const nested = connectSpec?.connect;
+    if (nested != null) {
+      if (abstractTarget(targetNodeDef.typeName, this.schema))
+        throw new OGMError(
+          `A nested "connect" inside a connect on "${relDef.fieldName}" (abstract type "${targetNodeDef.typeName}") ` +
+            `must be keyed by the implementing type, e.g. { ${relDef.fieldName}: { Member: [{ where, connect }] } }.`,
+        );
+      const inner = nestedScope(a.scope.carryVars, connectVar, a.scope.depth);
+      for (const nestedConnect of Array.isArray(nested) ? nested : [nested]) {
+        if (!isPlainObject(nestedConnect))
+          throw new OGMError(
+            `A nested "connect" inside a connect on "${relDef.fieldName}" must be an object keyed by relationship.`,
+          );
+        lines.push(
+          ...this.buildConnects(
+            nestedConnect,
+            targetNodeDef,
+            a.params,
+            a.policyContext,
+            a.paramCounter,
+            inner,
+          ),
+        );
+      }
+    }
+
     lines.push(`RETURN count(*) AS ${a.returnAlias}`);
     lines.push('}');
     return lines;
@@ -1850,6 +1852,50 @@ export class MutationCompiler {
       );
     }
 
+    return lines;
+  }
+
+  /**
+   * A `disconnect` nested in a disconnect item unlinks the disconnected
+   * node's OWN relationships (`disconnect: { posts: [{ where, disconnect:
+   * { tags: [...] } }] }`), with the same policy predicates at its level.
+   * Pre-2.5.0 it was ignored. `''`-free: no input, no lines.
+   */
+  private buildNestedDisconnect(
+    nested: unknown,
+    relDef: RelationshipDefinition,
+    targetNodeDef: NodeDefinition,
+    targetVar: string,
+    carryVars: string[],
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+    depth = 0,
+  ): string[] {
+    if (nested == null) return [];
+    if (abstractTarget(targetNodeDef.typeName, this.schema))
+      throw new OGMError(
+        `A nested "disconnect" inside a disconnect on "${relDef.fieldName}" (abstract type "${targetNodeDef.typeName}") ` +
+          `must be keyed by the implementing type, e.g. { ${relDef.fieldName}: { Member: [{ where, disconnect }] } }.`,
+      );
+    const inner = nestedScope(carryVars, targetVar, depth);
+    const lines: string[] = [];
+    for (const nestedDisconnect of Array.isArray(nested) ? nested : [nested]) {
+      if (!isPlainObject(nestedDisconnect))
+        throw new OGMError(
+          `A nested "disconnect" inside a disconnect on "${relDef.fieldName}" must be an object keyed by relationship.`,
+        );
+      lines.push(
+        ...this.buildDisconnects(
+          nestedDisconnect,
+          targetNodeDef,
+          params,
+          policyContext,
+          paramCounter,
+          inner,
+        ),
+      );
+    }
     return lines;
   }
 
@@ -1964,6 +2010,19 @@ export class MutationCompiler {
           lines.push(`WHERE ${disconnectConditions.join(' AND ')}`);
 
         lines.push(`DELETE ${relVar}`);
+        lines.push(
+          ...this.buildNestedDisconnect(
+            disconnectSpec.disconnect,
+            relDef,
+            targetNodeDef,
+            targetVar,
+            scope.carryVars,
+            params,
+            policyContext,
+            paramCounter,
+            scope.depth,
+          ),
+        );
       }
 
       lines.push(`RETURN count(*) AS _${relVar}`);
@@ -2151,6 +2210,9 @@ export class MutationCompiler {
             const whereSpec = disconnectSpec.where as
               | Record<string, unknown>
               | undefined;
+            // A nested `disconnect` needs the target bound, so an item that
+            // carries one is never the anonymous blanket form.
+            const nestedDisconnect = disconnectSpec.disconnect;
 
             const relVar = `r_disc_${key}_${i}_${di}`;
 
@@ -2160,7 +2222,10 @@ export class MutationCompiler {
             lines.push('CALL {');
             lines.push(withClause);
 
-            if (!whereSpec || Object.keys(whereSpec).length === 0) {
+            if (
+              (!whereSpec || Object.keys(whereSpec).length === 0) &&
+              nestedDisconnect == null
+            ) {
               // Blanket — same read-policy gate as the top-level blanket
               // disconnect: only unlink targets the caller can read.
               const blanketTarget = `${sourceVar}_disc${varCounter}`;
@@ -2208,6 +2273,9 @@ export class MutationCompiler {
               // path (`buildDisconnects`). Restores backwards-compat with
               // @neo4j/graphql-ogm's nested update.disconnect[].where shape.
               const nestedDiscConditions = [
+                abstract
+                  ? this.targetMatch(targetNodeDef, discTarget).labelPredicate
+                  : null,
                 this.compileTargetWhere(
                   whereSpec,
                   discTarget,
@@ -2228,6 +2296,18 @@ export class MutationCompiler {
                 lines.push(`WHERE ${nestedDiscConditions.join(' AND ')}`);
 
               lines.push(`DELETE ${relVar}`);
+              lines.push(
+                ...this.buildNestedDisconnect(
+                  nestedDisconnect,
+                  relDef,
+                  targetNodeDef,
+                  discTarget,
+                  allVars,
+                  params,
+                  policyContext,
+                  paramCounter,
+                ),
+              );
             }
 
             lines.push(`RETURN count(*) AS _${relVar}`);
@@ -2242,93 +2322,32 @@ export class MutationCompiler {
             : [item.connect as Record<string, unknown>];
 
           for (let ci = 0; ci < connectItems.length; ci++) {
-            const connectSpec = connectItems[ci];
-            const whereSpec = connectSpec.where as
-              | Record<string, unknown>
-              | undefined;
-            const edgeInput = connectSpec.edge as
-              | Record<string, unknown>
-              | undefined;
-
             // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline
-            lines.push(withClause);
-            lines.push(`CALL {`);
-            lines.push(withClause);
-
             const connectVar = `${sourceVar}_conn${varCounter}`;
             varCounter++;
-
-            const { match, labelPredicate } = this.targetMatch(
-              targetNodeDef,
-              connectVar,
-            );
-            lines.push(match);
-
-            // Pre-1.8.1 this used `buildNodeWhereConditions` with
-            // `(whereSpec?.node ?? whereSpec ?? {})`, which broke on
-            // connection-shape inputs (NOT/AND/OR wrappers). Routing
-            // through `buildConnectionWhereConditions` makes nested
-            // connect handle the same shapes as nested disconnect and
-            // top-level paths. Empty/undefined `whereSpec` short-circuits
-            // to `[]` inside the helper, so the no-where case still works.
-            const nestedConnConditions = [
-              labelPredicate,
-              this.compileTargetWhere(
-                whereSpec,
-                connectVar,
-                targetNodeDef,
-                params,
-                policyContext,
-                paramCounter,
-              ),
-              this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                connectVar,
-                params,
-                policyContext,
-                paramCounter,
-              ),
-            ].filter((c): c is string => Boolean(c));
-            if (nestedConnConditions.length > 0)
-              lines.push(`WHERE ${nestedConnConditions.join(' AND ')}`);
-
-            if (edgeInput && Object.keys(edgeInput).length > 0) {
-              // Use bare target var (no label) since connectVar is already bound by MATCH
-              const relVar = `r_conn_${key}_${ci}`;
-              assertSafeIdentifier(relDef.type, 'relationship type');
-              const escapedRelType = escapeIdentifier(relDef.type);
-              const mergePattern =
-                relDef.direction === 'OUT'
-                  ? `(${sourceVar})-[${relVar}:${escapedRelType}]->(${connectVar})`
-                  : `(${sourceVar})<-[${relVar}:${escapedRelType}]-(${connectVar})`;
-              lines.push(`MERGE ${mergePattern}`);
-              const setItems: string[] = [];
-              for (const [prop, val] of Object.entries(edgeInput)) {
-                if (val === undefined) continue;
-                assertSafePropertyName(prop, 'edge property');
-                const edgePropDef = this.getEdgePropDef(relDef, prop);
-                const paramName = `${itemPrefix}_conn${ci}_edge_${prop}`;
-                setItems.push(
-                  `r_conn_${key}_${ci}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                    `$${paramName}`,
-                    val,
-                    edgePropDef,
-                  )}`,
-                );
-                params[paramName] = coerceWriteValue(val, edgePropDef);
-              }
-              if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
-            } else {
-              const relPattern = buildRelPattern({
-                sourceVar,
+            lines.push(
+              ...this.buildConnectItem({
+                connectSpec: connectItems[ci],
                 relDef,
-                targetVar: connectVar,
-              });
-              lines.push(`MERGE ${relPattern}`);
-            }
-
-            lines.push(`RETURN count(*) AS _cn_${key}_${ci}`);
-            lines.push(`}`);
+                targetNodeDef,
+                sourceVar,
+                withClause,
+                connectVar,
+                relVar: `r_conn_${key}_${ci}`,
+                edgeParamPrefix: `${itemPrefix}_conn${ci}`,
+                returnAlias: `_cn_${key}_${ci}`,
+                params,
+                policyContext,
+                paramCounter,
+                scope: {
+                  sourceVar,
+                  carryVars: allVars,
+                  withClause,
+                  varPrefix: '',
+                  depth: 0,
+                },
+              }),
+            );
           }
         }
 
