@@ -1100,6 +1100,13 @@ type Book @node {
 
 `statement` is the Cypher body — `this` is bound to the matched node. `columnName` is the alias the OGM reads from the `RETURN` clause; if omitted it defaults to the field name.
 
+**Row semantics (v2.4.0+).** A `@cypher` field always resolves to **one value per node**, in every scope (select, where, sort, nested selections):
+
+- If the statement returns **no rows**, the field is `null` and the node is still returned. A filter like `where: { status: null }` matches it, and it sorts as `null`.
+- If the statement returns **several rows**, the field takes the **first** row's `columnName` value, and the node is returned once. Add an `ORDER BY` to the statement when it matters which row is first.
+
+Before v2.4.0, top-level fields dropped nodes whose statement returned no rows and duplicated nodes whose statement returned several. See the [2.4.0 changelog](CHANGELOG.md).
+
 > **⚠️ Security — `@cypher` SDL is trusted code, not data.** The `statement` argument is interpolated **verbatim** into the compiled Cypher (no parameterisation, no escaping). Treat `@cypher` directives the same way you treat `eval()` in your application code: the string MUST be a constant authored at development time, never built from runtime input. If your `typeDefs` are ever assembled from user input, environment variables, database records, or remote configuration, you have a Cypher-injection vector equivalent to RCE on the database (`MATCH (n) DETACH DELETE n RETURN '' AS x` in a `statement` will wipe the graph). The grafeo-ogm runtime cannot distinguish between developer-authored and user-derived SDL — that boundary is the application's responsibility.
 
 #### Using @cypher in SELECT

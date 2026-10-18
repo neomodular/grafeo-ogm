@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.4.0 (2026-10-18) — `@cypher` fields keep every node exactly once
+
+> **Minor release with a behavior change.** Reads that select, filter or sort a `@cypher` field can return a **different number of rows** than in 2.3.x. Nodes that were silently dropped now appear, with `null` for the field, and duplicated nodes now appear once. See *Behavior changes*.
+
+### 🐛 A `@cypher` statement with zero or several rows dropped or duplicated the node ([#9](https://github.com/neomodular/grafeo-ogm/issues/9))
+
+A top-level `@cypher` field was computed with a plain `CALL { <statement> }`, and a CALL that yields zero rows removes the outer row, while one that yields several multiplies it. The same prelude backs the select, `where` and `options.sort` scopes, so with a statement like `MATCH (this)-[:HAS_STATUS]->(s) RETURN s.name AS status`:
+
+| Operation | 2.3.x | 2.4.0 |
+|---|---|---|
+| `find`, selecting `status` | node without a status **dropped**; node with 2 statuses **returned twice** | each node once: `null` / first status |
+| `where: { status: null }` | **never matched** | matches nodes without a status |
+| `where: { status_NOT: x }` | duplicates | each node once |
+| `options.sort: [{ status }]` | nodes without a status **missing**, others duplicated | every node once; `null` sorts per Neo4j (last on `ASC`) |
+| `count({ where })` on `status` | undercounted / overcounted | agrees with `find` |
+| `create` / `update` / `upsert` selecting `status` | **`[]` (or `null`) even though the write committed** | the written node |
+
+Each prelude now runs the statement in an inner `CALL` and reduces its `columnName` column with `head(collect(…))`. A grouping-free aggregation always yields exactly one row, so every node is kept once. That matches how nested selections already projected `@cypher` fields (`head(COLLECT { … })`). The shape works on every Neo4j 5.x, unlike `OPTIONAL CALL` (5.24+), and statements may still return extra columns.
+
+### Behavior changes
+
+- **Row counts can change** for any read that selects, filters or sorts a top-level `@cypher` field. Code that relied on such nodes being absent, for example as an implicit "has a status" filter, should filter explicitly: `where: { status_NOT: null }`.
+- **With several statement rows, the first one wins.** Add an `ORDER BY` to the `@cypher` statement if it matters which value is picked.
+- **Generated Cypher changes** for queries that use `@cypher` fields. If you pin compiled Cypher in tests, expect the new prelude shape. Queries without `@cypher` fields are byte-identical.
+
+A new opt-in live suite, `tests/integration/cypher-field-row-semantics.spec.ts`, pins each row above as a database outcome. Against Neo4j 5.26.32, all 7 cases fail on 2.3.6.
+
 ## 2.3.6 (2026-10-18) — `searchByPhrase` works
 
 ### 🐛 `searchByPhrase` called a function as a procedure ([#13](https://github.com/neomodular/grafeo-ogm/issues/13))
