@@ -192,3 +192,38 @@ describe('generated type-name collisions', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('generated <T>AggregateSelection matches Model.aggregate() output', () => {
+  // Model.aggregate() returns { min, max } for every non-numeric field and
+  // adds { average, sum } for Int / Float. Through v2.4.7 the generated
+  // ID / String selections declared { shortest, longest }, which the
+  // runtime never returns.
+  it('types ID / String aggregates as { min, max }', async () => {
+    const { errors } = await typecheckGenerated(
+      `
+      type Book @node {
+        id: ID! @id
+        title: String!
+        pages: Int
+        price: Float
+        published: DateTime
+      }
+    `,
+      `${PRELUDE}
+const agg: G.BookAggregateSelection = {
+  count: 2,
+  id: { min: 'a', max: 'b' },
+  title: { min: 'A', max: 'Z' },
+  pages: { min: 1, max: 9, average: 5, sum: 10 },
+  price: { min: 1.5, max: 2.5, average: 2, sum: 4 },
+  published: { min: '2024-01-01T00:00:00Z', max: '2024-02-01T00:00:00Z' },
+};
+// @ts-expect-error the runtime never returns shortest
+const s: G.StringAggregateSelection = { shortest: 'A' };
+// @ts-expect-error the runtime never returns longest
+const i: G.IdAggregateSelection = { longest: 'b' };
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+});

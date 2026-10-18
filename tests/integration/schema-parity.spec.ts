@@ -158,4 +158,19 @@ describeLive('schema parity — live Neo4j', () => {
       1,
     );
   });
+
+  // The generated StringAggregateSelection declares exactly this shape;
+  // through v2.4.7 it declared { shortest, longest } instead.
+  it('returns { min, max } for String aggregates', async () => {
+    await ogm.model('LdActor').create({
+      input: [
+        { runId, name: 'Bo' },
+        { runId, name: 'Ana' },
+      ],
+    });
+    const agg = await ogm
+      .model('LdActor')
+      .aggregate({ where: { runId }, aggregate: { count: true, name: true } });
+    expect(agg).toEqual({ count: 2, name: { min: 'Ana', max: 'Bo' } });
+  });
 });

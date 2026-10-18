@@ -21,16 +21,20 @@ const SCALAR_AGGREGATE_MAP: Record<string, string> = {
 // Shared aggregate selection types (schema-independent)
 // ---------------------------------------------------------------------------
 
+// ID / String mirror Model.aggregate(), which returns lexicographic
+// `min` / `max` for every non-numeric field. Through v2.4.7 these
+// declared upstream's `shortest` / `longest`, which the runtime never
+// returns.
 const SHARED_AGGREGATE_TYPES = `export type IdAggregateSelection = {
   __typename?: "IDAggregateSelection";
-  shortest?: Maybe<Scalars["ID"]["output"]>;
-  longest?: Maybe<Scalars["ID"]["output"]>;
+  min?: Maybe<Scalars["ID"]["output"]>;
+  max?: Maybe<Scalars["ID"]["output"]>;
 };
 
 export type StringAggregateSelection = {
   __typename?: "StringAggregateSelection";
-  shortest?: Maybe<Scalars["String"]["output"]>;
-  longest?: Maybe<Scalars["String"]["output"]>;
+  min?: Maybe<Scalars["String"]["output"]>;
+  max?: Maybe<Scalars["String"]["output"]>;
 };
 
 export type IntAggregateSelection = {
