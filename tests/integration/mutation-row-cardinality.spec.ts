@@ -290,6 +290,48 @@ describeLive('Mutation row cardinality — live Neo4j', () => {
     expect(books[1].chapters.map((c) => c.id)).toEqual([id('mn-2-a')]);
   });
 
+  // v2.4.2 — within ONE update item, create ran before disconnect, so a
+  // same-item disconnect-all removed the link it had just created.
+  it('same-item disconnect-all + create leaves only the new node linked', async () => {
+    const bookId = await seedBook('same-item', 2);
+    const res = (await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      update: {
+        chapters: [
+          {
+            disconnect: [{}],
+            create: [{ node: { id: id('same-item-new'), runId } }],
+          },
+        ],
+      },
+      select: { [plural]: { id: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([{ id: bookId }]);
+    expect(await chapterIds(bookId)).toEqual([id('same-item-new')]);
+  });
+
+  it('same-item connect + create links both', async () => {
+    const bookId = await seedBook('same-item-cc', 0);
+    const existing = id('same-item-cc-existing');
+    await run('CREATE (:ItCardChapter {id: $existing, runId: $runId})', {
+      existing,
+    });
+    await ogm.model('ItCardBook').update({
+      where: { id: bookId },
+      update: {
+        chapters: [
+          {
+            connect: [{ where: { node: { id: existing } } }],
+            create: [{ node: { id: id('same-item-cc-new'), runId } }],
+          },
+        ],
+      },
+    });
+    expect(await chapterIds(bookId)).toEqual(
+      [existing, id('same-item-cc-new')].sort(),
+    );
+  });
+
   it('disconnect on a node with no relationships still returns it', async () => {
     const bookId = await seedBook('empty', 0);
     const res = (await ogm.model('ItCardBook').update({
