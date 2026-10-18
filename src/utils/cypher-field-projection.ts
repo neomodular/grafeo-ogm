@@ -2,19 +2,35 @@ import type { PropertyDefinition } from '../schema/types';
 import { assertSafeIdentifier, escapeIdentifier } from './validation';
 
 /**
- * Builds the `CALL { ... }` subquery that projects a `@cypher` field. Same
- * shape as the v1.5.0 sort prelude — `this` is rebound from the outer node
- * variable inside the subquery, no text substitution.
+ * Builds the `CALL { ... }` subquery that projects a `@cypher` field (used
+ * by the SELECT, WHERE and sort preludes). `this` is rebound from the
+ * outer node variable inside the subquery, no text substitution.
+ *
+ * Row-preserving: the user's statement runs in an inner CALL and its
+ * `columnName` column is reduced with `head(collect(...))`. A grouping-
+ * free aggregation always yields exactly ONE row, so the outer row is
+ * kept with `null` when the statement returns no rows, and kept once
+ * (first value) when it returns several — matching the nested
+ * `head(COLLECT { ... })` projection. Pre-2.4.0 the statement was CALLed
+ * directly, which dropped the node on zero rows and duplicated it on many.
+ * Works on every Neo4j 5.x (unlike `OPTIONAL CALL`, 5.24+) and still lets
+ * the statement return extra columns (unlike `COLLECT { }`).
  */
 export function buildCypherFieldCall(
   statement: string,
   nodeVar: string,
+  columnName: string,
 ): string {
+  const col = escapeIdentifier(columnName);
   return [
     `CALL {`,
     `  WITH ${nodeVar}`,
-    `  WITH ${nodeVar} AS this`,
-    `  ${statement}`,
+    `  CALL {`,
+    `    WITH ${nodeVar}`,
+    `    WITH ${nodeVar} AS this`,
+    `    ${statement}`,
+    `  }`,
+    `  RETURN head(collect(${col})) AS ${col}`,
     `}`,
   ].join('\n');
 }
@@ -107,7 +123,7 @@ export class CypherFieldScope {
     const carryStr = carry.length ? `, ${carry.join(', ')}` : '';
 
     this.callLines.push(
-      buildCypherFieldCall(propDef.cypherStatement, this.nodeVar),
+      buildCypherFieldCall(propDef.cypherStatement, this.nodeVar, columnName),
     );
     this.callLines.push(
       `WITH ${this.nodeVar}${carryStr}, ${escapeIdentifier(columnName)} AS ${alias}`,

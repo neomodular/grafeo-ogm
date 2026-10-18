@@ -559,7 +559,7 @@ const GOLDEN: Record<string, Recorded[]> = {
   '@cypher field referenced in a policy partial with user where': [
     {
       cypher:
-        "MATCH (n:`Chart`)\nCALL {\n  WITH n\n  WITH n AS this\n  RETURN size(this.id) AS riskScore\n}\nWITH n, `riskScore` AS __where_n_riskScore\nWHERE (n.`id` = $param0) AND (true AND (__where_n_riskScore < $param1))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
+        "MATCH (n:`Chart`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN size(this.id) AS riskScore\n  }\n  RETURN head(collect(`riskScore`)) AS `riskScore`\n}\nWITH n, `riskScore` AS __where_n_riskScore\nWHERE (n.`id` = $param0) AND (true AND (__where_n_riskScore < $param1))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
       params: {
         param0: 'c1',
         param1: 10,
@@ -638,6 +638,9 @@ const GOLDEN: Record<string, Recorded[]> = {
       },
     },
   ],
+  // NOTE: the `@cypher` policy-partial case above was RE-PINNED in v2.4.0
+  // (#9) — only its CALL prelude changed (row-preserving inner CALL +
+  // head(collect(col))); the policy clause itself is byte-identical.
   // Deliberately RE-PINNED in v2.3.0 (fix-nls-enforcement-gaps, H2) — the
   // only golden that change touches. Each branch is now exactly the
   // implementer's own `Model(M).find` clause, which already inherits the

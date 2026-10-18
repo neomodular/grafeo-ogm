@@ -1,4 +1,5 @@
 import type { PropertyDefinition } from '../schema/types';
+import { buildCypherFieldCall } from './cypher-field-projection';
 import {
   assertPlainObject,
   assertSafeIdentifier,
@@ -9,33 +10,21 @@ import {
 
 /**
  * Builds the `CALL { ... }` subquery used to project an `@cypher` field
- * for `ORDER BY`. The user's statement is embedded verbatim with `this`
- * rebound from the outer node variable — no text substitution.
+ * for `ORDER BY` — the same row-preserving shape as the SELECT / WHERE
+ * preludes (see `buildCypherFieldCall`): a node whose statement returns
+ * no rows sorts with `null` instead of vanishing, and one returning
+ * several rows sorts once.
  *
  * The caller is expected to follow this CALL with its own `WITH` clause
  * to rename the projected column (`<columnName>`) to a unique alias
  * (e.g. `__sort_<fieldName>`) and carry forward any prior sort aliases.
- *
- * Example output:
- * ```cypher
- * CALL {
- *   WITH n
- *   WITH n AS this
- *   MATCH (this)-[:HAS_STATUS]->(s) RETURN s.name AS statusName
- * }
- * ```
  */
 export function buildCypherSortProjection(
   statement: string,
   nodeVar: string,
+  columnName: string,
 ): string {
-  return [
-    `CALL {`,
-    `  WITH ${nodeVar}`,
-    `  WITH ${nodeVar} AS this`,
-    `  ${statement}`,
-    `}`,
-  ].join('\n');
+  return buildCypherFieldCall(statement, nodeVar, columnName);
 }
 
 /**
@@ -90,7 +79,7 @@ export function compileSortClause(args: {
       assertSafeIdentifier(columnName, '@cypher columnName');
 
       preLines.push(
-        buildCypherSortProjection(propDef.cypherStatement, nodeVar),
+        buildCypherSortProjection(propDef.cypherStatement, nodeVar, columnName),
       );
 
       const carry = [...preserveVars, ...carriedAliases];

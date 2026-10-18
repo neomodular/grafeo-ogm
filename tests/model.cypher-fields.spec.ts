@@ -233,10 +233,11 @@ describe('Model — @cypher fields end-to-end', () => {
       });
       const cypher = getCypher(mockSession);
 
-      // Only ONE CALL { ... } block at the top level.
-      const callOpens = cypher.match(/CALL \{/g) ?? [];
+      // Only ONE @cypher prelude at the top level (each prelude reduces its
+      // column exactly once with head(collect(...))).
+      const preludes = cypher.match(/RETURN head\(collect\(/g) ?? [];
       // (The OR generates a single dedupe entry.)
-      expect(callOpens.length).toBe(1);
+      expect(preludes.length).toBe(1);
       expect(cypher).toContain(
         '(__where_n_insensitiveDrugName CONTAINS $param0 OR __where_n_insensitiveDrugName > $param1)',
       );
@@ -363,9 +364,9 @@ describe('Model — @cypher fields end-to-end', () => {
       } as Record<string, unknown>);
       const cypher = getCypher(mockSession);
 
-      // Three CALLs, three disjoint aliases for the SAME field.
-      const callOpens = cypher.match(/CALL \{/g) ?? [];
-      expect(callOpens.length).toBe(3);
+      // Three preludes, three disjoint aliases for the SAME field.
+      const preludes = cypher.match(/RETURN head\(collect\(/g) ?? [];
+      expect(preludes.length).toBe(3);
       expect(cypher).toContain('AS __where_n_insensitiveDrugName');
       expect(cypher).toContain('AS __sel_n_insensitiveDrugName');
       expect(cypher).toContain('AS __sort_insensitiveDrugName');

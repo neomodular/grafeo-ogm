@@ -25,24 +25,41 @@ function cypherProp(
 }
 
 describe('buildCypherFieldCall', () => {
-  it('emits the standard CALL { WITH n; WITH n AS this; <stmt> } shape', () => {
+  // #9 — the statement runs in an inner CALL and is reduced with
+  // head(collect(col)): exactly one row per outer row, whatever the
+  // statement returns (pre-2.4.0: zero rows dropped the node, several
+  // duplicated it).
+  it('emits the row-preserving CALL { WITH n; CALL { ... }; RETURN head(collect(col)) } shape', () => {
     expect(
-      buildCypherFieldCall('RETURN toLower(this.drugName) AS x', 'n'),
+      buildCypherFieldCall('RETURN toLower(this.drugName) AS x', 'n', 'x'),
     ).toBe(
       [
         'CALL {',
         '  WITH n',
-        '  WITH n AS this',
-        '  RETURN toLower(this.drugName) AS x',
+        '  CALL {',
+        '    WITH n',
+        '    WITH n AS this',
+        '    RETURN toLower(this.drugName) AS x',
+        '  }',
+        '  RETURN head(collect(`x`)) AS `x`',
         '}',
       ].join('\n'),
     );
   });
 
   it('uses the supplied nodeVar for both the carry and the rebind', () => {
-    expect(buildCypherFieldCall('RETURN this.x AS y', 'r0')).toContain(
-      '  WITH r0\n  WITH r0 AS this',
+    expect(buildCypherFieldCall('RETURN this.x AS y', 'r0', 'y')).toContain(
+      '  WITH r0\n  CALL {\n    WITH r0\n    WITH r0 AS this',
     );
+  });
+
+  it('reduces only the declared column, so the statement may return others', () => {
+    const call = buildCypherFieldCall(
+      'RETURN this.a AS a, this.b AS b',
+      'n',
+      'b',
+    );
+    expect(call).toContain('  RETURN head(collect(`b`)) AS `b`\n}');
   });
 });
 
@@ -60,7 +77,7 @@ describe('CypherFieldScope', () => {
     expect(alias).toBe('__sel_n_insensitiveDrugName');
     expect(scope.hasAny()).toBe(true);
     expect(scope.emit()).toEqual([
-      'CALL {\n  WITH n\n  WITH n AS this\n  RETURN toLower(this.drugName) AS insensitiveDrugName\n}',
+      'CALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN toLower(this.drugName) AS insensitiveDrugName\n  }\n  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`\n}',
       'WITH n, `insensitiveDrugName` AS __sel_n_insensitiveDrugName',
     ]);
     expect(scope.carried()).toEqual(['__sel_n_insensitiveDrugName']);

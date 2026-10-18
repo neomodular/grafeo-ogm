@@ -294,7 +294,12 @@ describe('Model', () => {
       });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('CALL {\n  WITH n\n  WITH n AS this');
+      expect(cypher).toContain(
+        'CALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this',
+      );
+      expect(cypher).toContain(
+        'RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+      );
       expect(cypher).toContain(
         'RETURN toLower(this.drugName) AS insensitiveDrugName',
       );
