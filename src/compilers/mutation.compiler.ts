@@ -731,16 +731,36 @@ export class MutationCompiler {
     const lines: string[] = [];
     const params: Record<string, unknown> = {};
 
-    // Build MERGE key properties from where clause (scalar only)
+    // MERGE key: the `@id` / `@unique` fields of `where`, and nothing else
+    // (v2.5.0). Any other key throws:
+    //   - a plain field (`{ email, name }`) became part of the MERGE
+    //     pattern, so an existing node with that email but another name did
+    //     not match — MERGE created a DUPLICATE beside it;
+    //   - an operator key (`name_CONTAINS`) was dropped, silently widening
+    //     the match to the remaining keys;
+    //   - a typo (`usernme`) became a phantom property on the new node.
+    // Pre-1.7.4 any key set was accepted; 1.7.4 required at least one
+    // unique key but still let the others through.
     const mergeProps: string[] = [];
     const mergeKeyNames: string[] = [];
     for (const [key, value] of Object.entries(where)) {
-      if (value === undefined || value === null) continue;
-      // Skip relationship suffixes and operators
-      if (key === 'AND' || key === 'OR' || key === 'NOT') continue;
-      if (key.includes('_') && !nodeDef.properties.has(key)) continue;
-      assertSafePropertyName(key, 'merge key');
+      if (value === undefined) continue;
       const propDef = nodeDef.properties.get(key);
+      if (
+        !propDef ||
+        propDef.isCypher ||
+        !(propDef.isUnique || propDef.isGenerated)
+      )
+        throw new OGMError(
+          `upsert "where" accepts only @id / @unique fields of ${nodeDef.typeName}; "${key}" is not one. ` +
+            `MERGE matches on exactly these keys — put other fields in "create" / "update", ` +
+            `or use findFirst() + create() / update() for a non-unique match.`,
+        );
+      if (value === null)
+        throw new OGMError(
+          `upsert "where.${key}" is null; a MERGE key must have a value.`,
+        );
+      assertSafePropertyName(key, 'merge key');
       const paramName = `merge_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
       mergeProps.push(`${escapeIdentifier(key)}: ${valueExpr}`);
@@ -750,33 +770,8 @@ export class MutationCompiler {
 
     if (mergeProps.length === 0)
       throw new OGMError(
-        'upsert requires at least one scalar property in "where" for MERGE key',
-      );
-
-    // Validate that the MERGE key set contains at least one `@unique` or
-    // `@id` property. Pre-1.7.4 we accepted any key set, so:
-    //   - A typo in `where` (e.g. `usernme`) became a phantom MERGE
-    //     property — Neo4j happily created a node with that mis-named
-    //     attribute on first use.
-    //   - A non-unique `where` (e.g. `where: { country: 'AR' }`) matched
-    //     multiple existing nodes; MERGE then fans out across all of
-    //     them, applying ON MATCH SET to every match. Almost always a
-    //     bug, never the developer's intent.
-    // Requiring at least one unique/id key forces MERGE to target at
-    // most one row.
-    const hasUniqueOrId = mergeKeyNames.some((name) => {
-      const prop = nodeDef.properties.get(name);
-      // `isGenerated` is the parser's flag for the `@id` directive;
-      // `isUnique` is the flag for `@unique`. Either is sufficient
-      // to guarantee the MERGE pattern targets at most one row.
-      return prop !== undefined && (prop.isUnique || prop.isGenerated);
-    });
-    if (!hasUniqueOrId)
-      throw new OGMError(
-        `upsert "where" must contain at least one property marked with @id or @unique. ` +
-          `Got [${mergeKeyNames.map((n) => `"${n}"`).join(', ')}] — none of these are unique on ${nodeDef.typeName}. ` +
-          `Without a unique key, MERGE can fan out across multiple existing nodes (applying ON MATCH SET to each) ` +
-          `or create phantom properties on typo. If you really want a non-unique merge, use create() + update().`,
+        `upsert requires at least one scalar property in "where" for MERGE key: ` +
+          `an @id or @unique field of ${nodeDef.typeName}.`,
       );
 
     lines.push(`MERGE (n:${labelStr} { ${mergeProps.join(', ')} })`);

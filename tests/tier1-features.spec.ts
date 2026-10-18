@@ -489,6 +489,52 @@ describe('MutationCompiler.compileMerge()', () => {
     ).toThrow('at least one scalar property');
   });
 
+  // v2.5.0 — the MERGE key is the @id / @unique fields only. A plain key
+  // used to join the pattern (duplicate node on mismatch) and an operator
+  // key used to be dropped (match silently widened).
+  it.each([
+    ['a plain field', { externalId: 'ABC-123', title: 'Bob' }, 'title'],
+    [
+      'an operator key',
+      { externalId: 'ABC-123', title_CONTAINS: 'B' },
+      'title_CONTAINS',
+    ],
+    [
+      'an operator on a unique key',
+      { externalId_IN: ['ABC-123'] },
+      'externalId_IN',
+    ],
+    ['a typo', { externalld: 'ABC-123' }, 'externalld'],
+    ['a logical key', { externalId: 'ABC-123', OR: [] }, 'OR'],
+  ])('rejects %s in where', (_label, where, key) => {
+    expect(() =>
+      compiler.compileMerge(
+        where as Record<string, unknown>,
+        { externalId: 'ABC-123' },
+        {},
+        bookNode,
+      ),
+    ).toThrow(`"${key}" is not one`);
+  });
+
+  it('rejects a null MERGE key', () => {
+    expect(() =>
+      compiler.compileMerge({ externalId: null }, {}, {}, bookNode),
+    ).toThrow('"where.externalId" is null');
+  });
+
+  it('MERGEs on every unique key given, and only on them', () => {
+    const result = compiler.compileMerge(
+      { id: 'k1', externalId: 'ABC-123' },
+      {},
+      {},
+      bookNode,
+    );
+    expect(result.cypher).toContain(
+      'MERGE (n:`Book` { `id`: $merge_id, `externalId`: $merge_externalId })',
+    );
+  });
+
   // v2.4.8 — relationship input used to be skipped silently, so its nested
   // connect / create never ran. It now throws; an explicit null is a no-op.
   it('should reject relationship fields in create and update', () => {

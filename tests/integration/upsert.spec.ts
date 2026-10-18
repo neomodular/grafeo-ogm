@@ -115,6 +115,36 @@ describeLive('upsert — live Neo4j', () => {
     expect(res.id).toBe(`${runId}-mine`);
   });
 
+  // v2.5.0 — a non-unique where key used to join the MERGE pattern, so a
+  // mismatch on it created a DUPLICATE of the unique key; an operator key
+  // was dropped, widening the match. Both now throw before any write.
+  it('a non-unique or operator key in where throws and writes nothing', async () => {
+    const e = email('dup');
+    await run(
+      'CREATE (:ItUpPerson {id: randomUUID(), runId: $runId, email: $e, name: "Alice"})',
+      { e },
+    );
+    await expect(
+      Person().upsert({
+        where: { email: e, name: 'Bob' },
+        create: { email: e, runId, name: 'Bob' },
+        update: { name: 'Bob' },
+      }),
+    ).rejects.toThrow(/"name" is not one/);
+    await expect(
+      Person().upsert({
+        where: { email: e, name_CONTAINS: 'Bo' },
+        create: { email: e, runId },
+        update: { name: 'Bob' },
+      }),
+    ).rejects.toThrow(/"name_CONTAINS" is not one/);
+    const rows = await run(
+      'MATCH (p:ItUpPerson {email: $e}) RETURN p.name AS name',
+      { e },
+    );
+    expect(rows).toEqual([{ name: 'Alice' }]);
+  });
+
   // v2.4.8 — relationship input in create / update was skipped: the node
   // was written, the nested connect silently was not.
   it('relationship input in create or update throws and writes nothing', async () => {
