@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.4.3 (2026-10-18) — sorting on a field you don't select works
+
+### 🐛 `options.sort` was silently ignored for fields not in the selection
+
+`ORDER BY / SKIP / LIMIT` were emitted **after** `RETURN n { … }`. Once that `RETURN` runs, the column `n` is the projected **map**, not the node. So `ORDER BY n.age` read a key the projection didn't include, and every row sorted as `null`. Any sort on a field you didn't also select returned rows in arbitrary order, and **`offset`/`limit` then returned the wrong page**. This affected `find`, `findFirst`, `findFirstOrThrow`, fulltext `find`, `InterfaceModel.find` and `explainPolicies`:
+
+```ts
+// returned a, b, c, d (arbitrary), not the rank order b, d, a, c
+await Person.find({ selectionSet: '{ id }', options: { sort: [{ rank: 'DESC' }], limit: 2 } });
+```
+
+The options now apply on a pass-through `WITH *` **before** the projection:
+
+```cypher
+WITH *
+ORDER BY n.`rank` DESC
+SKIP $options_offset
+LIMIT $options_limit
+RETURN n { .`id` }
+```
+
+Sorts on fields that are also selected, and on `@cypher` fields, return exactly what they did before. Paging now happens before the projection runs, so a `limit`ed query also does less work. Queries with no `options` emit the same Cypher as before.
+
+A new opt-in live suite, `tests/integration/sort-pagination.spec.ts`, covers stored, paged, `findFirst`, `@cypher`, `InterfaceModel` and fulltext sorts. Against Neo4j 5.26.32, the 5 unselected-field cases fail without the fix.
+
 ## 2.4.2 (2026-10-18) — a same-item disconnect-all no longer orphans the node it creates
 
 ### 🐛 `create` ran before `disconnect` inside one nested update item
