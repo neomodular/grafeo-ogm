@@ -1923,6 +1923,27 @@ export class Model<
   }
 
   /**
+   * Swap the trailing `RETURN n` of a mutation/upsert statement for the
+   * projected RETURN, stitching any `@cypher` CALL preludes in front of it.
+   *
+   * A `CALL { ... }` subquery may not directly follow an updating clause
+   * (`SET`, `CREATE`, `MERGE ... ON CREATE SET`) — Neo4j 5.x rejects it with
+   * "WITH is required between SET and CALL" (newer servers relax this). The
+   * leading `WITH n` closes the write part; `n` is the only variable the
+   * projection reads, and the original tail was a bare `RETURN n`.
+   */
+  private stitchMutationProjection(
+    cypher: string,
+    selectScope: CypherFieldScope,
+    returnClause: string,
+  ): string {
+    const replacement = selectScope.hasAny()
+      ? `WITH n\n${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
+      : `RETURN ${returnClause}`;
+    return cypher.replace(/RETURN n\s*$/, replacement);
+  }
+
+  /**
    * Replace the plain "RETURN n" in mutation cypher with a projected RETURN
    * when a selectionSet is provided, enabling relationship traversals.
    *
@@ -1988,10 +2009,7 @@ export class Model<
       policyContext,
     );
 
-    const replacement = selectScope.hasAny()
-      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
-      : `RETURN ${returnClause}`;
-    return cypher.replace(/RETURN n\s*$/, replacement);
+    return this.stitchMutationProjection(cypher, selectScope, returnClause);
   }
 
   /**
@@ -2033,10 +2051,7 @@ export class Model<
       selectScope,
       policyContext,
     );
-    const replacement = selectScope.hasAny()
-      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
-      : `RETURN ${returnClause}`;
-    return cypher.replace(/RETURN n\s*$/, replacement);
+    return this.stitchMutationProjection(cypher, selectScope, returnClause);
   }
 
   /**
@@ -2092,10 +2107,7 @@ export class Model<
       policyContext,
     );
 
-    const replacement = selectScope.hasAny()
-      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
-      : `RETURN ${returnClause}`;
-    return cypher.replace(/RETURN n\s*$/, replacement);
+    return this.stitchMutationProjection(cypher, selectScope, returnClause);
   }
 
   /**
@@ -2121,10 +2133,7 @@ export class Model<
       selectScope,
       policyContext,
     );
-    const replacement = selectScope.hasAny()
-      ? `${selectScope.emit().join('\n')}\nRETURN ${returnClause}`
-      : `RETURN ${returnClause}`;
-    return cypher.replace(/RETURN n\s*$/, replacement);
+    return this.stitchMutationProjection(cypher, selectScope, returnClause);
   }
 
   private compileOptions(

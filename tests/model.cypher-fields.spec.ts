@@ -500,6 +500,93 @@ describe('Model — @cypher fields end-to-end', () => {
         '`insensitiveDrugName`: __sel_n_insensitiveDrugName',
       );
     });
+
+    // Neo4j 5.x rejects a CALL subquery that directly follows an updating
+    // clause ("WITH is required between SET and CALL"); newer servers accept
+    // it, so a mock-only suite can't see the failure. Pin the shape instead.
+    describe('projection prelude after a write clause needs a WITH', () => {
+      const WRITE_CLAUSE =
+        /^(SET|CREATE|MERGE|ON CREATE|ON MATCH|DELETE|DETACH|REMOVE)\b/;
+
+      function expectWithBeforeEveryTopLevelCall(cypher: string): void {
+        const lines = cypher.split('\n');
+        const callIdxs = lines
+          .map((l, i) => (l.startsWith('CALL {') ? i : -1))
+          .filter((i) => i >= 0);
+        expect(callIdxs.length).toBeGreaterThan(0);
+        // The first prelude is the one that follows the write clause.
+        expect(lines[callIdxs[0] - 1]).toBe('WITH n');
+        for (const i of callIdxs)
+          expect(lines[i - 1]).not.toMatch(WRITE_CLAUSE);
+        // The projection itself must still end the statement.
+        expect(lines[lines.length - 1]).toMatch(/^RETURN n \{/);
+      }
+
+      it('update() with typed select', async () => {
+        await model.update({
+          where: { id: '123' },
+          update: { drugName: 'New' },
+          select: { drugs: { id: true, insensitiveDrugName: true } },
+        });
+        expectWithBeforeEveryTopLevelCall(getCypher(mockSession));
+      });
+
+      it('update() with selectionSet string', async () => {
+        await model.update({
+          where: { id: '123' },
+          update: { drugName: 'New' },
+          selectionSet: '{ drugs { id insensitiveDrugName } }',
+        });
+        expectWithBeforeEveryTopLevelCall(getCypher(mockSession));
+      });
+
+      it('create() with typed select', async () => {
+        await model.create({
+          input: [{ drugName: 'New' }],
+          select: { drugs: { id: true, insensitiveDrugName: true } },
+        });
+        expectWithBeforeEveryTopLevelCall(getCypher(mockSession));
+      });
+
+      it('upsert() with typed select', async () => {
+        await model.upsert({
+          where: { id: '123' },
+          create: { id: '123', drugName: 'New' },
+          update: { drugName: 'Updated' },
+          select: { id: true, insensitiveDrugName: true },
+        });
+        expectWithBeforeEveryTopLevelCall(getCypher(mockSession));
+      });
+
+      it('upsert() with selectionSet string', async () => {
+        await model.upsert({
+          where: { id: '123' },
+          create: { id: '123', drugName: 'New' },
+          update: { drugName: 'Updated' },
+          selectionSet: '{ id insensitiveDrugName }',
+        });
+        expectWithBeforeEveryTopLevelCall(getCypher(mockSession));
+      });
+
+      it('keeps the WITH when several @cypher fields are projected', async () => {
+        await model.update({
+          where: { id: '123' },
+          update: { drugName: 'New' },
+          select: {
+            drugs: {
+              id: true,
+              insensitiveDrugName: true,
+              upperDrugName: true,
+            },
+          },
+        });
+        const cypher = getCypher(mockSession);
+        expectWithBeforeEveryTopLevelCall(cypher);
+        // Only the first prelude follows the write; later ones follow a WITH
+        // already emitted by CypherFieldScope, so no extra WITH n is injected.
+        expect(cypher.match(/^WITH n$/gm)).toHaveLength(1);
+      });
+    });
   });
 
   describe('nested @cypher selection', () => {
