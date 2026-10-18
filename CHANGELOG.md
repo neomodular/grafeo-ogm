@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.3.4 (2026-10-18) — Fulltext `AND` and `NOT` work
+
+### 🐛 Fulltext `AND` failed for every input ([#11](https://github.com/neomodular/grafeo-ogm/issues/11))
+
+`AND` compiled each later branch into the outer scope as `CALL { WITH n <branch with m> WHERE m = n RETURN score }`. Neo4j rejected every shape:
+
+| Later branch | Error |
+|---|---|
+| index leaf | `Variable 'score' already declared in outer scope` |
+| `OR` | its `max(score)` aggregation dropped `n` |
+| relationship index | `WITH startNode(rel) AS m, score` dropped `n` |
+| `NOT` | see below |
+| nested `AND` | `Variable 'm' already declared` |
+
+Each later branch now runs in an **uncorrelated** inner `CALL` under its own variable, so none of its names can collide with or drop the outer scope. The result is joined back on `n`. A node with no match is dropped, and a node matched several times (for example through two relationships) is kept once. The result `score` is still the first branch's score.
+
+### 🐛 Fulltext `NOT` failed for every input
+
+Found while fixing #11. `NOT` compiled to `WHERE NOT EXISTS { CALL db.index.fulltext… YIELD … WHERE excluded = n }`, which Neo4j rejects with `Cannot use standalone call with WHERE`. With an `OR` inside, the aggregation dropped `n` as well. `NOT` now counts the inner expression's hits per node through the same isolated join, and keeps the nodes with zero hits. Score is still `0`.
+
+A new opt-in live suite, `tests/integration/fulltext-logical.spec.ts`, runs `AND` with leaf, `OR`, `NOT`, relationship-index and nested-`AND` branches, an `AND` whose first branch is an `OR`, and standalone `OR`/`NOT`. Against Neo4j 5.26.32, all 8 cases fail without the fix.
+
 ## 2.3.3 (2026-10-18) — `connect` no longer drops or duplicates the updated node
 
 ### 🐛 A top-level `connect` changed how many rows the update returned ([#10](https://github.com/neomodular/grafeo-ogm/issues/10))
