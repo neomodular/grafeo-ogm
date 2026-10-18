@@ -1,12 +1,15 @@
 import {
   Kind,
   parse,
+  valueFromASTUntyped,
+  type ValueNode,
   type DocumentNode,
   type FieldNode,
   type InlineFragmentNode,
   type SelectionSetNode,
 } from 'graphql';
 
+import { int as neo4jInt } from 'neo4j-driver';
 import { OGMError } from '../errors';
 import type { PolicyContextBundle } from '../policy/types';
 import type {
@@ -21,6 +24,7 @@ import {
 } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
+  assertSortDirection,
   escapeIdentifier,
   isPlainObject,
   mergeParams,
@@ -73,6 +77,118 @@ export interface SelectionNode {
    * own `@cypher` field against that implementer.
    */
   typeConditions?: string[];
+  /**
+   * Relationship only: `options: { limit, offset }` from selectionSet
+   * arguments (v2.5.0) — slices the (sorted) pattern comprehension.
+   */
+  limit?: number;
+  offset?: number;
+  /**
+   * The selection carries selectionSet arguments (v2.5.0). Paths that
+   * can't honour them throw instead of dropping them.
+   */
+  hasArguments?: boolean;
+}
+
+/** selectionSet field arguments the OGM honours, by field kind (v2.5.0). */
+const RELATIONSHIP_ARGUMENTS = new Set(['where', 'options']);
+const CONNECTION_ARGUMENTS = new Set(['where']);
+const RELATIONSHIP_OPTIONS = new Set(['sort', 'limit', 'offset']);
+
+/** Reject `$variables` anywhere in an argument value (v2.5.0). */
+function assertNoVariables(value: ValueNode, where: string): void {
+  if (value.kind === Kind.VARIABLE)
+    throw new OGMError(
+      `GraphQL variables are not supported in selectionSet arguments (${where}: $${value.name.value}). ` +
+        `Inline the value, or use the typed \`select\` API.`,
+    );
+  if (value.kind === Kind.LIST)
+    for (const v of value.values) assertNoVariables(v, where);
+  if (value.kind === Kind.OBJECT)
+    for (const f of value.fields) assertNoVariables(f.value, where);
+}
+
+function assertNoArguments(field: FieldNode, where: string): void {
+  if (field.arguments && field.arguments.length > 0)
+    throw new OGMError(
+      `Unsupported argument "${field.arguments[0].name.value}" on "${where}". ` +
+        `selectionSet arguments are supported only on relationship fields (where, options) ` +
+        `and connection fields (where).`,
+    );
+}
+
+function nonNegativeInt(value: unknown, what: string): number {
+  const n = typeof value === 'number' ? value : Number.NaN;
+  if (!Number.isInteger(n) || n < 0)
+    throw new OGMError(`${what} must be a non-negative integer.`);
+  return n;
+}
+
+/**
+ * Read a selectionSet field's arguments into the SelectionNode (v2.5.0).
+ * Pre-2.5.0 `field.arguments` was never read: `posts(where: ...)`,
+ * `posts(options: { sort, limit })` silently returned every related node.
+ * Values are kept as data and compiled into bound parameters later —
+ * nothing here is interpolated into Cypher. Any argument the OGM can't
+ * honour throws.
+ */
+function applyFieldArguments(field: FieldNode, node: SelectionNode): void {
+  const label = field.name.value;
+  const allowed = node.isConnection
+    ? CONNECTION_ARGUMENTS
+    : node.isRelationship
+      ? RELATIONSHIP_ARGUMENTS
+      : null;
+  node.hasArguments = true;
+  for (const arg of field.arguments ?? []) {
+    const name = arg.name.value;
+    if (!allowed || !allowed.has(name))
+      throw new OGMError(
+        `Unsupported argument "${name}" on selectionSet field "${label}". ` +
+          `Supported: where and options (sort, limit, offset) on relationship fields, where on connection fields.`,
+      );
+    assertNoVariables(arg.value, `${label}(${name})`);
+    const value = valueFromASTUntyped(arg.value);
+    if (!isPlainObject(value))
+      throw new OGMError(
+        `Argument "${name}" on selectionSet field "${label}" must be an object.`,
+      );
+    if (name === 'where') {
+      if (node.isConnection) node.connectionWhere = value;
+      else node.relationshipWhere = value;
+      continue;
+    }
+    // options
+    for (const [opt, optValue] of Object.entries(value)) {
+      if (!RELATIONSHIP_OPTIONS.has(opt))
+        throw new OGMError(
+          `Unsupported option "${opt}" on selectionSet field "${label}". Supported: sort, limit, offset.`,
+        );
+      if (optValue === null || optValue === undefined) continue;
+      if (opt === 'limit')
+        node.limit = nonNegativeInt(optValue, `options.limit on "${label}"`);
+      else if (opt === 'offset')
+        node.offset = nonNegativeInt(optValue, `options.offset on "${label}"`);
+      else {
+        const entries = Array.isArray(optValue) ? optValue : [optValue];
+        const orderBy: Array<{ field: string; direction: 'ASC' | 'DESC' }> = [];
+        for (const entry of entries) {
+          if (!isPlainObject(entry))
+            throw new OGMError(
+              `options.sort on "${label}" entries must be objects like { field: ASC }.`,
+            );
+          for (const [sortField, dir] of Object.entries(entry)) {
+            assertSafeIdentifier(sortField, 'options.sort field');
+            orderBy.push({
+              field: sortField,
+              direction: assertSortDirection(String(dir)),
+            });
+          }
+        }
+        if (orderBy.length > 0) node.orderBy = orderBy;
+      }
+    }
+  }
 }
 
 /**
@@ -183,12 +299,19 @@ export class SelectionCompiler {
     }
 
     for (const node of selection) {
+      // v2.5.0 — a selectionSet alias names the output key (pre-2.5.0 it
+      // was parsed and ignored). `key` is the field name when unaliased,
+      // so unaliased projections are byte-identical.
+      const aliased = node.alias !== undefined && node.alias !== node.fieldName;
+      const key = aliased ? node.alias! : node.fieldName;
+      if (aliased) assertSafeIdentifier(key, 'selection alias');
+
       if (node.isScalar) {
         // __typename is a GraphQL concept — Neo4j nodes don't have this property.
         // Synthesize it from node labels for union targets, or emit a constant.
         if (node.fieldName === '__typename') {
           const typenameExpr = this.compileTypename(nodeVar, nodeDef);
-          if (typenameExpr) parts.push(`__typename: ${typenameExpr}`);
+          if (typenameExpr) parts.push(`${key}: ${typenameExpr}`);
           continue;
         }
 
@@ -197,6 +320,7 @@ export class SelectionCompiler {
         if (isAbstract && node.typeConditions) {
           const conditional = this.compileFragmentScalar(
             node,
+            key,
             nodeVar,
             nodeDef,
             cypherScope,
@@ -217,10 +341,10 @@ export class SelectionCompiler {
         if (propDef?.isCypher && propDef.cypherStatement) {
           if (cypherScope) {
             const alias = cypherScope.register(node.fieldName, propDef);
-            parts.push(`${escapeIdentifier(node.fieldName)}: ${alias}`);
+            parts.push(`${escapeIdentifier(key)}: ${alias}`);
           } else
             parts.push(
-              `${escapeIdentifier(node.fieldName)}: ${buildInlineCypherFieldExpr(
+              `${escapeIdentifier(key)}: ${buildInlineCypherFieldExpr(
                 propDef.cypherStatement,
                 nodeVar,
                 `${nodeDef.typeName}.${node.fieldName}`,
@@ -230,7 +354,11 @@ export class SelectionCompiler {
           continue;
         }
 
-        parts.push(`.${escapeIdentifier(node.fieldName)}`);
+        parts.push(
+          aliased
+            ? `${escapeIdentifier(key)}: ${nodeVar}.${escapeIdentifier(node.fieldName)}`
+            : `.${escapeIdentifier(node.fieldName)}`,
+        );
         continue;
       }
 
@@ -245,8 +373,7 @@ export class SelectionCompiler {
           paramCounter,
           policyContext,
         );
-        if (connectionCypher)
-          parts.push(`${node.fieldName}: ${connectionCypher}`);
+        if (connectionCypher) parts.push(`${key}: ${connectionCypher}`);
 
         continue;
       }
@@ -265,7 +392,7 @@ export class SelectionCompiler {
             paramCounter,
             policyContext,
           );
-          if (caseCypher) parts.push(`${node.fieldName}: ${caseCypher}`);
+          if (caseCypher) parts.push(`${key}: ${caseCypher}`);
           continue;
         }
 
@@ -279,7 +406,7 @@ export class SelectionCompiler {
           paramCounter,
           policyContext,
         );
-        if (relCypher) parts.push(`${node.fieldName}: ${relCypher}`);
+        if (relCypher) parts.push(`${key}: ${relCypher}`);
 
         continue;
       }
@@ -302,6 +429,7 @@ export class SelectionCompiler {
    */
   private compileFragmentScalar(
     node: SelectionNode,
+    key: string,
     nodeVar: string,
     nodeDef: NodeDefinition,
     cypherScope: CypherFieldScope | null,
@@ -330,7 +458,7 @@ export class SelectionCompiler {
       else expr = `${nodeVar}.${escapeIdentifier(node.fieldName)}`;
       return `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`;
     });
-    return `${escapeIdentifier(node.fieldName)}: CASE ${branches.join(' ')} END`;
+    return `${escapeIdentifier(key)}: CASE ${branches.join(' ')} END`;
   }
 
   /**
@@ -407,9 +535,10 @@ export class SelectionCompiler {
             fragment.selectionSet,
             condition,
           )) {
-            const existing = seen.get(merged.fieldName);
+            const mergedKey = merged.alias ?? merged.fieldName;
+            const existing = seen.get(mergedKey);
             if (!existing) {
-              seen.set(merged.fieldName, merged);
+              seen.set(mergedKey, merged);
               nodes.push(merged);
             } else if (existing.typeConditions)
               existing.typeConditions = merged.typeConditions
@@ -428,8 +557,12 @@ export class SelectionCompiler {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
       const fieldName = field.name.value;
+      // v2.5.0 — fields are keyed by their OUTPUT name, so the same field
+      // under two aliases (`a: kids { .. } b: kids { .. }`) stays two
+      // selections. Pre-2.5.0 they collapsed into one.
+      const outputKey = field.alias?.value ?? fieldName;
 
-      const existing = seen.get(fieldName);
+      const existing = seen.get(outputKey);
       if (existing) {
         // Also selected outside any fragment → unconditional.
         if (typeCondition === undefined) delete existing.typeConditions;
@@ -448,7 +581,9 @@ export class SelectionCompiler {
       };
 
       if (typeCondition !== undefined) node.typeConditions = [typeCondition];
-      seen.set(fieldName, node);
+      seen.set(outputKey, node);
+      if (field.arguments && field.arguments.length > 0)
+        applyFieldArguments(field, node);
 
       if (hasChildren && field.selectionSet)
         if (isConnection)
@@ -473,6 +608,7 @@ export class SelectionCompiler {
     for (const sel of selectionSet.selections) {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
+      assertNoArguments(field, `${parentNode.fieldName}.${field.name.value}`);
 
       if (field.name.value === 'totalCount') parentNode.totalCount = true;
       if (field.name.value === 'edges') selectsEdges = true;
@@ -481,6 +617,10 @@ export class SelectionCompiler {
         for (const edgeSel of field.selectionSet.selections) {
           if (edgeSel.kind !== Kind.FIELD) continue;
           const edgeField = edgeSel as FieldNode;
+          assertNoArguments(
+            edgeField,
+            `${parentNode.fieldName}.edges.${edgeField.name.value}`,
+          );
 
           if (edgeField.name.value === 'node' && edgeField.selectionSet)
             parentNode.children = this.convertSelectionSet(
@@ -555,21 +695,57 @@ export class SelectionCompiler {
 
     const comprehension = `[${pattern}${whereClause} | ${innerProjection}]`;
 
+    const paged = node.limit !== undefined || node.offset !== undefined;
     // Wrap singular relationships with head()
-    if (!relDef.isArray) return `head(${comprehension})`;
+    if (!relDef.isArray) {
+      if (paged || (node.hasArguments && node.orderBy))
+        throw new OGMError(
+          `options (sort, limit, offset) are not supported on singular relationship "${node.fieldName}".`,
+        );
+      return `head(${comprehension})`;
+    }
 
     // Wrap with apoc.coll.sortMulti() if orderBy is present.
     // Requires the APOC plugin installed on the Neo4j instance.
-    if (node.orderBy && node.orderBy.length > 0)
-      return this.compileSortedComprehension(
-        `${pattern}${whereClause}`,
-        innerProjection,
-        childVar,
-        targetDef,
-        node.orderBy,
-      );
+    const sorted =
+      node.orderBy && node.orderBy.length > 0
+        ? this.compileSortedComprehension(
+            `${pattern}${whereClause}`,
+            innerProjection,
+            childVar,
+            targetDef,
+            node.orderBy,
+          )
+        : comprehension;
 
-    return comprehension;
+    return paged
+      ? `${sorted}${this.compileSlice(node, params, paramCounter)}`
+      : sorted;
+  }
+
+  /**
+   * `[$start..$end]` list slice for selectionSet `options.offset` /
+   * `options.limit` (v2.5.0), with both bounds bound as parameters.
+   */
+  private compileSlice(
+    node: SelectionNode,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+  ): string {
+    if (!params || !paramCounter)
+      throw new OGMError(
+        `options.limit / options.offset on "${node.fieldName}" need a parameter map; ` +
+          `compile through a Model or pass params and paramCounter.`,
+      );
+    const bind = (value: number): string => {
+      const name = `sel_param${paramCounter.count++}`;
+      params[name] = neo4jInt(value);
+      return `$${name}`;
+    };
+    const start = node.offset ?? 0;
+    const startRef = node.offset !== undefined ? bind(start) : '';
+    const endRef = node.limit !== undefined ? bind(start + node.limit) : '';
+    return `[${startRef}..${endRef}]`;
   }
 
   /**
@@ -593,6 +769,10 @@ export class SelectionCompiler {
     orderBy.forEach(({ field, direction }, i) => {
       assertSafeIdentifier(field, 'orderBy sort key');
       const propDef = targetDef.properties.get(field);
+      if (!propDef)
+        throw new OGMError(
+          `Invalid sort field "${field}": not a scalar property of ${targetDef.typeName}.`,
+        );
       const value =
         propDef?.isCypher && propDef.cypherStatement
           ? buildInlineCypherFieldExpr(
@@ -635,6 +815,13 @@ export class SelectionCompiler {
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
     if (currentDepth >= maxDepth) return null;
+
+    // v2.5.0 — fields on union members don't apply per-field arguments;
+    // refuse them instead of dropping them.
+    if (node.hasArguments)
+      throw new OGMError(
+        `selectionSet arguments on "${node.fieldName}" are not supported when selected through a union type.`,
+      );
 
     const branches: string[] = [];
     let isSingular = false;

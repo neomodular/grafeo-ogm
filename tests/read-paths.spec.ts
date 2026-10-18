@@ -259,3 +259,80 @@ describe('where value coercion (v2.4.8)', () => {
     expect(h.params().param0).toBe('5');
   });
 });
+
+describe('selectionSet arguments and aliases (v2.5.0)', () => {
+  it('binds relationship where arguments as parameters, with the read policy', async () => {
+    const h = harness(true);
+    await h.model('LbUser').find({
+      selectionSet: '{ posts(where: { title: "x\' OR 1=1" }) { id } }',
+    });
+    expect(h.cypher()).toContain(
+      'posts: [(n)-[:`LB_WROTE`]->(n0:`LbPost`) WHERE (n0.`title` = $param0) AND (true AND (n0.`secret` = $param1)) | n0 { .`id` }]',
+    );
+    expect(h.params().param0).toBe("x' OR 1=1");
+  });
+
+  it('options.sort / offset / limit sort then slice with bound bounds', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      selectionSet:
+        '{ posts(options: { sort: [{ rank: DESC }], offset: 2, limit: 5 }) { id } }',
+    });
+    expect(h.cypher()).toContain(
+      "posts: [__sk IN apoc.coll.sortMulti([(n)-[:`LB_WROTE`]->(n0:`LbPost`) | { __node: n0 { .`id` }, __sk0: n0.`rank` }], ['__sk0']) | __sk.__node][$sel_param0..$sel_param1]",
+    );
+    const p = h.params();
+    expect(String(p.sel_param0)).toBe('2');
+    expect(String(p.sel_param1)).toBe('7');
+  });
+
+  it('limit alone slices from the start', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      selectionSet: '{ posts(options: { limit: 3 }) { id } }',
+    });
+    expect(h.cypher()).toContain('| n0 { .`id` }][..$sel_param0]');
+  });
+
+  it('aliases become output keys and keep duplicate fields apart', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      selectionSet:
+        '{ ident: id id a: posts { id } b: posts(where: { rank: 1 }) { r: rank } }',
+    });
+    const cypher = h.cypher();
+    expect(cypher).toContain('RETURN n { `ident`: n.`id`, .`id`, a: [');
+    expect(cypher).toContain(
+      'b: [(n)-[:`LB_WROTE`]->(n0:`LbPost`) WHERE n0.`rank` = $param0 | n0 { `r`: n0.`rank` }]',
+    );
+  });
+
+  it('rejects an unknown sort field', async () => {
+    const h = harness();
+    await expect(
+      h.model('LbUser').find({
+        selectionSet: '{ posts(options: { sort: [{ nope: ASC }] }) { id } }',
+      }),
+    ).rejects.toThrow(/Invalid sort field "nope"/);
+  });
+
+  it('rejects options on a singular relationship', async () => {
+    const h = harness();
+    await expect(
+      h.model('LbPost').find({
+        selectionSet: '{ author(options: { limit: 1 }) { id } }',
+      }),
+    ).rejects.toThrow(/singular relationship "author"/);
+  });
+
+  it('rejects arguments on connection sub-fields', async () => {
+    const h = harness();
+    await expect(
+      h.model('LbUser').find({
+        selectionSet: '{ postsConnection { edges(first: 1) { node { id } } } }',
+      }),
+    ).rejects.toThrow(
+      /Unsupported argument "first" on "postsConnection\.edges"/,
+    );
+  });
+});
