@@ -60,7 +60,7 @@ function emitNodeSelectFields(
 
   // Scalar / enum fields
   for (const [, prop] of node.properties) {
-    if (prop.isCypher) continue;
+    if (!isSelectableProperty(prop, schema)) continue;
     members.push(`  ${prop.name}?: boolean;`);
   }
 
@@ -87,7 +87,7 @@ function emitInterfaceSelectFields(
 
   // Scalar / enum fields
   for (const [, prop] of iface.properties) {
-    if (prop.isCypher) continue;
+    if (!isSelectableProperty(prop, schema)) continue;
     members.push(`  ${prop.name}?: boolean;`);
   }
 
@@ -136,6 +136,27 @@ function emitEdgeSelectFields(schema: SchemaMetadata): string[] {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether a property gets a `field?: boolean` select entry. Stored
+ * properties always do. `@cypher` fields do when they return a scalar or
+ * enum: the runtime `select` projects them (via a CALL prelude) and the
+ * node type already declares them as `Maybe<T>`, but through v2.4.7 the
+ * select types skipped every `@cypher` field, so selecting one failed to
+ * compile. `@cypher` fields returning node/interface/union types stay
+ * out — a boolean cannot describe their nested selection.
+ */
+function isSelectableProperty(
+  prop: PropertyDefinition,
+  schema: SchemaMetadata,
+): boolean {
+  if (!prop.isCypher) return true;
+  return (
+    !schema.nodes.has(prop.type) &&
+    !schema.interfaces.has(prop.type) &&
+    !(schema.unions?.has(prop.type) ?? false)
+  );
+}
 
 /** Emits a single relationship field entry (non-connection). */
 function emitRelationshipField(rel: RelationshipDefinition): string {

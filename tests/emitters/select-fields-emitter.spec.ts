@@ -92,7 +92,7 @@ describe('emitSelectFieldTypes', () => {
     expect(output).toContain('name?: boolean;');
   });
 
-  it('skips @cypher fields', () => {
+  it('emits scalar @cypher fields, skips node-returning @cypher fields', () => {
     const schema = makeSchema(
       new Map([
         [
@@ -100,13 +100,17 @@ describe('emitSelectFieldTypes', () => {
           makeNodeDef('Book', [
             makeProp('id', 'ID'),
             makeProp('computed', 'String', { isCypher: true }),
+            makeProp('related', 'Book', { isCypher: true, isArray: true }),
           ]),
         ],
       ]),
     );
     const output = emitSelectFieldTypes(schema);
 
-    expect(output).not.toContain('computed?: boolean');
+    // The runtime select projects scalar @cypher fields (since v2.4.8 the
+    // select type allows them too).
+    expect(output).toContain('computed?: boolean');
+    expect(output).not.toContain('related?: boolean');
   });
 
   it('emits relationship fields with where and select support', () => {
