@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.1 (2026-10-18) — `upsert` generates the `@id` when it creates
+
+### 🐛 A node created by `upsert` was stored without its `@id`
+
+When `upsert` took the `ON CREATE` branch, it set the `create` input and the `@default` values, but never generated `@id` properties. So the node was stored with no id, and the response carried `id: null` for an `ID!` field. `create` and `createMany` always generate it. The `ON CREATE` branch now emits `n.<id> = randomUUID()` for each `@id` property, unless the caller supplied it in `create` or it is part of the `MERGE` key. The `ON MATCH` branch never touches the id.
+
+**Data written by earlier versions:** nodes that `upsert` created before 2.4.1 have no `@id`. To backfill them:
+
+```cypher
+MATCH (n:YourType) WHERE n.id IS NULL SET n.id = randomUUID()
+```
+
+A new opt-in live suite, `tests/integration/upsert.spec.ts`, covers the `ON CREATE`, `ON MATCH` and caller-supplied-id cases.
+
 ## 2.4.0 (2026-10-18) — `@cypher` fields keep every node exactly once
 
 > **Minor release with a behavior change.** Reads that select, filter or sort a `@cypher` field can return a **different number of rows** than in 2.3.x. Nodes that were silently dropped now appear, with `null` for the field, and duplicated nodes now appear once. See *Behavior changes*.
