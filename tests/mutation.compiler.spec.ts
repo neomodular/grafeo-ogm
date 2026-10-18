@@ -323,6 +323,33 @@ describe('MutationCompiler', () => {
       });
     });
 
+    // #12 — later inputs bind `n_1`, `n_2`, ...; a bare `RETURN n` returned
+    // only the first created node.
+    it('returns every created node for multiple inputs, in order (#12)', () => {
+      const result = compiler.compileCreate(
+        [{ title: 'A' }, { title: 'B' }, { title: 'C' }],
+        bookNode,
+      );
+
+      expect(result.cypher).toContain('CREATE (n_1:`Book`');
+      expect(result.cypher).toContain('CREATE (n_2:`Book`');
+      expect(
+        result.cypher.endsWith(
+          [
+            'WITH [n, n_1, n_2] AS __created',
+            'UNWIND __created AS n',
+            'RETURN n',
+          ].join('\n'),
+        ),
+      ).toBe(true);
+    });
+
+    it('keeps a single-input create unchanged (no re-binding)', () => {
+      const result = compiler.compileCreate([{ title: 'A' }], bookNode);
+      expect(result.cypher).not.toContain('__created');
+      expect(result.cypher.endsWith('\nRETURN n')).toBe(true);
+    });
+
     // 2. Create with nested relationship create
     it('should create a node with nested relationship create', () => {
       const result = compiler.compileCreate(

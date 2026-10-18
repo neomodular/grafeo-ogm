@@ -330,6 +330,15 @@ export class MutationCompiler {
         lines.push(`SET ${nodeVar}:${validatedLabels}`);
     }
 
+    // Each input binds its own variable (`n`, `n_1`, ...). Re-bind them
+    // all to `n`, one row per created node in input order, so the trailing
+    // `RETURN n` — and the projection that replaces it — covers every node,
+    // not just the first.
+    if (createdVars.length > 1) {
+      lines.push(`WITH [${createdVars.join(', ')}] AS __created`);
+      lines.push('UNWIND __created AS n');
+    }
+
     lines.push('RETURN n');
 
     return { cypher: lines.join('\n'), params };
