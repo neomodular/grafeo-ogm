@@ -1355,6 +1355,8 @@ When `policies` is configured, every OGM-emitted query attaches transaction meta
 
 Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is intentionally key-only — no ctx values are leaked.
 
+> **Inside a transaction the per-call audit metadata does not reach the server.** neo4j-driver accepts transaction metadata only when a transaction begins, so it is attached on the OGM's own auto-commit sessions and on a caller-supplied `session`, but not to a call that runs in an already-open transaction (`$transaction`, an explicit `beginTransaction()` tx, or an `executeRead`/`executeWrite` managed tx). Since v2.4.8 each such call logs a `warn` instead of dropping the metadata silently; before v2.4.8 the docs claimed it was forwarded. To tag the transaction itself, pass metadata when it opens: `ogm.$transaction(fn, { metadata })`, `session.beginTransaction({ metadata })`, or `session.executeWrite(fn, { metadata })`.
+
 `policiesEvaluated` lists only the policies that **applied** to the query. A restrictive whose `appliesWhen(ctx)` returned `false` is omitted (before v2.2.0 it was listed even though it contributed nothing). `explainPolicies` calls add `explain: true` and are always recorded, even with `auditMetadata: false`.
 
 #### Explaining policy decisions
@@ -1446,7 +1448,18 @@ const [books, authors] = await ogm.$transaction([
   (ctx) => Book.find({ select: { id: true } }, { context: ctx }),
   (ctx) => Author.find({ select: { id: true } }, { context: ctx }),
 ]);
+
+// Transaction metadata (v2.4.8) — sent to the server when the tx begins,
+// visible in SHOW TRANSACTIONS and the query log
+await ogm.$transaction(
+  async (ctx) => {
+    /* ... */
+  },
+  { metadata: { job: 'nightly-import' } },
+);
 ```
+
+Per-call policy audit metadata cannot be attached once a transaction is open; see [Audit metadata](#audit-metadata).
 
 ### Interface Models
 

@@ -35,12 +35,21 @@ export interface ExecutionContext {
   /** Explicit session to use (auto-committed). */
   session?: Session;
   /**
-   * Optional metadata to attach to the underlying transaction. Forwarded
-   * via `tx.setMetaData(...)` (or session config for auto-commit). Used
-   * by the OGM's policy layer to surface audit fields
-   * (`ogmPolicySetVersion`, `ctxFingerprint`, `modelType`, `operation`,
-   * `policiesEvaluated`, `bypassed`). Failures to set metadata are
-   * logged at `debug` and do not block query execution.
+   * Optional metadata to attach to the query's transaction. Used by the
+   * OGM's policy layer to surface audit fields (`ogmPolicySetVersion`,
+   * `ctxFingerprint`, `modelType`, `operation`, `policiesEvaluated`,
+   * `bypassed`).
+   *
+   * neo4j-driver only accepts transaction metadata when a transaction
+   * BEGINS, so it reaches the server only on the paths that start one:
+   * the executor's own auto-commit session and a caller `session` (both
+   * via `session.run(q, p, { metadata })`). A caller-supplied
+   * `transaction` has already begun — the metadata cannot be attached
+   * there, and the executor logs a `warn` for each such call instead.
+   * Pass metadata when opening the transaction
+   * (`ogm.$transaction(fn, { metadata })`,
+   * `session.beginTransaction({ metadata })`,
+   * `session.executeWrite(fn, { metadata })`). Never blocks the query.
    */
   metadata?: Record<string, unknown>;
 }
@@ -125,9 +134,15 @@ export class Executor {
   }
 
   /**
-   * Attach OGM-managed metadata to an existing transaction. Failures
-   * (older drivers without `setMetaData`, or already-finished tx) are
-   * swallowed at debug — auditing must never block a query.
+   * Attach OGM-managed metadata to a transaction that is already open.
+   *
+   * v2.4.8 — neo4j-driver 5.x `Transaction` / `ManagedTransaction` have no
+   * `setMetaData`: metadata is only accepted at begin time. Pre-2.4.8 this
+   * method found no setter and returned silently, so every audit field
+   * (including `unsafe.bypassPolicies` audits) for a call inside a caller
+   * transaction was dropped with no signal. It now logs a `warn` per call
+   * so the gap is visible. A `setMetaData` that does exist (a custom
+   * transaction wrapper) is still used. Auditing never blocks the query.
    */
   private attachMetadata(
     tx: Transaction | ManagedTransaction,
@@ -137,7 +152,18 @@ export class Executor {
     const setter = (
       tx as unknown as { setMetaData?: (m: Record<string, unknown>) => void }
     ).setMetaData;
-    if (typeof setter !== 'function') return;
+    if (typeof setter !== 'function') {
+      this.logger.warn?.(
+        '[OGM] Transaction metadata not attached (modelType=%s, operation=%s): ' +
+          'neo4j-driver only accepts metadata when a transaction begins. ' +
+          'Pass it there instead — ogm.$transaction(fn, { metadata }), ' +
+          'session.beginTransaction({ metadata }) or ' +
+          'session.executeWrite(fn, { metadata }).',
+        String(metadata.modelType ?? '-'),
+        String(metadata.operation ?? '-'),
+      );
+      return;
+    }
     try {
       setter.call(tx, metadata);
     } catch (err) {

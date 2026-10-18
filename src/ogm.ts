@@ -79,6 +79,15 @@ export interface OGMConfig<
   policyDefaults?: PolicyDefaults;
 }
 
+/** Options for `OGM.$transaction` (v2.4.8). */
+export interface TransactionOptions {
+  /**
+   * Transaction metadata sent to the server when the transaction begins
+   * (visible in `SHOW TRANSACTIONS` and the query log).
+   */
+  metadata?: Record<string, unknown>;
+}
+
 export class OGM<
   TModelMap extends Record<string, unknown> = Record<string, unknown>,
   TInterfaceModelMap extends Record<string, unknown> = Record<string, unknown>,
@@ -528,20 +537,34 @@ export class OGM<
    * Overloads:
    * - Callback: `$transaction(async (ctx) => { ... })` — interactive transaction
    * - Sequential: `$transaction([(ctx) => op1(ctx), (ctx) => op2(ctx)])` — array of operations
+   *
+   * `options.metadata` (v2.4.8) is attached to the transaction when it
+   * begins — the only point neo4j-driver accepts transaction metadata.
+   * Per-call policy audit metadata of model calls made INSIDE the
+   * transaction cannot be attached after it has begun; those calls log a
+   * `warn` instead (see `ExecutionContext.metadata`).
    */
   async $transaction<R>(
     fn: (ctx: { transaction: Transaction }) => Promise<R>,
+    options?: TransactionOptions,
   ): Promise<R>;
-  async $transaction<T extends unknown[]>(operations: {
-    [K in keyof T]: (ctx: { transaction: Transaction }) => Promise<T[K]>;
-  }): Promise<T>;
+  async $transaction<T extends unknown[]>(
+    operations: {
+      [K in keyof T]: (ctx: { transaction: Transaction }) => Promise<T[K]>;
+    },
+    options?: TransactionOptions,
+  ): Promise<T>;
   async $transaction<R>(
     fnOrOps:
       | ((ctx: { transaction: Transaction }) => Promise<R>)
       | Array<(ctx: { transaction: Transaction }) => Promise<unknown>>,
+    options?: TransactionOptions,
   ): Promise<R | unknown[]> {
     const session = this.config.driver.session();
-    const tx = session.beginTransaction();
+    // The no-arg call is kept verbatim when no metadata is given.
+    const tx = options?.metadata
+      ? session.beginTransaction({ metadata: options.metadata })
+      : session.beginTransaction();
     try {
       let result: R | unknown[];
       if (Array.isArray(fnOrOps)) {
