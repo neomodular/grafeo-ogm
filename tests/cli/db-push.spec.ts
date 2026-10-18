@@ -19,13 +19,23 @@ type Author {
 
 const ALL_IN_SYNC: LiveSchema = {
   constraints: [
-    { name: 'Book_id_unique', type: 'UNIQUENESS' },
-    { name: 'Author_id_unique', type: 'UNIQUENESS' },
+    {
+      name: 'Book_id_unique',
+      type: 'UNIQUENESS',
+      labelsOrTypes: ['Book'],
+      properties: ['id'],
+    },
+    {
+      name: 'Author_id_unique',
+      type: 'UNIQUENESS',
+      labelsOrTypes: ['Author'],
+      properties: ['id'],
+    },
   ],
   indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
 };
 
-function record(obj: Record<string, string>) {
+function record(obj: Record<string, unknown>) {
   return { get: (key: string) => obj[key] };
 }
 
@@ -161,7 +171,12 @@ describe('grafeo db push (cli-db-push spec)', () => {
       ...ALL_IN_SYNC,
       constraints: [
         ...ALL_IN_SYNC.constraints,
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        },
       ],
     });
     const io = makeIO(mock.driver);
@@ -183,7 +198,12 @@ describe('grafeo db push (cli-db-push spec)', () => {
       ...ALL_IN_SYNC,
       constraints: [
         ...ALL_IN_SYNC.constraints,
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        },
       ],
     });
     const io = makeIO(mock.driver); // interactive undefined → non-interactive
@@ -200,7 +220,12 @@ describe('grafeo db push (cli-db-push spec)', () => {
       ...ALL_IN_SYNC,
       constraints: [
         ...ALL_IN_SYNC.constraints,
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        },
       ],
     });
     const io = makeIO(mock.driver);
@@ -219,7 +244,12 @@ describe('grafeo db push (cli-db-push spec)', () => {
       ...ALL_IN_SYNC,
       constraints: [
         ...ALL_IN_SYNC.constraints,
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        },
       ],
     });
     const io = makeIO(mock.driver);
@@ -240,7 +270,12 @@ describe('grafeo db push (cli-db-push spec)', () => {
       ...ALL_IN_SYNC,
       constraints: [
         ...ALL_IN_SYNC.constraints,
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        },
       ],
     });
     const confirm = jest.fn(async () => true);
@@ -259,8 +294,18 @@ describe('grafeo db push (cli-db-push spec)', () => {
     // Live DB is missing Author_id_unique (→ create) and carries an orphan.
     const mock = makeDriver({
       constraints: [
-        { name: 'Book_id_unique', type: 'UNIQUENESS' },
-        { name: 'Author_email_unique', type: 'UNIQUENESS' }, // orphan
+        {
+          name: 'Book_id_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Book'],
+          properties: ['id'],
+        },
+        {
+          name: 'Author_email_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['email'],
+        }, // orphan
       ],
       indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
     });

@@ -4,6 +4,7 @@ import {
   buildUniqueConstraintStatements,
   buildVectorIndexStatements,
   SchemaStatement,
+  uniqueConstraintName,
   VectorIndexCreationConfig,
   VectorIndexNeedingConfig,
 } from '../schema/index-statements';
@@ -34,6 +35,10 @@ export interface LiveSchemaItem {
    * VECTOR / TEXT / POINT / LOOKUP for indexes.
    */
   type: string;
+  /** SHOW `labelsOrTypes` column, when the server exposes it. */
+  labelsOrTypes?: string[];
+  /** SHOW `properties` column, when the server exposes it. */
+  properties?: string[];
 }
 
 export interface LiveSchema {
@@ -126,7 +131,7 @@ export function planSchemaSync(
     // that matches the convention shape but carries unsafe characters (a
     // hostile live constraint) is demoted to `unmanaged`, never dropped.
     if (
-      isGrafeoConstraintName(constraint.name, knownLabels) &&
+      isGrafeoConstraint(constraint, knownLabels) &&
       isSafeIdentifier(constraint.name)
     )
       orphans.push({
@@ -153,20 +158,31 @@ export function planSchemaSync(
 }
 
 /**
- * Does `name` match `{Label}_{prop}_unique` for a label the schema knows?
- * Labels may themselves contain underscores, so instead of one ambiguous
- * regex we test each known label as a prefix.
+ * Is this live constraint one grafeo itself would have created — i.e. a
+ * single-label, single-property UNIQUENESS constraint on a label the schema
+ * knows, named exactly `uniqueConstraintName(label, prop)`?
+ *
+ * Decided from the constraint's DEFINITION, not its name alone. Pre-2.4.7
+ * any name starting with a known label passed (`Book_Archive_code_unique`
+ * looked like `Book` + prop `Archive_code`), so `--force-drop` could drop a
+ * constraint on a label grafeo doesn't manage — or a NODE KEY / existence
+ * constraint that merely shared the naming shape. Without the definition
+ * columns it is never treated as droppable: a missed orphan is harmless, a
+ * wrong drop is not.
  */
-function isGrafeoConstraintName(
-  name: string,
+function isGrafeoConstraint(
+  constraint: LiveSchemaItem,
   knownLabels: ReadonlySet<string>,
 ): boolean {
-  if (!name.endsWith('_unique')) return false;
-  for (const label of knownLabels) {
-    const prefix = `${label}_`;
-    if (!name.startsWith(prefix)) continue;
-    const prop = name.slice(prefix.length, -'_unique'.length);
-    if (prop.length > 0 && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(prop)) return true;
-  }
-  return false;
+  if (constraint.type && constraint.type !== 'UNIQUENESS') return false;
+  const labels = constraint.labelsOrTypes;
+  const props = constraint.properties;
+  if (!labels || !props || labels.length !== 1 || props.length !== 1)
+    return false;
+  const [label] = labels;
+  const [prop] = props;
+  return (
+    knownLabels.has(label) &&
+    constraint.name === uniqueConstraintName(label, prop)
+  );
 }

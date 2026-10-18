@@ -25,7 +25,33 @@ function toLiveItem(record: {
   }
 
   if (typeof name !== 'string' || name.length === 0) return null;
-  return { name, type: typeof type === 'string' ? type : String(type ?? '') };
+  const item: LiveSchemaItem = {
+    name,
+    type: typeof type === 'string' ? type : String(type ?? ''),
+  };
+  // The definition columns let the planner attribute a constraint by what
+  // it constrains, not just its name. Absent on a server → left undefined,
+  // and the planner then never treats the row as droppable.
+  const labels = stringList(record, 'labelsOrTypes');
+  const props = stringList(record, 'properties');
+  if (labels) item.labelsOrTypes = labels;
+  if (props) item.properties = props;
+  return item;
+}
+
+function stringList(
+  record: { get(key: string): unknown },
+  key: string,
+): string[] | undefined {
+  let value: unknown;
+  try {
+    value = record.get(key);
+  } catch {
+    return undefined;
+  }
+  return Array.isArray(value) && value.every((v) => typeof v === 'string')
+    ? (value as string[])
+    : undefined;
 }
 
 /**

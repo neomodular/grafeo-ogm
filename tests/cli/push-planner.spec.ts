@@ -1,4 +1,8 @@
-import { planSchemaSync, type LiveSchema } from '../../src/cli/push-planner';
+import {
+  planSchemaSync,
+  type LiveSchema,
+  type LiveSchemaItem,
+} from '../../src/cli/push-planner';
 import { parseSchema } from '../../src/schema/parser';
 
 const EMPTY: LiveSchema = { constraints: [], indexes: [] };
@@ -20,6 +24,16 @@ type Doc @vector(indexes: [{ indexName: "DocEmbedding", queryName: "qDoc", embed
   embedding: [Float!]
 }
 `;
+
+/** A live single-property UNIQUENESS constraint, as SHOW CONSTRAINTS reports it. */
+function uniq(label: string, prop: string): LiveSchemaItem {
+  return {
+    name: `${label}_${prop}_unique`,
+    type: 'UNIQUENESS',
+    labelsOrTypes: [label],
+    properties: [prop],
+  };
+}
 
 describe('planSchemaSync (cli-db-push spec)', () => {
   it('flags missing unique constraints and fulltext indexes for creation', () => {
@@ -64,8 +78,18 @@ describe('planSchemaSync (cli-db-push spec)', () => {
   it('produces an empty create plan when everything is already in sync', () => {
     const live: LiveSchema = {
       constraints: [
-        { name: 'Book_id_unique', type: 'UNIQUENESS' },
-        { name: 'Author_id_unique', type: 'UNIQUENESS' },
+        {
+          name: 'Book_id_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Book'],
+          properties: ['id'],
+        },
+        {
+          name: 'Author_id_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Author'],
+          properties: ['id'],
+        },
       ],
       indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
     };
@@ -79,11 +103,12 @@ describe('planSchemaSync (cli-db-push spec)', () => {
   it('flags a convention-named constraint missing from the SDL as an orphan', () => {
     const live: LiveSchema = {
       constraints: [
-        { name: 'Book_id_unique', type: 'UNIQUENESS' },
-        { name: 'Author_id_unique', type: 'UNIQUENESS' },
-        // matches {Label}_{prop}_unique for the known label Author, but the
-        // SDL no longer declares Author.email as unique → orphan.
-        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+        uniq('Book', 'id'),
+        uniq('Author', 'id'),
+        // grafeo-shaped (single-label, single-prop UNIQUENESS on a known
+        // label, conventional name), but the SDL no longer declares
+        // Author.email as unique → orphan.
+        uniq('Author', 'email'),
       ],
       indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
     };
@@ -93,6 +118,42 @@ describe('planSchemaSync (cli-db-push spec)', () => {
     expect(plan.orphans[0].dropCypher).toBe(
       'DROP CONSTRAINT Author_email_unique IF EXISTS',
     );
+  });
+
+  // v2.4.7 — orphans were attributed by NAME PREFIX only, so --force-drop
+  // could drop constraints grafeo never created.
+  describe('never treats a constraint it cannot prove is grafeo-owned as an orphan', () => {
+    const cases: Array<[string, LiveSchemaItem]> = [
+      [
+        'a label the schema does not define, sharing a known label prefix',
+        uniq('Author_Archive', 'code'),
+      ],
+      [
+        'a conventional name whose definition is on another property',
+        { ...uniq('Author', 'email'), properties: ['phone'] },
+      ],
+      [
+        'a NODE KEY constraint with a conventional name',
+        { ...uniq('Author', 'email'), type: 'NODE_KEY' },
+      ],
+      [
+        'a composite constraint',
+        { ...uniq('Author', 'email'), properties: ['email', 'phone'] },
+      ],
+      [
+        'a row without definition columns (older server)',
+        // Deliberately name-only: no labelsOrTypes / properties columns.
+        { name: 'Author_email_unique', type: 'UNIQUENESS' },
+      ],
+    ];
+    it.each(cases)('%s', (_label, constraint) => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [uniq('Book', 'id'), uniq('Author', 'id'), constraint],
+        indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
+      });
+      expect(plan.orphans).toEqual([]);
+      expect(plan.unmanaged).toContain(constraint.name);
+    });
   });
 
   it('treats non-convention items as unmanaged and ignores LOOKUP indexes', () => {
