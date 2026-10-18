@@ -98,3 +98,33 @@ const missingTitle: G.PostCreateInput = {};
     expect(block).toContain('weight: Scalars["Int"]["input"];');
   });
 });
+
+describe('generated ModelMap excludes interfaces', () => {
+  const typeDefs = `
+    interface Entity {
+      id: ID!
+    }
+    type User implements Entity @node(labels: ["User", "Entity"]) {
+      id: ID! @id
+    }
+  `;
+
+  // Through v2.4.7 interfaces were also listed in ModelMap, so
+  // ogm.model('Entity') resolved to the typed overload (autocomplete,
+  // typed where) but always threw at runtime ("is an interface, not a
+  // node type"). Note OGM.model() keeps an untyped `(name: string)`
+  // overload, so the call itself still compiles — it just no longer
+  // advertises a typed model.
+  it('lists only node types in ModelMap, interfaces in InterfaceModelMap', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+ogm.model('User');
+ogm.interfaceModel('Entity');
+type _k = Expect<Equal<keyof ModelMap, 'User'>>;
+type _i = Expect<Equal<keyof InterfaceModelMap, 'Entity'>>;
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+});

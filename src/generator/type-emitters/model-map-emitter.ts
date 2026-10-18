@@ -57,6 +57,7 @@ export function emitModelDeclarations(schema: SchemaMetadata): string {
 /**
  * Emits the `ModelMap` type that maps every node name to its associated
  * generated types (node type, select fields, where, and mutation inputs).
+ * Only concrete node types — see `emitInterfaceModelMap` for interfaces.
  */
 export function emitModelMap(schema: SchemaMetadata): string {
   const entries: string[] = [];
@@ -72,10 +73,10 @@ export function emitModelMap(schema: SchemaMetadata): string {
     );
   }
 
-  // Include interfaces so ogm.model('InterfaceName') gets autocomplete
-  const sortedInterfaces = [...schema.interfaces.keys()].sort();
-  for (const ifaceName of sortedInterfaces)
-    entries.push(buildInterfaceAsModelMapEntry(ifaceName));
+  // Interfaces are NOT listed: `ogm.model()` throws for them at runtime
+  // ("is an interface, not a node type"). Through v2.4.7 they were, so
+  // `ogm.model('Entity')` type-checked and then always threw. They live
+  // in `InterfaceModelMap`, keyed for `ogm.interfaceModel()`.
 
   return `export type ModelMap = {\n${entries.join('\n')}\n};`;
 }
@@ -180,23 +181,6 @@ function buildModelMapEntry(
   if (hasFulltext) lines.push(`    Fulltext: ${typeName}FulltextInput;`);
   lines.push(`  };`);
   return lines.join('\n');
-}
-
-function buildInterfaceAsModelMapEntry(ifaceName: string): string {
-  return [
-    `  ${ifaceName}: {`,
-    `    Type: ${ifaceName};`,
-    `    SelectFields: ${ifaceName}SelectFields;`,
-    `    Where: ${ifaceName}Where;`,
-    `    CreateInput: Record<string, never>;`,
-    `    UpdateInput: Record<string, never>;`,
-    `    ConnectInput: Record<string, never>;`,
-    `    DisconnectInput: Record<string, never>;`,
-    `    DeleteInput: Record<string, never>;`,
-    `    PluralKey: never;`,
-    `    Sort: ${ifaceName}Sort;`,
-    `  };`,
-  ].join('\n');
 }
 
 function buildInterfaceModelMapEntry(ifaceName: string): string {

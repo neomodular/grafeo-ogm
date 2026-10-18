@@ -311,17 +311,7 @@ describe('emitModelMap', () => {
     expect(output).not.toContain('Fulltext:');
   });
 
-  it('should include Sort in ModelMap entries for interfaces', () => {
-    const schema = makeSchema(
-      new Map([['User', makeNodeDef('User', 'users')]]),
-      new Map([['Entity', makeInterfaceDef('Entity')]]),
-    );
-    const output = emitModelMap(schema);
-
-    expect(output).toContain('Sort: EntitySort;');
-  });
-
-  it('should include interfaces in ModelMap with correct type references', () => {
+  it('excludes interfaces from ModelMap (ogm.model() rejects them at runtime)', () => {
     const schema = makeSchema(
       new Map([['User', makeNodeDef('User', 'users')]]),
       new Map([['Entity', makeInterfaceDef('Entity')]]),
@@ -329,12 +319,8 @@ describe('emitModelMap', () => {
     const output = emitModelMap(schema);
 
     expect(output).toContain('User: {');
-    expect(output).toContain('Entity: {');
-    expect(output).toContain('Type: Entity;');
-    expect(output).toContain('SelectFields: EntitySelectFields;');
-    expect(output).toContain('Where: EntityWhere;');
-    expect(output).toContain('CreateInput: Record<string, never>;');
-    expect(output).toContain('PluralKey: never;');
+    expect(output).not.toContain('Entity: {');
+    expect(output).not.toContain('PluralKey: never;');
   });
 });
 
