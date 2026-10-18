@@ -1608,6 +1608,11 @@ export class MutationCompiler {
         const item = specItems[si];
         const relVar = `r_${fieldName}_${si}`;
 
+        // Wrap in a CALL subquery: the OPTIONAL MATCH yields one row per
+        // matched relationship, which would multiply every later clause.
+        // `count(*)` collapses it back to exactly one row per `n`.
+        lines.push('WITH n');
+        lines.push('CALL {');
         lines.push('WITH n');
 
         if (
@@ -1666,6 +1671,9 @@ export class MutationCompiler {
 
           lines.push(`DELETE ${relVar}`);
         }
+
+        lines.push(`RETURN count(*) AS _${relVar}`);
+        lines.push('}');
       }
     }
 
@@ -1898,6 +1906,10 @@ export class MutationCompiler {
 
             const relVar = `r_disc_${key}_${i}_${di}`;
 
+            // Same isolation as the top-level disconnect: keep the
+            // OPTIONAL MATCH fan-out from multiplying later nested ops.
+            lines.push(withClause);
+            lines.push('CALL {');
             lines.push(withClause);
 
             if (!whereSpec || Object.keys(whereSpec).length === 0) {
@@ -1953,6 +1965,9 @@ export class MutationCompiler {
 
               lines.push(`DELETE ${relVar}`);
             }
+
+            lines.push(`RETURN count(*) AS _${relVar}`);
+            lines.push('}');
           }
         }
 

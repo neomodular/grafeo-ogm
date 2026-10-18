@@ -666,6 +666,33 @@ describe('MutationCompiler', () => {
       expect(result.cypher).toContain('DELETE r_hasStatus_0');
     });
 
+    // #8 — the OPTIONAL MATCH yields one row per matched relationship.
+    // Inline, that fan-out multiplied every later clause (a nested create
+    // after a disconnect-all ran once per old related node). Each
+    // disconnect must run inside a CALL that collapses back to one row.
+    it('isolates a top-level disconnect in a row-preserving CALL (#8)', () => {
+      const result = compiler.compileUpdate(
+        baseWhere,
+        undefined,
+        undefined,
+        { hasStatus: {} },
+        authorNode,
+        baseWhereResult,
+      );
+
+      expect(result.cypher).toContain(
+        [
+          'WITH n',
+          'CALL {',
+          'WITH n',
+          'OPTIONAL MATCH (n)-[r_hasStatus_0:`CHART_HAS_STATUS`]->()',
+          'DELETE r_hasStatus_0',
+          'RETURN count(*) AS _r_hasStatus_0',
+          '}',
+        ].join('\n'),
+      );
+    });
+
     // 10. Disconnect specific with NOT condition
     it('should disconnect with NOT condition', () => {
       // Use resourceNodeWithRel for the Resource node that has showsForEntities
@@ -1176,6 +1203,26 @@ describe('MutationCompiler', () => {
       expect(result.params).toMatchObject({
         param1: ['tier1', 'tier2'],
       });
+    });
+
+    it('isolates a nested disconnect in a row-preserving CALL (#8)', () => {
+      const result = compiler.compileUpdate(
+        { id: 'conc1' },
+        { tiers: [{ disconnect: [{}] }] },
+        undefined,
+        undefined,
+        concentrationNode,
+        { cypher: 'n.id = $param0', params: { param0: 'conc1' } },
+      );
+
+      const lines = result.cypher.split('\n');
+      const del = lines.findIndex((l) => l.startsWith('DELETE r_disc_tiers'));
+      expect(del).toBeGreaterThan(-1);
+      expect(lines[del - 1]).toMatch(/^OPTIONAL MATCH /);
+      expect(lines[del - 2]).toMatch(/^WITH /);
+      expect(lines[del - 3]).toBe('CALL {');
+      expect(lines[del + 1]).toMatch(/^RETURN count\(\*\) AS _r_disc_tiers_/);
+      expect(lines[del + 2]).toBe('}');
     });
 
     it('handles AND wrapper in nested update.<rel>.disconnect (v1.8.1)', () => {
