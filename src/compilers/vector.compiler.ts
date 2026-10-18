@@ -95,8 +95,10 @@ export class VectorCompiler {
     const providerCfgParam = `v_providerConfig_${suffix}`;
     const encodedVar = `__v_encoded_${suffix}`;
 
+    // `genai.vector.encode` is a FUNCTION (only `encodeBatch` is a
+    // procedure), so it is evaluated in a WITH, not CALLed.
     const cypher = [
-      `CALL genai.vector.encode($${phraseParam}, $${providerParam}, $${providerCfgParam}) YIELD vector AS ${encodedVar}`,
+      `WITH genai.vector.encode($${phraseParam}, $${providerParam}, $${providerCfgParam}) AS ${encodedVar}`,
       `CALL db.index.vector.queryNodes($${nameParam}, $${kParam}, ${encodedVar}) YIELD node AS n, score`,
     ].join('\n');
 

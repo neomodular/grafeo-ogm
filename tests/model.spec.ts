@@ -1469,7 +1469,7 @@ describe('Model', () => {
 
       const cypher = getCypher(mockSession);
       expect(cypher).toContain(
-        'CALL genai.vector.encode($v_phrase_0, $v_provider_0, $v_providerConfig_0) YIELD vector AS __v_encoded_0',
+        'WITH genai.vector.encode($v_phrase_0, $v_provider_0, $v_providerConfig_0) AS __v_encoded_0',
       );
       expect(cypher).toContain(
         'CALL db.index.vector.queryNodes($v_name_0, $v_k_0, __v_encoded_0) YIELD node AS n, score',

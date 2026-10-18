@@ -263,7 +263,7 @@ describe('VectorCompiler', () => {
   });
 
   describe('compileByPhrase', () => {
-    it('emits the two-step CALL with genai.vector.encode + queryNodes', () => {
+    it('emits genai.vector.encode as a function, then CALLs queryNodes (#13)', () => {
       const result = compiler.compileByPhrase({
         indexName: 'article_content_idx',
         phrase: 'distributed consensus',
@@ -274,7 +274,7 @@ describe('VectorCompiler', () => {
 
       expect(result.cypher).toBe(
         [
-          'CALL genai.vector.encode($v_phrase_0, $v_provider_0, $v_providerConfig_0) YIELD vector AS __v_encoded_0',
+          'WITH genai.vector.encode($v_phrase_0, $v_provider_0, $v_providerConfig_0) AS __v_encoded_0',
           'CALL db.index.vector.queryNodes($v_name_0, $v_k_0, __v_encoded_0) YIELD node AS n, score',
         ].join('\n'),
       );
