@@ -108,7 +108,6 @@ export type Author = {
   name: Scalars["String"]["output"];
   bio?: Maybe<Scalars["String"]["output"]>;
   bornYear?: Maybe<Scalars["Int"]["output"]>;
-  booksAggregate?: Maybe<AuthorBookBooksAggregationSelection>;
   books: Array<Book>;
   booksConnection: AuthorBooksConnection;
 };
@@ -122,13 +121,10 @@ export type Book = {
   price?: Maybe<Scalars["Float"]["output"]>;
   published?: Maybe<Scalars["DateTime"]["output"]>;
   status?: Maybe<BookStatus>;
-  authorAggregate?: Maybe<BookAuthorAuthorAggregationSelection>;
   author: Author;
   authorConnection: BookAuthorConnection;
-  categoriesAggregate?: Maybe<BookCategoryCategoriesAggregationSelection>;
   categories: Array<Category>;
   categoriesConnection: BookCategoriesConnection;
-  reviewsAggregate?: Maybe<BookReviewReviewsAggregationSelection>;
   reviews: Array<Review>;
   reviewsConnection: BookReviewsConnection;
 };
@@ -137,7 +133,6 @@ export type Category = {
   __typename?: "Category";
   id: Scalars["ID"]["output"];
   name: Scalars["String"]["output"];
-  booksAggregate?: Maybe<CategoryBookBooksAggregationSelection>;
   books: Array<Book>;
   booksConnection: CategoryBooksConnection;
 };
@@ -154,7 +149,6 @@ export type Review = {
   id: Scalars["ID"]["output"];
   rating: Scalars["Int"]["output"];
   comment?: Maybe<Scalars["String"]["output"]>;
-  bookAggregate?: Maybe<ReviewBookBookAggregationSelection>;
   book: Book;
   bookConnection: ReviewBookConnection;
 };
@@ -224,7 +218,6 @@ export type AuthorWhere = {
   AND?: InputMaybe<Array<AuthorWhere>>;
   NOT?: InputMaybe<AuthorWhere>;
   mode?: "insensitive" | (string & {});
-  booksAggregate?: InputMaybe<AuthorBooksAggregateInput>;
   books?: InputMaybe<BookWhere>;
   books_NOT?: InputMaybe<BookWhere>;
   booksConnection?: InputMaybe<AuthorBooksConnectionWhere>;
@@ -311,12 +304,10 @@ export type BookWhere = {
   AND?: InputMaybe<Array<BookWhere>>;
   NOT?: InputMaybe<BookWhere>;
   mode?: "insensitive" | (string & {});
-  authorAggregate?: InputMaybe<BookAuthorAggregateInput>;
   author?: InputMaybe<AuthorWhere>;
   author_NOT?: InputMaybe<AuthorWhere>;
   authorConnection?: InputMaybe<BookAuthorConnectionWhere>;
   authorConnection_NOT?: InputMaybe<BookAuthorConnectionWhere>;
-  categoriesAggregate?: InputMaybe<BookCategoriesAggregateInput>;
   categories?: InputMaybe<CategoryWhere>;
   categories_NOT?: InputMaybe<CategoryWhere>;
   categoriesConnection?: InputMaybe<BookCategoriesConnectionWhere>;
@@ -329,7 +320,6 @@ export type BookWhere = {
   categoriesConnection_NONE?: InputMaybe<BookCategoriesConnectionWhere>;
   categoriesConnection_SINGLE?: InputMaybe<BookCategoriesConnectionWhere>;
   categoriesConnection_SOME?: InputMaybe<BookCategoriesConnectionWhere>;
-  reviewsAggregate?: InputMaybe<BookReviewsAggregateInput>;
   reviews?: InputMaybe<ReviewWhere>;
   reviews_NOT?: InputMaybe<ReviewWhere>;
   reviewsConnection?: InputMaybe<BookReviewsConnectionWhere>;
@@ -370,7 +360,6 @@ export type CategoryWhere = {
   AND?: InputMaybe<Array<CategoryWhere>>;
   NOT?: InputMaybe<CategoryWhere>;
   mode?: "insensitive" | (string & {});
-  booksAggregate?: InputMaybe<CategoryBooksAggregateInput>;
   books?: InputMaybe<BookWhere>;
   books_NOT?: InputMaybe<BookWhere>;
   booksConnection?: InputMaybe<CategoryBooksConnectionWhere>;
@@ -458,7 +447,6 @@ export type ReviewWhere = {
   AND?: InputMaybe<Array<ReviewWhere>>;
   NOT?: InputMaybe<ReviewWhere>;
   mode?: "insensitive" | (string & {});
-  bookAggregate?: InputMaybe<ReviewBookAggregateInput>;
   book?: InputMaybe<BookWhere>;
   book_NOT?: InputMaybe<BookWhere>;
   bookConnection?: InputMaybe<ReviewBookConnectionWhere>;
@@ -1168,14 +1156,14 @@ export type ReviewBookRelationship = {
 
 export type IdAggregateSelection = {
   __typename?: "IDAggregateSelection";
-  shortest?: Maybe<Scalars["ID"]["output"]>;
-  longest?: Maybe<Scalars["ID"]["output"]>;
+  min?: Maybe<Scalars["ID"]["output"]>;
+  max?: Maybe<Scalars["ID"]["output"]>;
 };
 
 export type StringAggregateSelection = {
   __typename?: "StringAggregateSelection";
-  shortest?: Maybe<Scalars["String"]["output"]>;
-  longest?: Maybe<Scalars["String"]["output"]>;
+  min?: Maybe<Scalars["String"]["output"]>;
+  max?: Maybe<Scalars["String"]["output"]>;
 };
 
 export type IntAggregateSelection = {
@@ -1209,6 +1197,7 @@ export type AuthorAggregateSelection = {
   bornYear: IntAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type AuthorBookBooksAggregationSelection = {
   __typename?: "AuthorBookBooksAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1232,6 +1221,7 @@ export type AuthorBookBooksEdgeAggregateSelection = {
   year: IntAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type AuthorBooksAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1254,6 +1244,7 @@ export type BookAggregateSelection = {
   published: DateTimeAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookAuthorAuthorAggregationSelection = {
   __typename?: "BookAuthorAuthorAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1275,6 +1266,7 @@ export type BookAuthorAuthorEdgeAggregateSelection = {
   year: IntAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookAuthorAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1286,6 +1278,7 @@ export type BookAuthorAggregateInput = {
   NOT?: InputMaybe<BookAuthorAggregateInput>;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookCategoryCategoriesAggregationSelection = {
   __typename?: "BookCategoryCategoriesAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1304,6 +1297,7 @@ export type BookCategoryCategoriesEdgeAggregateSelection = {
   addedAt: DateTimeAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookCategoriesAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1315,6 +1309,7 @@ export type BookCategoriesAggregateInput = {
   NOT?: InputMaybe<BookCategoriesAggregateInput>;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookReviewReviewsAggregationSelection = {
   __typename?: "BookReviewReviewsAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1328,6 +1323,7 @@ export type BookReviewReviewsNodeAggregateSelection = {
   comment: StringAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookReviewsAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1346,6 +1342,7 @@ export type CategoryAggregateSelection = {
   name: StringAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type CategoryBookBooksAggregationSelection = {
   __typename?: "CategoryBookBooksAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1362,6 +1359,7 @@ export type CategoryBookBooksNodeAggregateSelection = {
   published: DateTimeAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type CategoryBooksAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1389,6 +1387,7 @@ export type ReviewAggregateSelection = {
   comment: StringAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type ReviewBookBookAggregationSelection = {
   __typename?: "ReviewBookBookAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1405,6 +1404,7 @@ export type ReviewBookBookNodeAggregateSelection = {
   published: DateTimeAggregateSelection;
 };
 
+/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type ReviewBookAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1919,18 +1919,6 @@ export type ModelMap = {
     DeleteInput: ReviewDeleteInput;
     PluralKey: "reviews";
     Sort: ReviewSort;
-  };
-  Entity: {
-    Type: Entity;
-    SelectFields: EntitySelectFields;
-    Where: EntityWhere;
-    CreateInput: Record<string, never>;
-    UpdateInput: Record<string, never>;
-    ConnectInput: Record<string, never>;
-    DisconnectInput: Record<string, never>;
-    DeleteInput: Record<string, never>;
-    PluralKey: never;
-    Sort: EntitySort;
   };
 };
 
