@@ -1518,6 +1518,12 @@ export class Model<
         Boolean(params.unsafe?.bypassPolicies),
       ),
     );
+    // v2.5.0 — with skipDuplicates the MERGE row count includes the
+    // existing nodes it matched, so the count comes from the write counters:
+    // the nodes actually created, as Prisma returns. Pre-2.5.0 it was
+    // `count(n)`, which counted skipped duplicates too.
+    if (params.skipDuplicates)
+      return { count: result.summary.counters.updates().nodesCreated };
     const record = result.records[0];
     const count = record
       ? ResultMapper.convertNeo4jTypes(record.get('count'))

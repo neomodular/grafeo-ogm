@@ -140,6 +140,26 @@ describeLive('createMany — live Neo4j', () => {
     expect(h).toMatchObject({ email: email('h'), name: 'H', age: 9 });
   });
 
+  // v2.5.0 — the count was `count(n)` after MERGE, which also counted the
+  // matched (skipped) duplicates. Prisma returns the created count.
+  it('skipDuplicates returns the number of nodes actually created', async () => {
+    await P().createMany({ data: [{ runId, email: email('k') }] });
+    const res = await P().createMany({
+      data: [
+        { runId, email: email('k') },
+        { runId, email: email('l') },
+        { runId, email: email('m') },
+      ],
+      skipDuplicates: true,
+    });
+    expect(res).toEqual({ count: 2 });
+    const again = await P().createMany({
+      data: [{ runId, email: email('k') }],
+      skipDuplicates: true,
+    });
+    expect(again).toEqual({ count: 0 });
+  });
+
   it('rejects a relationship field in the first item (unchanged)', async () => {
     await expect(
       P().createMany({

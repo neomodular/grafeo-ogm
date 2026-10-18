@@ -251,6 +251,29 @@ describe('Model.createMany()', () => {
     expect(cypher).toContain('CREATE');
   });
 
+  // v2.5.0 — `count(n)` after MERGE also counts the skipped duplicates.
+  it('skipDuplicates returns the created count from the write counters', async () => {
+    const { mockDriver, mockSession } = createMockDriver();
+    mockSession.run.mockResolvedValueOnce({
+      records: [
+        {
+          keys: ['count'],
+          get: (key: string) => (key === 'count' ? 3 : null),
+          toObject: () => ({ count: 3 }),
+        },
+      ],
+      summary: { counters: { updates: () => ({ nodesCreated: 1 }) } },
+    });
+
+    const model = new Model(bookNode, schema, mockDriver);
+    const result = await model.createMany({
+      data: [{ externalId: 'a' }, { externalId: 'b' }, { externalId: 'c' }],
+      skipDuplicates: true,
+    });
+
+    expect(result).toEqual({ count: 1 });
+  });
+
   it('should pass through transaction context', async () => {
     const { mockDriver, mockSession } = createMockDriver();
     mockSession.run.mockResolvedValueOnce({
