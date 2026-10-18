@@ -237,4 +237,59 @@ describeLive('Write paths — live Neo4j', () => {
       ).rejects.toThrow(OGMError);
     });
   });
+
+  describe('top-level connect / disconnect on abstract relationships', () => {
+    it('update.connect on an interface relationship links the implementer', async () => {
+      await seed(
+        `CREATE (:LcOwner {id: randomUUID(), runId: $runId, name: 'o-t1'})
+         CREATE (:LcDog {id: randomUUID(), runId: $runId, name: 'rex-t1'})
+         CREATE (:LcCat {id: randomUUID(), runId: $runId, name: 'tom-t1'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-t1' },
+        connect: { pets: [{ where: { node: { name: 'rex-t1' } } }] },
+      });
+      await Owner().update({
+        where: { name: 'o-t1' },
+        connect: { pets: { LcCat: [{ where: { node: { name: 'tom-t1' } } }] } },
+      });
+      expect(await linked('o-t1', 'LC_OWNS')).toEqual(['rex-t1', 'tom-t1']);
+
+      await Owner().update({
+        where: { name: 'o-t1' },
+        disconnect: { pets: [{ where: { node: { name: 'rex-t1' } } }] },
+      });
+      expect(await linked('o-t1', 'LC_OWNS')).toEqual(['tom-t1']);
+    });
+
+    it('update.connect on a union relationship links only the filtered member', async () => {
+      await seed(
+        `CREATE (:LcOwner {id: randomUUID(), runId: $runId, name: 'o-t2'})
+         CREATE (:LcBook {id: randomUUID(), runId: $runId, title: 'book-t2'})
+         CREATE (:LcBook {id: randomUUID(), runId: $runId, title: 'other-book-t2'})
+         CREATE (:LcFilm {id: randomUUID(), runId: $runId, title: 'film-t2'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-t2' },
+        connect: {
+          media: {
+            LcBook: [{ where: { node: { title: 'book-t2' } } }],
+            LcFilm: [{ where: { node: { title: 'film-t2' } } }],
+          },
+        },
+      });
+      expect(await linked('o-t2', 'LC_HAS_MEDIA')).toEqual([
+        'book-t2',
+        'film-t2',
+      ]);
+
+      await Owner().update({
+        where: { name: 'o-t2' },
+        disconnect: {
+          media: { LcFilm: [{ where: { node: { title: 'film-t2' } } }] },
+        },
+      });
+      expect(await linked('o-t2', 'LC_HAS_MEDIA')).toEqual(['book-t2']);
+    });
+  });
 });

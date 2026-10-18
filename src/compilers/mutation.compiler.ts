@@ -37,6 +37,26 @@ export interface MutationResult {
 }
 
 /**
+ * Where a connect / disconnect is emitted: its source variable, the WITH
+ * that carries every variable still needed, and a prefix that keeps its
+ * variables, params and aliases unique when nested (v2.5.0).
+ */
+interface WriteScope {
+  sourceVar: string;
+  withClause: string;
+  varPrefix: string;
+  depth: number;
+}
+
+/** The root node `n` of an update — the pre-2.5.0 names, unprefixed. */
+const TOP_SCOPE: WriteScope = {
+  sourceVar: 'n',
+  withClause: 'WITH n',
+  varPrefix: '',
+  depth: 0,
+};
+
+/**
  * Compiles create, update, delete, and label mutations into Cypher + params.
  */
 export class MutationCompiler {
@@ -1415,12 +1435,21 @@ export class MutationCompiler {
     return { lines, counterUsed: counter };
   }
 
+  /**
+   * Top-level `connect`. A union / interface relationship keyed by member
+   * (`{ media: { Book: [...] } }`, the shape codegen emits) connects each
+   * member separately; a flat interface input matches the implementers by
+   * their own labels (v2.5.0 — pre-2.5.0 both matched the abstract type's
+   * label, which no node carries, and the per-member shape was never
+   * unwrapped, so the MATCH carried NO filter at all).
+   */
   private buildConnects(
     connect: Record<string, unknown>,
     nodeDef: NodeDefinition,
     params: Record<string, unknown>,
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
+    scope: WriteScope = TOP_SCOPE,
   ): string[] {
     const lines: string[] = [];
 
@@ -1428,290 +1457,345 @@ export class MutationCompiler {
       const relDef = nodeDef.relationships.get(fieldName);
       if (!relDef) continue;
 
-      const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
-      if (!targetNodeDef) continue;
-
-      const targetLabelStr = this.getCachedLabelString(targetNodeDef);
-
-      // Array connect
-      if (Array.isArray(spec)) {
-        if (spec.length === 0) continue; // Empty array — nothing to connect
-
-        // The UNWIND fast path compiles filters against per-row values and
-        // is only exact for plain scalar, non-null filters (see
-        // isConnectFastPathEligible). Everything else — null values,
-        // logical keys, traversals — takes one CALL subquery per item,
-        // compiled through WhereCompiler.
-        const useFastPath = this.isConnectFastPathEligible(
-          spec as Record<string, unknown>[],
-          targetNodeDef,
-        );
-
-        if (!useFastPath)
-          for (let ci = 0; ci < spec.length; ci++) {
-            const connectSpec = spec[ci] as Record<string, unknown>;
-            const whereSpec = connectSpec.where as
-              | Record<string, unknown>
-              | undefined;
-            const edgeInput = connectSpec.edge as
-              | Record<string, unknown>
-              | undefined;
-
-            lines.push('WITH n');
-            lines.push(`CALL {`);
-            lines.push('WITH n');
-
-            const connectVar = `target_${fieldName}_${ci}`;
-            lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
-
-            const connectConditions = [
-              this.compileTargetWhere(
-                whereSpec,
-                connectVar,
-                targetNodeDef,
-                params,
-                policyContext,
-                paramCounter,
-              ),
-              this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                connectVar,
-                params,
-                policyContext,
-                paramCounter,
-              ),
-            ].filter((c): c is string => Boolean(c));
-            if (connectConditions.length > 0)
-              lines.push(`WHERE ${connectConditions.join(' AND ')}`);
-
-            if (edgeInput && Object.keys(edgeInput).length > 0) {
-              assertSafeIdentifier(relDef.type, 'relationship type');
-              const escapedRelType = escapeIdentifier(relDef.type);
-              const relVar = `r_conn_${fieldName}_${ci}`;
-              const mergePattern =
-                relDef.direction === 'OUT'
-                  ? `(n)-[${relVar}:${escapedRelType}]->(${connectVar})`
-                  : `(n)<-[${relVar}:${escapedRelType}]-(${connectVar})`;
-              lines.push(`MERGE ${mergePattern}`);
-              const setItems: string[] = [];
-              for (const [prop, val] of Object.entries(edgeInput)) {
-                if (val === undefined) continue;
-                assertSafePropertyName(prop, 'edge property');
-                const edgePropDef = this.getEdgePropDef(relDef, prop);
-                const paramName = `connect_${fieldName}_${ci}_edge_${prop}`;
-                setItems.push(
-                  `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                    `$${paramName}`,
-                    val,
-                    edgePropDef,
-                  )}`,
-                );
-                params[paramName] = coerceWriteValue(val, edgePropDef);
-              }
-              if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
-            } else {
-              const mergePattern = buildRelPattern({
-                sourceVar: 'n',
-                relDef,
-                targetVar: connectVar,
-              });
-              lines.push(`MERGE ${mergePattern}`);
-            }
-
-            lines.push(`RETURN count(*) AS _ccn_${fieldName}_${ci}`);
-            lines.push(`}`);
-          }
-        else {
-          // Scalar-only WHERE — use efficient UNWIND approach
-          const paramName = `connect_${fieldName}`;
-          // Strip undefined values from edge objects — Neo4j driver drops undefined,
-          // causing param mismatches when the Cypher references nested edge properties.
-          params[paramName] = (spec as Record<string, unknown>[]).map(
-            (item) => {
-              const edge = item.edge as Record<string, unknown> | undefined;
-              if (!edge) return item;
-              const cleaned: Record<string, unknown> = {};
-              for (const [k, v] of Object.entries(edge))
-                if (v !== undefined)
-                  cleaned[k] = coerceWriteValue(
-                    v,
-                    this.getEdgePropDef(relDef, k),
-                  );
-
-              return { ...item, edge: cleaned };
-            },
+      const abstract = abstractTarget(relDef.target, this.schema);
+      const memberEntries =
+        abstract && !isBlanketSpec(spec)
+          ? perMemberEntries(spec, abstract, fieldName)
+          : null;
+      if (memberEntries) {
+        for (const [member, memberSpec] of memberEntries)
+          lines.push(
+            ...this.buildRelConnects(
+              memberSpec,
+              this.narrowToMember(relDef, member),
+              this.schema.nodes.get(member)!,
+              `${fieldName}_${member}`,
+              params,
+              policyContext,
+              paramCounter,
+              scope,
+            ),
           );
-
-          // Wrap in a CALL subquery: UNWIND + MATCH yields one row per
-          // matched target (zero when nothing matches), which would
-          // multiply — or drop — the updated node for every later clause.
-          // Connecting to no target is a no-op, as in @neo4j/graphql.
-          lines.push('WITH n');
-          lines.push('CALL {');
-          lines.push('WITH n');
-          lines.push(`UNWIND $${paramName} AS connItem`);
-          lines.push(`MATCH (target:${targetLabelStr})`);
-
-          // Build WHERE from the first item's structure to determine the path.
-          // Pre-1.7.4 we silently used `firstItem`'s keys for ALL items —
-          // if `spec[1]` had different filter keys (e.g. an extra
-          // `tenantId`), those keys were silently dropped from the WHERE.
-          // Validate homogeneity now and throw if items diverge so the
-          // caller knows to split into separate calls or use the per-item
-          // CALL fallback.
-          const firstItem = spec[0] as Record<string, unknown>;
-          const firstItemSig = computeConnectItemSignature(firstItem);
-          for (let idx = 1; idx < spec.length; idx++) {
-            const sig = computeConnectItemSignature(
-              spec[idx] as Record<string, unknown>,
-            );
-            if (sig !== firstItemSig)
-              throw new OGMError(
-                `connect array items have divergent shapes — item[0] has keys "${firstItemSig}" ` +
-                  `but item[${idx}] has keys "${sig}". The UNWIND fast path requires every item ` +
-                  `to share the same WHERE / edge key set; otherwise the additional keys are ` +
-                  `silently dropped. Split into separate connect calls, or normalise the items ` +
-                  `to share the same shape.`,
-              );
-          }
-
-          const whereConditions = this.extractConnectWhereConditions(
-            firstItem,
-            'target',
-            'connItem',
-            targetNodeDef,
-          );
-          const policyPredicate = this.buildTargetPolicyPredicate(
-            targetNodeDef,
-            'target',
-            params,
-            policyContext,
-            paramCounter,
-          );
-          const unwindConditions = policyPredicate
-            ? [...whereConditions, policyPredicate]
-            : whereConditions;
-          if (unwindConditions.length > 0)
-            lines.push(`WHERE ${unwindConditions.join(' AND ')}`);
-
-          const mergePattern = buildRelPattern({
-            sourceVar: 'n',
-            relDef,
-            targetVar: 'target',
-          });
-          lines.push(`MERGE ${mergePattern}`);
-
-          // Handle edge properties from first item structure
-          const edgeProps = this.extractEdgeProperties(firstItem);
-          if (edgeProps.length > 0) {
-            // Use bare target var (no label) since target is already bound by MATCH
-            assertSafeIdentifier(relDef.type, 'relationship type');
-            const escapedRelType = escapeIdentifier(relDef.type);
-            const mergeWithVar =
-              relDef.direction === 'OUT'
-                ? `(n)-[r:${escapedRelType}]->(target)`
-                : `(n)<-[r:${escapedRelType}]-(target)`;
-            // Replace MERGE line with one that has a variable
-            lines[lines.length - 1] = `MERGE ${mergeWithVar}`;
-            // r.prop is relationship property (escape), connItem.edge.prop is parameter map (no escape)
-            const setItems = edgeProps.map(
-              (p) =>
-                `r.${escapeIdentifier(p)} = ${wrapListItemExpr(
-                  `connItem.edge.${p}`,
-                  (spec as Record<string, unknown>[]).map(
-                    (it) =>
-                      (it.edge as Record<string, unknown> | undefined)?.[p],
-                  ),
-                  this.getEdgePropDef(relDef, p),
-                )}`,
-            );
-            lines.push(`SET ${setItems.join(', ')}`);
-          }
-
-          lines.push(`RETURN count(*) AS _conn_${fieldName}`);
-          lines.push('}');
-        }
-      } else {
-        // Single connect
-        const connectSpec = spec as Record<string, unknown>;
-        const whereSpec = connectSpec.where as Record<string, unknown>;
-        const edgeInput = connectSpec.edge as
-          | Record<string, unknown>
-          | undefined;
-
-        // Same row-preserving isolation as the UNWIND path above.
-        lines.push('WITH n');
-        lines.push('CALL {');
-        lines.push('WITH n');
-        lines.push(`MATCH (target:${targetLabelStr})`);
-
-        const singleConnectConditions = [
-          this.compileTargetWhere(
-            whereSpec,
-            'target',
-            targetNodeDef,
-            params,
-            policyContext,
-            paramCounter,
-          ),
-          this.buildTargetPolicyPredicate(
-            targetNodeDef,
-            'target',
-            params,
-            policyContext,
-            paramCounter,
-          ),
-        ].filter((c): c is string => Boolean(c));
-        if (singleConnectConditions.length > 0)
-          lines.push(`WHERE ${singleConnectConditions.join(' AND ')}`);
-
-        if (edgeInput && Object.keys(edgeInput).length > 0) {
-          // Use bare target var (no label) since target is already bound by MATCH
-          assertSafeIdentifier(relDef.type, 'relationship type');
-          const escapedRelType = escapeIdentifier(relDef.type);
-          const mergeWithVar =
-            relDef.direction === 'OUT'
-              ? `(n)-[r:${escapedRelType}]->(target)`
-              : `(n)<-[r:${escapedRelType}]-(target)`;
-          lines.push(`MERGE ${mergeWithVar}`);
-          const setItems: string[] = [];
-          for (const [prop, val] of Object.entries(edgeInput)) {
-            if (val === undefined) continue;
-            const edgePropDef = this.getEdgePropDef(relDef, prop);
-            const paramName = `connect_${fieldName}_edge_${prop}`;
-            setItems.push(
-              `r.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                `$${paramName}`,
-                val,
-                edgePropDef,
-              )}`,
-            );
-            params[paramName] = coerceWriteValue(val, edgePropDef);
-          }
-          if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
-        } else {
-          const mergePattern = buildRelPattern({
-            sourceVar: 'n',
-            relDef,
-            targetVar: 'target',
-          });
-          lines.push(`MERGE ${mergePattern}`);
-        }
-
-        lines.push(`RETURN count(*) AS _conn_${fieldName}`);
-        lines.push('}');
+        continue;
       }
+
+      lines.push(
+        ...this.buildRelConnects(
+          spec,
+          relDef,
+          this.requireTargetDef(relDef),
+          fieldName,
+          params,
+          policyContext,
+          paramCounter,
+          scope,
+        ),
+      );
     }
 
     return lines;
   }
 
+  /**
+   * One relationship's top-level connect. `tag` names its variables,
+   * params and aliases: the field name, or `<field>_<Member>` for an
+   * abstract relationship given per member, so two members never collide.
+   */
+  private buildRelConnects(
+    spec: unknown,
+    relDef: RelationshipDefinition,
+    targetNodeDef: NodeDefinition,
+    tag: string,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+    scope: WriteScope,
+  ): string[] {
+    const lines: string[] = [];
+    const { sourceVar, withClause, varPrefix } = scope;
+
+    // Array connect
+    if (Array.isArray(spec)) {
+      if (spec.length === 0) return lines; // Empty array — nothing to connect
+
+      // The UNWIND fast path compiles filters against per-row values and
+      // is only exact for plain scalar, non-null filters (see
+      // isConnectFastPathEligible). Everything else — null values,
+      // logical keys, traversals, abstract targets — takes one CALL
+      // subquery per item, compiled through WhereCompiler.
+      const useFastPath =
+        !abstractTarget(targetNodeDef.typeName, this.schema) &&
+        this.isConnectFastPathEligible(
+          spec as Record<string, unknown>[],
+          targetNodeDef,
+        );
+
+      if (!useFastPath)
+        for (let ci = 0; ci < spec.length; ci++)
+          lines.push(
+            ...this.buildConnectItem({
+              connectSpec: spec[ci] as Record<string, unknown>,
+              relDef,
+              targetNodeDef,
+              sourceVar,
+              withClause,
+              connectVar: `${varPrefix}target_${tag}_${ci}`,
+              relVar: `${varPrefix}r_conn_${tag}_${ci}`,
+              edgeParamPrefix: `${varPrefix}connect_${tag}_${ci}`,
+              returnAlias: `_ccn_${varPrefix}${tag}_${ci}`,
+              params,
+              policyContext,
+              paramCounter,
+              scope,
+            }),
+          );
+      else {
+        const targetVar = `${varPrefix}target`;
+        const relVar = `${varPrefix}r`;
+        const targetLabelStr = this.getCachedLabelString(targetNodeDef);
+        // Scalar-only WHERE — use efficient UNWIND approach
+        const paramName = `${varPrefix}connect_${tag}`;
+        // Strip undefined values from edge objects — Neo4j driver drops undefined,
+        // causing param mismatches when the Cypher references nested edge properties.
+        params[paramName] = (spec as Record<string, unknown>[]).map((item) => {
+          const edge = item.edge as Record<string, unknown> | undefined;
+          if (!edge) return item;
+          const cleaned: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(edge))
+            if (v !== undefined)
+              cleaned[k] = coerceWriteValue(v, this.getEdgePropDef(relDef, k));
+
+          return { ...item, edge: cleaned };
+        });
+
+        // Wrap in a CALL subquery: UNWIND + MATCH yields one row per
+        // matched target (zero when nothing matches), which would
+        // multiply — or drop — the updated node for every later clause.
+        // Connecting to no target is a no-op, as in @neo4j/graphql.
+        lines.push(withClause);
+        lines.push('CALL {');
+        lines.push(withClause);
+        lines.push(`UNWIND $${paramName} AS connItem`);
+        lines.push(`MATCH (${targetVar}:${targetLabelStr})`);
+
+        // Build WHERE from the first item's structure to determine the path.
+        // Pre-1.7.4 we silently used `firstItem`'s keys for ALL items —
+        // if `spec[1]` had different filter keys (e.g. an extra
+        // `tenantId`), those keys were silently dropped from the WHERE.
+        // Validate homogeneity now and throw if items diverge so the
+        // caller knows to split into separate calls or use the per-item
+        // CALL fallback.
+        const firstItem = spec[0] as Record<string, unknown>;
+        const firstItemSig = computeConnectItemSignature(firstItem);
+        for (let idx = 1; idx < spec.length; idx++) {
+          const sig = computeConnectItemSignature(
+            spec[idx] as Record<string, unknown>,
+          );
+          if (sig !== firstItemSig)
+            throw new OGMError(
+              `connect array items have divergent shapes — item[0] has keys "${firstItemSig}" ` +
+                `but item[${idx}] has keys "${sig}". The UNWIND fast path requires every item ` +
+                `to share the same WHERE / edge key set; otherwise the additional keys are ` +
+                `silently dropped. Split into separate connect calls, or normalise the items ` +
+                `to share the same shape.`,
+            );
+        }
+
+        const whereConditions = this.extractConnectWhereConditions(
+          firstItem,
+          targetVar,
+          'connItem',
+          targetNodeDef,
+        );
+        const policyPredicate = this.buildTargetPolicyPredicate(
+          targetNodeDef,
+          targetVar,
+          params,
+          policyContext,
+          paramCounter,
+        );
+        const unwindConditions = policyPredicate
+          ? [...whereConditions, policyPredicate]
+          : whereConditions;
+        if (unwindConditions.length > 0)
+          lines.push(`WHERE ${unwindConditions.join(' AND ')}`);
+
+        const mergePattern = buildRelPattern({
+          sourceVar,
+          relDef,
+          targetVar,
+        });
+        lines.push(`MERGE ${mergePattern}`);
+
+        // Handle edge properties from first item structure
+        const edgeProps = this.extractEdgeProperties(firstItem);
+        if (edgeProps.length > 0) {
+          // Use bare target var (no label) since target is already bound by MATCH
+          assertSafeIdentifier(relDef.type, 'relationship type');
+          const escapedRelType = escapeIdentifier(relDef.type);
+          const mergeWithVar =
+            relDef.direction === 'OUT'
+              ? `(${sourceVar})-[${relVar}:${escapedRelType}]->(${targetVar})`
+              : `(${sourceVar})<-[${relVar}:${escapedRelType}]-(${targetVar})`;
+          // Replace MERGE line with one that has a variable
+          lines[lines.length - 1] = `MERGE ${mergeWithVar}`;
+          // r.prop is relationship property (escape), connItem.edge.prop is parameter map (no escape)
+          const setItems = edgeProps.map(
+            (p) =>
+              `${relVar}.${escapeIdentifier(p)} = ${wrapListItemExpr(
+                `connItem.edge.${p}`,
+                (spec as Record<string, unknown>[]).map(
+                  (it) => (it.edge as Record<string, unknown> | undefined)?.[p],
+                ),
+                this.getEdgePropDef(relDef, p),
+              )}`,
+          );
+          lines.push(`SET ${setItems.join(', ')}`);
+        }
+
+        lines.push(`RETURN count(*) AS _conn_${varPrefix}${tag}`);
+        lines.push('}');
+      }
+      return lines;
+    }
+
+    // Single connect — same row-preserving isolation as the UNWIND path.
+    return this.buildConnectItem({
+      connectSpec: spec as Record<string, unknown>,
+      relDef,
+      targetNodeDef,
+      sourceVar,
+      withClause,
+      connectVar: `${varPrefix}target`,
+      relVar: `${varPrefix}r`,
+      edgeParamPrefix: `${varPrefix}connect_${tag}`,
+      returnAlias: `_conn_${varPrefix}${tag}`,
+      params,
+      policyContext,
+      paramCounter,
+      scope,
+    });
+  }
+
+  /**
+   * One connect item, isolated in a CALL subquery so a MATCH that finds
+   * nothing (or many) never changes the outer row count:
+   *
+   *   <withClause>
+   *   CALL {
+   *     <withClause>
+   *     MATCH (cv[:Label])
+   *     WHERE <member labels> AND <where> AND <target `read` policy>
+   *     MERGE (src)-[rv:REL]->(cv) [SET rv.<edge> = …]
+   *     RETURN count(*) AS <alias>
+   *   }
+   *
+   * Shared by every connect site (top-level, nested in create, nested in
+   * update), which differ only in the names they pass.
+   */
+  private buildConnectItem(a: {
+    connectSpec: Record<string, unknown>;
+    relDef: RelationshipDefinition;
+    targetNodeDef: NodeDefinition;
+    sourceVar: string;
+    withClause: string;
+    connectVar: string;
+    relVar: string;
+    edgeParamPrefix: string;
+    returnAlias: string;
+    params: Record<string, unknown>;
+    policyContext: PolicyContextBundle | undefined;
+    paramCounter: { count: number } | undefined;
+    scope: WriteScope;
+  }): string[] {
+    const { connectSpec, relDef, targetNodeDef, sourceVar, connectVar } = a;
+    const lines: string[] = [];
+    const whereSpec = connectSpec?.where as Record<string, unknown> | undefined;
+    const edgeInput = connectSpec?.edge as Record<string, unknown> | undefined;
+
+    lines.push(a.withClause);
+    lines.push('CALL {');
+    lines.push(a.withClause);
+
+    const { match, labelPredicate } = this.targetMatch(
+      targetNodeDef,
+      connectVar,
+    );
+    lines.push(match);
+
+    const conditions = [
+      labelPredicate,
+      this.compileTargetWhere(
+        whereSpec,
+        connectVar,
+        targetNodeDef,
+        a.params,
+        a.policyContext,
+        a.paramCounter,
+      ),
+      this.buildTargetPolicyPredicate(
+        targetNodeDef,
+        connectVar,
+        a.params,
+        a.policyContext,
+        a.paramCounter,
+      ),
+    ].filter((c): c is string => Boolean(c));
+    if (conditions.length > 0) lines.push(`WHERE ${conditions.join(' AND ')}`);
+
+    if (edgeInput && Object.keys(edgeInput).length > 0) {
+      // Use bare target var (no label) since connectVar is already bound by MATCH.
+      // Including labels on a bound variable in MERGE causes Neo4j to reject it.
+      assertSafeIdentifier(relDef.type, 'relationship type');
+      const escapedRelType = escapeIdentifier(relDef.type);
+      const mergePattern =
+        relDef.direction === 'OUT'
+          ? `(${sourceVar})-[${a.relVar}:${escapedRelType}]->(${connectVar})`
+          : `(${sourceVar})<-[${a.relVar}:${escapedRelType}]-(${connectVar})`;
+      lines.push(`MERGE ${mergePattern}`);
+      const setItems: string[] = [];
+      for (const [prop, val] of Object.entries(edgeInput)) {
+        if (val === undefined) continue;
+        assertSafePropertyName(prop, 'edge property');
+        const edgePropDef = this.getEdgePropDef(relDef, prop);
+        const paramName = `${a.edgeParamPrefix}_edge_${prop}`;
+        setItems.push(
+          `${a.relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
+            `$${paramName}`,
+            val,
+            edgePropDef,
+          )}`,
+        );
+        a.params[paramName] = coerceWriteValue(val, edgePropDef);
+      }
+      if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
+    } else {
+      const relPattern = buildRelPattern({
+        sourceVar,
+        relDef,
+        targetVar: connectVar,
+      });
+      lines.push(`MERGE ${relPattern}`);
+    }
+
+    lines.push(`RETURN count(*) AS ${a.returnAlias}`);
+    lines.push('}');
+    return lines;
+  }
+
+  /**
+   * Top-level `disconnect`. Abstract relationships follow the connect
+   * rules (see buildConnects): per member, or flat on an interface,
+   * matching implementers by their own labels (v2.5.0 — pre-2.5.0 the
+   * target pattern used the interface / union label, so nothing matched).
+   */
   private buildDisconnects(
     disconnect: Record<string, unknown>,
     nodeDef: NodeDefinition,
     params: Record<string, unknown>,
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
+    scope: WriteScope = TOP_SCOPE,
   ): string[] {
     const lines: string[] = [];
 
@@ -1719,100 +1803,161 @@ export class MutationCompiler {
       const relDef = nodeDef.relationships.get(fieldName);
       if (!relDef) continue;
 
-      const targetNodeDef =
-        resolveTargetDef(relDef.target, this.schema) ?? undefined;
-
-      // Normalize spec to an array of disconnect items
-      const specItems: Array<Record<string, unknown> | null | undefined> =
-        Array.isArray(spec) ? spec : [spec as Record<string, unknown>];
-
-      for (let si = 0; si < specItems.length; si++) {
-        const item = specItems[si];
-        const relVar = `r_${fieldName}_${si}`;
-
-        // Wrap in a CALL subquery: the OPTIONAL MATCH yields one row per
-        // matched relationship, which would multiply every later clause.
-        // `count(*)` collapses it back to exactly one row per `n`.
-        lines.push('WITH n');
-        lines.push('CALL {');
-        lines.push('WITH n');
-
-        if (
-          item == null ||
-          (typeof item === 'object' && Object.keys(item).length === 0)
-        ) {
-          // Blanket disconnect — remove every relationship of this type to
-          // a target the caller can READ. Like the `where` branch below, a
-          // policy-bound context only unlinks nodes it can see; pre-2.4.4
-          // the blanket form bound an anonymous `()` and also severed links
-          // to policy-hidden nodes. Without policies there is no predicate
-          // and the Cypher is unchanged.
-          const blanketTarget = `target_${fieldName}_${si}`;
-          const predicate = targetNodeDef
-            ? this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                blanketTarget,
-                params,
-                policyContext,
-                paramCounter,
-              )
-            : undefined;
-          const pattern = buildRelPattern({
-            sourceVar: 'n',
-            relDef,
-            targetVar: predicate ? blanketTarget : '',
-            edgeVar: relVar,
-          });
-          lines.push(`OPTIONAL MATCH ${pattern}`);
-          if (predicate) lines.push(`WHERE ${predicate}`);
-          lines.push(`DELETE ${relVar}`);
-        } else {
-          // Specific disconnect with conditions
-          const disconnectSpec = item as Record<string, unknown>;
-          const whereSpec = disconnectSpec.where as
-            | Record<string, unknown>
-            | undefined;
-
-          const targetVar = `target_${fieldName}_${si}`;
-          const pattern = buildRelPattern({
-            sourceVar: 'n',
-            relDef,
-            targetVar,
-            edgeVar: relVar,
-            targetLabel: 'auto',
-          });
-          lines.push(`OPTIONAL MATCH ${pattern}`);
-
-          if (!targetNodeDef)
-            throw new OGMError(
-              `Cannot resolve the target type "${relDef.target}" of relationship "${fieldName}".`,
-            );
-          const disconnectConditions = [
-            this.compileTargetWhere(
-              whereSpec,
-              targetVar,
-              targetNodeDef,
+      const abstract = abstractTarget(relDef.target, this.schema);
+      // `null` / `{}` stays a blanket disconnect of the whole relationship.
+      const memberEntries =
+        abstract && !isBlanketSpec(spec)
+          ? perMemberEntries(spec, abstract, fieldName)
+          : null;
+      if (memberEntries) {
+        for (const [member, memberSpec] of memberEntries)
+          lines.push(
+            ...this.buildRelDisconnects(
+              memberSpec,
+              this.narrowToMember(relDef, member),
+              this.schema.nodes.get(member)!,
+              `${fieldName}_${member}`,
               params,
               policyContext,
               paramCounter,
+              scope,
             ),
-            this.buildTargetPolicyPredicate(
-              targetNodeDef,
-              targetVar,
-              params,
-              policyContext,
-              paramCounter,
-            ),
-          ].filter((c): c is string => Boolean(c));
-          if (disconnectConditions.length > 0)
-            lines.push(`WHERE ${disconnectConditions.join(' AND ')}`);
-
-          lines.push(`DELETE ${relVar}`);
-        }
-
-        lines.push(`RETURN count(*) AS _${relVar}`);
-        lines.push('}');
+          );
+        continue;
       }
+
+      lines.push(
+        ...this.buildRelDisconnects(
+          spec,
+          relDef,
+          resolveTargetDef(relDef.target, this.schema) ?? undefined,
+          fieldName,
+          params,
+          policyContext,
+          paramCounter,
+          scope,
+        ),
+      );
+    }
+
+    return lines;
+  }
+
+  /** One relationship's disconnect items; `tag` as in buildRelConnects. */
+  private buildRelDisconnects(
+    spec: unknown,
+    relDef: RelationshipDefinition,
+    targetNodeDef: NodeDefinition | undefined,
+    tag: string,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+    scope: WriteScope,
+  ): string[] {
+    const lines: string[] = [];
+    const { sourceVar, withClause, varPrefix } = scope;
+
+    // Normalize spec to an array of disconnect items
+    const specItems: Array<Record<string, unknown> | null | undefined> =
+      Array.isArray(spec) ? spec : [spec as Record<string, unknown>];
+
+    for (let si = 0; si < specItems.length; si++) {
+      const item = specItems[si];
+      const relVar = `${varPrefix}r_${tag}_${si}`;
+
+      // Wrap in a CALL subquery: the OPTIONAL MATCH yields one row per
+      // matched relationship, which would multiply every later clause.
+      // `count(*)` collapses it back to exactly one row per `n`.
+      lines.push(withClause);
+      lines.push('CALL {');
+      lines.push(withClause);
+
+      if (
+        item == null ||
+        (typeof item === 'object' && Object.keys(item).length === 0)
+      ) {
+        // Blanket disconnect — remove every relationship of this type to
+        // a target the caller can READ. Like the `where` branch below, a
+        // policy-bound context only unlinks nodes it can see; pre-2.5.0
+        // the blanket form bound an anonymous `()` and also severed links
+        // to policy-hidden nodes. Without policies there is no predicate
+        // and the Cypher is unchanged.
+        const blanketTarget = `${varPrefix}target_${tag}_${si}`;
+        const predicate = targetNodeDef
+          ? this.buildTargetPolicyPredicate(
+              targetNodeDef,
+              blanketTarget,
+              params,
+              policyContext,
+              paramCounter,
+            )
+          : undefined;
+        const pattern = buildRelPattern({
+          sourceVar,
+          relDef,
+          targetVar: predicate ? blanketTarget : '',
+          edgeVar: relVar,
+          targetLabelRaw: this.blanketTargetLabel(relDef),
+        });
+        lines.push(`OPTIONAL MATCH ${pattern}`);
+        if (predicate) lines.push(`WHERE ${predicate}`);
+        lines.push(`DELETE ${relVar}`);
+      } else {
+        // Specific disconnect with conditions
+        const disconnectSpec = item as Record<string, unknown>;
+        const whereSpec = disconnectSpec.where as
+          | Record<string, unknown>
+          | undefined;
+
+        const targetVar = `${varPrefix}target_${tag}_${si}`;
+        const pattern = buildRelPattern({
+          sourceVar,
+          relDef,
+          targetVar,
+          edgeVar: relVar,
+          targetLabel: 'auto',
+          // An abstract target binds no label (its nodes carry their
+          // members' labels); the member predicate below narrows it.
+          schema: this.schema,
+        });
+        lines.push(`OPTIONAL MATCH ${pattern}`);
+
+        if (!targetNodeDef)
+          throw new OGMError(
+            `Cannot resolve the target type "${relDef.target}" of relationship "${relDef.fieldName}".`,
+          );
+        const labelPredicate = abstractTarget(
+          targetNodeDef.typeName,
+          this.schema,
+        )
+          ? this.targetMatch(targetNodeDef, targetVar).labelPredicate
+          : null;
+        const disconnectConditions = [
+          labelPredicate,
+          this.compileTargetWhere(
+            whereSpec,
+            targetVar,
+            targetNodeDef,
+            params,
+            policyContext,
+            paramCounter,
+          ),
+          this.buildTargetPolicyPredicate(
+            targetNodeDef,
+            targetVar,
+            params,
+            policyContext,
+            paramCounter,
+          ),
+        ].filter((c): c is string => Boolean(c));
+        if (disconnectConditions.length > 0)
+          lines.push(`WHERE ${disconnectConditions.join(' AND ')}`);
+
+        lines.push(`DELETE ${relVar}`);
+      }
+
+      lines.push(`RETURN count(*) AS _${relVar}`);
+      lines.push('}');
     }
 
     return lines;
@@ -2719,6 +2864,14 @@ export function unwrapAbstractCreateNode(
         `e.g. { node: { ${target.members[0] ?? 'Member'}: { … } } }. Allowed: ${target.members.map((m) => `"${m}"`).join(', ')}.`,
     );
   return [keys[0], nodeSpec[keys[0]] as Record<string, unknown>];
+}
+
+/** `null` / `{}`: the whole-relationship (blanket) form, never per member. */
+function isBlanketSpec(spec: unknown): boolean {
+  if (spec == null) return true;
+  return (
+    isPlainObject(spec) && Object.keys(spec).every((k) => spec[k] === undefined)
+  );
 }
 
 /** A nested delete item's own `delete` asks for a deeper cascade. */

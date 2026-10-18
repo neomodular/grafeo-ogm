@@ -339,3 +339,132 @@ describe('interface relationships inside create / update (v2.5.0)', () => {
     });
   });
 });
+
+describe('top-level connect / disconnect on abstract relationships (v2.5.0)', () => {
+  it('a flat interface connect matches implementer labels, never the interface label', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: { pets: [{ where: { node: { name: 'Rex' } } }] },
+      });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain('MATCH (target_pets_0)');
+    expect(cypher).toContain(
+      'WHERE (target_pets_0:`Dog` OR target_pets_0:`Cat`) AND target_pets_0.`name` = $param1',
+    );
+    expect(cypher).not.toContain(':`Pet`');
+  });
+
+  it('a per-member union connect unwraps { Member: { where } } and keeps the filter', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: { media: { Book: { where: { node: { title: 'x' } } } } },
+      });
+    const { cypher, params } = recorded[0];
+    // Pre-2.5.0: `MATCH (target:\`Media\`)` with NO WHERE at all.
+    expect(cypher).toContain('MATCH (target:`Book`)');
+    expect(cypher).toContain('WHERE target.`title` = $param1');
+    expect(cypher).toContain('RETURN count(*) AS _conn_media_Book');
+    expect(params.param1).toBe('x');
+    expect(cypher).not.toContain(':`Media`');
+  });
+
+  it('per-member array connects for two members get distinct names', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: {
+          media: {
+            Book: [{ where: { node: { title: 'b' } } }],
+            Film: [{ where: { node: { title: 'f' } } }],
+          },
+        },
+      });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain('UNWIND $connect_media_Book AS connItem');
+    expect(cypher).toContain('UNWIND $connect_media_Film AS connItem');
+    expect(cypher).toContain('MATCH (target:`Film`)');
+  });
+
+  it('interface / union disconnects match the member, not the abstract label', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        disconnect: {
+          pets: [{ where: { node: { name: 'Rex' } } }],
+          media: { Film: [{ where: { node: { title: 'f' } } }] },
+        },
+      });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain(
+      'OPTIONAL MATCH (n)-[r_pets_0:`OWNS`]->(target_pets_0)\nWHERE (target_pets_0:`Dog` OR target_pets_0:`Cat`) AND',
+    );
+    expect(cypher).toContain(
+      'OPTIONAL MATCH (n)-[r_media_Film_0:`HAS_MEDIA`]->(target_media_Film_0:`Film`)',
+    );
+    expect(cypher).not.toMatch(/:`(Pet|Media)`/);
+  });
+
+  it('a blanket abstract disconnect ({} / null) still unlinks the whole relationship', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({ where: { name: 'o' }, disconnect: { media: {}, pets: null } });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain('OPTIONAL MATCH (n)-[r_media_0:`HAS_MEDIA`]->()');
+    expect(cypher).toContain('OPTIONAL MATCH (n)-[r_pets_0:`OWNS`]->()');
+  });
+
+  it('a flat union connect throws instead of matching a label no node has', async () => {
+    const recorded: Recorded[] = [];
+    await expect(() =>
+      plainOgm(recorded)
+        .model('Owner')
+        .update({ connect: { media: [{ where: { node: { title: 'x' } } }] } }),
+    ).rejects.toThrow(OGMError);
+  });
+
+  describe('target policies', () => {
+    it('a flat interface connect applies every implementer read policy', async () => {
+      const recorded: Recorded[] = [];
+      await policyOgm(recorded)
+        .withContext({ uid: 'u1' })
+        .model('Owner')
+        .update({
+          where: { name: 'o' },
+          connect: { pets: [{ where: { node: { name: 'Rex' } } }] },
+        });
+      expect(recorded[0].cypher).toMatch(
+        /\(CASE WHEN target_pets_0:`Dog` THEN \(target_pets_0\.`ownerId` = \$param\d+\) WHEN target_pets_0:`Cat` THEN \(target_pets_0\.`ownerId` = \$param\d+\) ELSE false END\)/,
+      );
+    });
+
+    it("a per-member connect / disconnect applies that member's read policy", async () => {
+      const recorded: Recorded[] = [];
+      await policyOgm(recorded)
+        .withContext({ uid: 'u1' })
+        .model('Owner')
+        .update({
+          where: { name: 'o' },
+          connect: { pets: { Dog: { where: { node: { name: 'Rex' } } } } },
+          disconnect: { pets: { Cat: [{ where: { node: { name: 'Tom' } } }] } },
+        });
+      const { cypher } = recorded[0];
+      expect(cypher).toMatch(
+        /MATCH \(target:`Dog`\)\nWHERE target\.`name` = \$param\d+ AND \(target\.`ownerId` = \$param\d+\)/,
+      );
+      expect(cypher).toMatch(
+        /target_pets_Cat_0\.`name` = \$param\d+ AND \(target_pets_Cat_0\.`ownerId` = \$param\d+\)/,
+      );
+    });
+  });
+});
