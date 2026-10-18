@@ -6,7 +6,7 @@ import { permissive, restrictive } from '../src/policy/types';
 
 /**
  * Compile-level regressions for nested-write inputs that produced Cypher
- * which wrote nothing (v2.5.0). The live outcomes are pinned in
+ * which wrote nothing (v2.4.8). The live outcomes are pinned in
  * tests/integration/write-paths.spec.ts; this suite pins the shape of the
  * Cypher and — security-critical — that every new path still carries the
  * target-policy predicate.
@@ -125,7 +125,7 @@ function policyOgm(recorded: Recorded[]): OGM {
   });
 }
 
-describe('interface relationships inside create / update (v2.5.0)', () => {
+describe('interface relationships inside create / update (v2.4.8)', () => {
   it('create: a nested connect matches the implementers by their own labels', async () => {
     const recorded: Recorded[] = [];
     await plainOgm(recorded)
@@ -343,7 +343,7 @@ describe('interface relationships inside create / update (v2.5.0)', () => {
   });
 });
 
-describe('top-level connect / disconnect on abstract relationships (v2.5.0)', () => {
+describe('top-level connect / disconnect on abstract relationships (v2.4.8)', () => {
   it('a flat interface connect matches implementer labels, never the interface label', async () => {
     const recorded: Recorded[] = [];
     await plainOgm(recorded)
@@ -369,7 +369,7 @@ describe('top-level connect / disconnect on abstract relationships (v2.5.0)', ()
         connect: { media: { Book: { where: { node: { title: 'x' } } } } },
       });
     const { cypher, params } = recorded[0];
-    // Pre-2.5.0: `MATCH (target:\`Media\`)` with NO WHERE at all.
+    // Pre-2.4.8: `MATCH (target:\`Media\`)` with NO WHERE at all.
     expect(cypher).toContain('MATCH (target:`Book`)');
     expect(cypher).toContain('WHERE target.`title` = $param1');
     expect(cypher).toContain('RETURN count(*) AS _conn_media_Book');
@@ -472,7 +472,7 @@ describe('top-level connect / disconnect on abstract relationships (v2.5.0)', ()
   });
 });
 
-describe('array connect with a bare-property where (v2.5.0)', () => {
+describe('array connect with a bare-property where (v2.4.8)', () => {
   it('binds each item under where.node, the path the UNWIND WHERE reads', async () => {
     const recorded: Recorded[] = [];
     await plainOgm(recorded)
@@ -508,7 +508,7 @@ describe('array connect with a bare-property where (v2.5.0)', () => {
   });
 });
 
-describe('connect / disconnect nested in a connect / disconnect item (v2.5.0)', () => {
+describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', () => {
   it('update.connect: the nested connect links the connected node, inside its CALL', async () => {
     const recorded: Recorded[] = [];
     await plainOgm(recorded)

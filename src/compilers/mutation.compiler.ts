@@ -39,7 +39,7 @@ export interface MutationResult {
 /**
  * Where a connect / disconnect is emitted: its source variable, the WITH
  * that carries every variable still needed, and a prefix that keeps its
- * variables, params and aliases unique when nested (v2.5.0).
+ * variables, params and aliases unique when nested (v2.4.8).
  */
 interface WriteScope {
   sourceVar: string;
@@ -50,7 +50,7 @@ interface WriteScope {
   depth: number;
 }
 
-/** The root node `n` of an update — the pre-2.5.0 names, unprefixed. */
+/** The root node `n` of an update — the pre-2.4.8 names, unprefixed. */
 const TOP_SCOPE: WriteScope = {
   sourceVar: 'n',
   carryVars: ['n'],
@@ -262,7 +262,7 @@ export class MutationCompiler {
     targetNodeDef: NodeDefinition,
   ): boolean {
     for (const item of items) {
-      // A nested `connect` is per item (v2.5.0): the UNWIND cannot run it.
+      // A nested `connect` is per item (v2.4.8): the UNWIND cannot run it.
       if (item.connect != null) return false;
       const where = item.where;
       if (where === undefined) continue;
@@ -315,7 +315,7 @@ export class MutationCompiler {
   /**
    * The MATCH that binds a connect TARGET by type. A node type keeps its
    * label pattern; an interface / union target matches its MEMBERS' labels
-   * through a WHERE predicate (v2.5.0). Pre-2.5.0 it matched the abstract
+   * through a WHERE predicate (v2.4.8). Pre-2.4.8 it matched the abstract
    * type's own label, which implementer and member nodes do not carry, so
    * the connect linked nothing.
    */
@@ -342,7 +342,7 @@ export class MutationCompiler {
 
   /**
    * Resolve a relationship's target for a nested write. Throws when the
-   * target is unknown — pre-2.5.0 the nested op was silently skipped.
+   * target is unknown — pre-2.4.8 the nested op was silently skipped.
    */
   private requireTargetDef(relDef: RelationshipDefinition): NodeDefinition {
     const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
@@ -1183,7 +1183,7 @@ export class MutationCompiler {
 
       // Union / interface targets: per-member keys (e.g. items: { Ebook:
       // { create: [...] } }) dispatch to the concrete member; an interface
-      // also takes the flat `{ connect, create }` shape (v2.5.0 — pre-2.5.0
+      // also takes the flat `{ connect, create }` shape (v2.4.8 — pre-2.4.8
       // interface targets were skipped entirely, so nothing was written).
       const abstract = abstractTarget(relDef.target, this.schema);
       const memberEntries = abstract
@@ -1257,7 +1257,7 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
-    // A flat interface input (v2.5.0): each create names its implementer.
+    // A flat interface input (v2.4.8): each create names its implementer.
     const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
 
     // --- create ---
@@ -1344,7 +1344,7 @@ export class MutationCompiler {
             edgeVar: relVar,
             targetLabel: 'auto',
             // Abstract targets: no label — the created node never carries
-            // the union / interface label (v2.5.0).
+            // the union / interface label (v2.4.8).
             schema: this.schema,
           });
           lines.push(`WITH ${[...allVars, createVar].join(', ')}`);
@@ -1418,7 +1418,7 @@ export class MutationCompiler {
    * Top-level `connect`. A union / interface relationship keyed by member
    * (`{ media: { Book: [...] } }`, the shape codegen emits) connects each
    * member separately; a flat interface input matches the implementers by
-   * their own labels (v2.5.0 — pre-2.5.0 both matched the abstract type's
+   * their own labels (v2.4.8 — pre-2.4.8 both matched the abstract type's
    * label, which no node carries, and the per-member shape was never
    * unwrapped, so the MATCH carried NO filter at all).
    */
@@ -1539,7 +1539,7 @@ export class MutationCompiler {
         params[paramName] = (spec as Record<string, unknown>[]).map((raw) => {
           // The WHERE reads `connItem.where.node.<key>`, so a bare-property
           // where (`{ where: { title } }`, which the fast path accepts) is
-          // rebound under `node`. Pre-2.5.0 it was sent as-is: every lookup
+          // rebound under `node`. Pre-2.4.8 it was sent as-is: every lookup
           // was null, so the array connect silently linked nothing.
           const where = raw.where;
           const item =
@@ -1769,7 +1769,7 @@ export class MutationCompiler {
 
     // A `connect` nested in the item links the CONNECTED node onward
     // (`connect: { posts: [{ where, connect: { tags: [...] } }] }`), with
-    // the same policy predicates at its level. Pre-2.5.0 it was ignored.
+    // the same policy predicates at its level. Pre-2.4.8 it was ignored.
     const nested = connectSpec?.connect;
     if (nested != null) {
       if (abstractTarget(targetNodeDef.typeName, this.schema))
@@ -1804,7 +1804,7 @@ export class MutationCompiler {
   /**
    * Top-level `disconnect`. Abstract relationships follow the connect
    * rules (see buildConnects): per member, or flat on an interface,
-   * matching implementers by their own labels (v2.5.0 — pre-2.5.0 the
+   * matching implementers by their own labels (v2.4.8 — pre-2.4.8 the
    * target pattern used the interface / union label, so nothing matched).
    */
   private buildDisconnects(
@@ -1865,7 +1865,7 @@ export class MutationCompiler {
    * A `disconnect` nested in a disconnect item unlinks the disconnected
    * node's OWN relationships (`disconnect: { posts: [{ where, disconnect:
    * { tags: [...] } }] }`), with the same policy predicates at its level.
-   * Pre-2.5.0 it was ignored. `''`-free: no input, no lines.
+   * Pre-2.4.8 it was ignored. `''`-free: no input, no lines.
    */
   private buildNestedDisconnect(
     nested: unknown,
@@ -1940,7 +1940,7 @@ export class MutationCompiler {
       ) {
         // Blanket disconnect — remove every relationship of this type to
         // a target the caller can READ. Like the `where` branch below, a
-        // policy-bound context only unlinks nodes it can see; pre-2.5.0
+        // policy-bound context only unlinks nodes it can see; pre-2.4.4
         // the blanket form bound an anonymous `()` and also severed links
         // to policy-hidden nodes. Without policies there is no predicate
         // and the Cypher is unchanged.
@@ -2042,7 +2042,7 @@ export class MutationCompiler {
    * Relationships narrowed from an abstract target to one member by the
    * per-member dispatch. A BLANKET disconnect on one adds the member's
    * label: the relationship type alone also reaches the other members, so
-   * pre-2.5.0 `{ Ebook: [{ disconnect: [{}] }] }` unlinked every member.
+   * pre-2.4.8 `{ Ebook: [{ disconnect: [{}] }] }` unlinked every member.
    */
   private narrowedRelDefs = new WeakSet<RelationshipDefinition>();
 
@@ -2065,7 +2065,7 @@ export class MutationCompiler {
 
   /**
    * Dispatch update operations for a union- or interface-typed
-   * relationship given per member (interfaces since v2.5.0).
+   * relationship given per member (interfaces since v2.4.8).
    * Each member key in the input is recursed into buildUpdateRelationships
    * with a narrowed relDef pointing at the concrete member type.
    */
@@ -2146,7 +2146,7 @@ export class MutationCompiler {
 
       // Union / interface targets given per member — dispatch each member
       // recursively. A flat interface input is handled below against the
-      // interface (v2.5.0 — pre-2.5.0 it was skipped, writing nothing).
+      // interface (v2.4.8 — pre-2.4.8 it was skipped, writing nothing).
       const abstract = abstractTarget(relDef.target, this.schema);
       const memberEntries = abstract
         ? perMemberEntries(value, abstract, key)
@@ -2264,7 +2264,7 @@ export class MutationCompiler {
                 edgeVar: relVar,
                 targetLabel: 'auto',
                 // An interface target matches its implementers, which do
-                // not carry the interface label (v2.5.0).
+                // not carry the interface label (v2.4.8).
                 schema: this.schema,
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
@@ -2474,7 +2474,7 @@ export class MutationCompiler {
             (edgeUpdate ? {} : updateSpec)) as Record<string, unknown>;
           const updateWhere = item.where as Record<string, unknown> | undefined;
           // A flat interface update writes the interface's own fields; the
-          // per-implementer `_on` form is not supported (v2.5.0).
+          // per-implementer `_on` form is not supported (v2.4.8).
           if (abstract && isPlainObject(nodeUpdate) && '_on' in nodeUpdate)
             throw new OGMError(
               `"_on" in a nested update of "${key}" is not supported. Key the update by implementing type instead ` +
@@ -2804,7 +2804,7 @@ export interface AbstractTarget {
  * The concrete members of an interface / union relationship target, or
  * `null` for a node type. Implementer nodes carry their OWN labels, not
  * the interface's, so every write that has to find one matches by these
- * members' labels (v2.5.0).
+ * members' labels (v2.4.8).
  */
 export function abstractTarget(
   target: string,
@@ -2829,7 +2829,7 @@ export function abstractTarget(
 }
 
 /**
- * Classify the nested-write value of an abstract relationship (v2.5.0):
+ * Classify the nested-write value of an abstract relationship (v2.4.8):
  *
  *   - PER-MEMBER — keyed by member type (`{ Dog: { … } }`), the shape
  *     codegen emits for union AND interface targets. Returns the defined
@@ -2839,7 +2839,7 @@ export function abstractTarget(
  *     Only interfaces accept it: a union has no common fields to filter or
  *     write, so a flat union input throws.
  *
- * Pre-2.5.0 a key that was not a member was skipped, so a flat or typo'd
+ * Pre-2.4.8 a key that was not a member was skipped, so a flat or typo'd
  * input on an abstract relationship compiled to no write at all. Mixing
  * member keys with other keys now throws instead.
  */
@@ -2877,7 +2877,7 @@ export function perMemberEntries(
 /**
  * Unwrap a FLAT interface nested-create node spec — `{ Dog: { … } }`,
  * exactly one implementer key — into the implementer and its own input
- * (v2.5.0). Anything else throws: without a member key the compiler cannot
+ * (v2.4.8). Anything else throws: without a member key the compiler cannot
  * know which labels and properties the new node gets.
  */
 export function unwrapAbstractCreateNode(
@@ -2902,7 +2902,7 @@ export function unwrapAbstractCreateNode(
 }
 
 /**
- * MERGE writes scalars only. Pre-2.5.0 a relationship field in an upsert's
+ * MERGE writes scalars only. Pre-2.4.8 a relationship field in an upsert's
  * `create` / `update` was skipped, so its nested connect / create never
  * ran and nothing said so.
  */

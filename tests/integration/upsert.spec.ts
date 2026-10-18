@@ -115,7 +115,7 @@ describeLive('upsert — live Neo4j', () => {
     expect(res.id).toBe(`${runId}-mine`);
   });
 
-  // v2.5.0 — relationship input in create / update was skipped: the node
+  // v2.4.8 — relationship input in create / update was skipped: the node
   // was written, the nested connect silently was not.
   it('relationship input in create or update throws and writes nothing', async () => {
     const e = email('rel');

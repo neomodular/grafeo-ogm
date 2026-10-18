@@ -1,5 +1,5 @@
 /**
- * Live write-path suite (v2.5.0).
+ * Live write-path suite (v2.4.8).
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
  * NEO4J_USERNAME and NEO4J_PASSWORD, as in `examples/`). Every node it

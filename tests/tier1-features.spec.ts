@@ -489,7 +489,7 @@ describe('MutationCompiler.compileMerge()', () => {
     ).toThrow('at least one scalar property');
   });
 
-  // v2.5.0 — relationship input used to be skipped silently, so its nested
+  // v2.4.8 — relationship input used to be skipped silently, so its nested
   // connect / create never ran. It now throws; an explicit null is a no-op.
   it('should reject relationship fields in create and update', () => {
     expect(() =>

@@ -22,7 +22,7 @@
  * bare node, `update` as `{ node, edge }` or a bare node. Interface
  * targets are walked like unions when keyed by implementer, and in the
  * flat shape a create checks the implementer it names while an update
- * checks EVERY implementer it may reach (v2.5.0 — pre-2.5.0 interface
+ * checks EVERY implementer it may reach (v2.4.8 — pre-2.4.8 interface
  * targets were skipped, as the compiler then emitted no write for them).
  */
 import {
