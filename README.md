@@ -397,7 +397,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 
 | Directive | Target | Description |
 |---|---|---|
-| `@node` | Type | Marks a type as a Neo4j node. Optional `labels` argument for multi-label nodes (implementors of an interface must include the interface name, see [Interfaces](#interfaces)) |
+| `@node` | Type | Marks a type as a Neo4j node. Optional `labels` argument for multi-label nodes (implementors of an interface no longer need to include the interface name since v2.5.0, see [Interfaces](#interfaces)) |
 | `@relationship` | Field | Defines a relationship with `type`, `direction` (exactly `IN` or `OUT`; anything else is a schema error), and optional `properties` |
 | `@declareRelationship` | Interface field | Declares a relationship on an interface. Its `type`, `direction` and `properties` come from the implementors' `@relationship`, which must all agree |
 | `@relationshipProperties` | Type | Marks a type as relationship properties (edge data) |
@@ -483,7 +483,7 @@ type Resource @node {
 
 Interface types can be queried polymorphically via `ogm.interfaceModel('Entity')`. Results include `__typename` to discriminate concrete types.
 
-- The interface model matches nodes by the **interface label** (`MATCH (n:Entity)`), so every implementor must carry it: list the interface name in `@node(labels: [...])`. An implementor declared with a bare `@node` is stored with only its own label and never appears in interface queries.
+- The interface model matches nodes by their **implementors' labels** (`MATCH (n:(User|Organization))`), so a node created with `ogm.model('User').create(...)` appears in interface queries with no extra labels. Since v2.5.0 an implementor does **not** need to carry the interface name; before v2.5.0 it had to list it in `@node(labels: [...])`, which still works.
 - A `@declareRelationship` field takes its relationship `type`, `direction` and `properties` from the implementors. They must all declare the same ones; if they disagree, or an implementor has no `@relationship` on that field, `parseSchema` throws.
 
 ### Enums
