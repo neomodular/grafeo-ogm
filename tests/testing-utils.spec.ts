@@ -49,6 +49,60 @@ describe('CypherAssert', () => {
         /Cypher mismatch/,
       );
     });
+
+    // v2.5.0 — whitespace was collapsed everywhere, including inside
+    // string literals and backticked names, and `$name` inside a string
+    // was renamed as if it were a parameter.
+    it('keeps whitespace inside string literals significant (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertStructurallyEqual(
+          "RETURN 'a  b' AS s",
+          "RETURN 'a b' AS s",
+        ),
+      ).toThrow(/Cypher mismatch/);
+      expect(() =>
+        CypherAssert.assertStructurallyEqual(
+          'RETURN "a\n b" AS s',
+          'RETURN "a b" AS s',
+        ),
+      ).toThrow(/Cypher mismatch/);
+    });
+
+    it('keeps whitespace inside backticked names significant (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertStructurallyEqual(
+          'MATCH (n:`My  Label`) RETURN n',
+          'MATCH (n:`My Label`) RETURN n',
+        ),
+      ).toThrow(/Cypher mismatch/);
+    });
+
+    it('still collapses whitespace around literals (v2.5.0)', () => {
+      expect(() =>
+        CypherAssert.assertStructurallyEqual(
+          "RETURN   'a  b'\n   AS s",
+          "RETURN 'a  b' AS s",
+        ),
+      ).not.toThrow();
+    });
+
+    it('does not rename a $ inside a string literal (v2.5.0)', () => {
+      expect(CypherAssert.normalize("WHERE n.x = $a AND n.y = '$b'")).toBe(
+        "WHERE n.x = $p0 AND n.y = '$b'",
+      );
+      expect(() =>
+        CypherAssert.assertStructurallyEqual(
+          "RETURN '$price' AS s",
+          "RETURN '$cost' AS s",
+        ),
+      ).toThrow(/Cypher mismatch/);
+    });
+
+    it('handles escaped quotes inside a literal (v2.5.0)', () => {
+      expect(CypherAssert.normalize("RETURN 'it\\'s  $x'   ,  $y")).toBe(
+        "RETURN 'it\\'s  $x' , $p0",
+      );
+    });
   });
 
   describe('assertContainsClause()', () => {

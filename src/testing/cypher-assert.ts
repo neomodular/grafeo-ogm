@@ -187,23 +187,28 @@ export class CypherAssert {
    * - Collapse all whitespace sequences to a single space
    * - Trim leading/trailing whitespace
    * - Rename params to canonical $p0, $p1, etc. (in order of appearance)
+   *
+   * String literals and backticked names are kept verbatim (v2.5.0): their
+   * whitespace is part of the value, and a `$name` inside a string is text,
+   * not a parameter. Before v2.5.0 both were collapsed and renamed, so
+   * `'a  b'` equalled `'a b'`.
    */
   static normalize(cypher: string): string {
-    const collapsed = cypher.replace(/\s+/g, ' ').trim();
-
     const seen = new Map<string, string>();
     let counter = 0;
 
-    const normalized = collapsed.replace(
-      /\$[a-zA-Z_][a-zA-Z0-9_]*/g,
-      (match) => {
-        if (!seen.has(match)) seen.set(match, `$p${counter++}`);
-
-        return seen.get(match)!;
-      },
-    );
-
-    return normalized;
+    return tokenize(cypher)
+      .map((t) => {
+        if (t.kind === 'space') return ' ';
+        if (t.kind === 'comment') return t.text.replace(/\s+/g, ' ');
+        if (t.kind === 'param') {
+          if (!seen.has(t.text)) seen.set(t.text, `$p${counter++}`);
+          return seen.get(t.text)!;
+        }
+        return t.text;
+      })
+      .join('')
+      .trim();
   }
 
   /**
