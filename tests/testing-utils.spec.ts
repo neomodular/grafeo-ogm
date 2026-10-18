@@ -2,6 +2,7 @@ import { CypherAssert } from '../src/testing/cypher-assert';
 import { Neo4jRecordFactory } from '../src/testing/neo4j-record-factory';
 import { SelectionSetFactory } from '../src/testing/selection-set-factory';
 import neo4j from 'neo4j-driver';
+import { ResultMapper } from '../src/execution/result-mapper';
 
 // ---------------------------------------------------------------------------
 // CypherAssert
@@ -179,6 +180,60 @@ describe('Neo4jRecordFactory', () => {
       expect(dt).toHaveProperty('hour', 10);
       expect(dt).toHaveProperty('minute', 30);
       expect(dt).toHaveProperty('second', 0);
+    });
+
+    // v2.5.0 — expected values were recorded from `RETURN datetime($iso)`
+    // on Neo4j 5.26 (see tests/integration/record-factory.spec.ts). Before
+    // v2.5.0 the factory converted to UTC and dropped the offset, so
+    // `10:00+02:00` came back as `08:00Z`, and cut nanoseconds to millis.
+    it.each([
+      ['2024-01-01T10:00:00+02:00', '2024-01-01T10:00:00+02:00', 10, 0, 7200],
+      [
+        '2024-01-01T10:00:00.123456789Z',
+        '2024-01-01T10:00:00.123456789Z',
+        10,
+        123456789,
+        0,
+      ],
+      [
+        '2024-01-01T10:00:00.5-05:30',
+        '2024-01-01T10:00:00.500000000-05:30',
+        10,
+        500000000,
+        -19800,
+      ],
+      ['2024-07-01T10:00:00+0530', '2024-07-01T10:00:00+05:30', 10, 0, 19800],
+      ['2024-07-01T10:00:00+05', '2024-07-01T10:00:00+05:00', 10, 0, 18000],
+    ])(
+      'keeps the offset and nanoseconds of %s (v2.5.0)',
+      (iso, str, hour, nanosecond, offset) => {
+        const dt = Neo4jRecordFactory.dateTime(iso) as Record<string, unknown>;
+        expect(String(dt)).toBe(str);
+        expect(dt.hour).toBe(hour);
+        expect(dt.nanosecond).toBe(nanosecond);
+        expect(dt.timeZoneOffsetSeconds).toBe(offset);
+      },
+    );
+
+    it('carries a zone id and resolves its offset (v2.5.0)', () => {
+      const summer = Neo4jRecordFactory.dateTime(
+        '2024-07-01T10:00:00[Europe/Berlin]',
+      ) as Record<string, unknown>;
+      expect(String(summer)).toBe('2024-07-01T10:00:00+02:00[Europe/Berlin]');
+      expect(summer.timeZoneId).toBe('Europe/Berlin');
+      expect(summer.timeZoneOffsetSeconds).toBe(7200);
+
+      const winter = Neo4jRecordFactory.dateTime(
+        '2024-01-15T10:00:00[Europe/Berlin]',
+      ) as Record<string, unknown>;
+      expect(winter.timeZoneOffsetSeconds).toBe(3600);
+    });
+
+    it('maps through ResultMapper to the same string as a driver value (v2.5.0)', () => {
+      const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00+02:00');
+      expect(ResultMapper.convertNeo4jTypes(dt)).toBe(
+        '2024-01-01T10:00:00+02:00',
+      );
     });
   });
 
