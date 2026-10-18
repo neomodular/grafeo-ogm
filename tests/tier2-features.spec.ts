@@ -202,6 +202,16 @@ describe('MutationCompiler.compileCreateMany()', () => {
     expect(result.cypher).not.toContain('CREATE (n:');
   });
 
+  // v2.5.0 — pre-2.5.0 only data[0]'s relationship fields were rejected.
+  it('should reject a relationship field in any item', () => {
+    expect(() =>
+      compiler.compileCreateMany(
+        [{ title: 'A' }, { title: 'B', hasStatus: { connect: {} } }],
+        bookNode,
+      ),
+    ).toThrow('Found: "hasStatus" in data[1]');
+  });
+
   it('should throw skipDuplicates without unique fields', () => {
     // statusNode has no unique or generated fields
     expect(() =>

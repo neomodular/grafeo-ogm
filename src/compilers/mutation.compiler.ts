@@ -933,16 +933,13 @@ export class MutationCompiler {
     for (const [index, item] of data.entries())
       for (const key of Object.keys(item)) {
         if (item[key] === undefined || scalarKeys.includes(key)) continue;
-        if (nodeDef.relationships.has(key)) {
-          // Only the first item's relationship fields have ever been
-          // rejected; in later items they were (and still are) skipped
-          // unwritten. Rejecting them everywhere would make calls that
-          // succeed today throw — tracked as a separate, breaking change.
-          if (index > 0) continue;
+        // v2.5.0 — rejected in EVERY item. Pre-2.5.0 only the first item's
+        // relationship fields were; in later items the nested input was
+        // skipped unwritten.
+        if (nodeDef.relationships.has(key))
           throw new OGMError(
-            `createMany does not support relationship fields. Found: "${key}". Use create() for nested operations.`,
+            `createMany does not support relationship fields. Found: "${key}" in data[${index}]. Use create() for nested operations.`,
           );
-        }
         assertSafePropertyName(key, 'createMany property');
         assertKnownField(nodeDef, key, 'createMany');
         scalarKeys.push(key);

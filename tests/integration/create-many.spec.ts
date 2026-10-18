@@ -160,6 +160,20 @@ describeLive('createMany — live Neo4j', () => {
     expect(again).toEqual({ count: 0 });
   });
 
+  // v2.5.0 — a later item's relationship field was skipped: its node was
+  // created without the nested write, and nothing said so.
+  it('rejects a relationship field in a later item and writes nothing', async () => {
+    await expect(
+      P().createMany({
+        data: [
+          { runId, email: email('n') },
+          { runId, email: email('o'), tags: { create: [{ node: {} }] } },
+        ],
+      }),
+    ).rejects.toThrow(/"tags" in data\[1\]/);
+    expect(await people()).toEqual([]);
+  });
+
   it('rejects a relationship field in the first item (unchanged)', async () => {
     await expect(
       P().createMany({
