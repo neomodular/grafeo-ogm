@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { Driver, Transaction } from 'neo4j-driver';
+import { Driver, SessionConfig, Transaction } from 'neo4j-driver';
 import { FulltextCompiler } from './compilers/fulltext.compiler';
 import { MutationCompiler } from './compilers/mutation.compiler';
 import { SelectNormalizer } from './compilers/select-normalizer';
@@ -45,12 +45,43 @@ import { deepFreezeSnapshot } from './utils/deep-freeze';
 
 const POLICY_SET_VERSION = '1.7.0';
 
+/**
+ * v2.4.8 — a view of `driver` whose `session()` defaults to `database`.
+ *
+ * Every session the OGM opens (the models' executors, raw queries,
+ * `$transaction`, subgraph operations, `assertIndexesAndConstraints`) goes
+ * through the driver it was handed, so routing at this one seam covers
+ * them all without threading the name through each constructor. A
+ * `database` the caller passes explicitly still wins. Every other member
+ * is forwarded to the real driver unchanged.
+ */
+function withDefaultDatabase(driver: Driver, database: string): Driver {
+  return new Proxy(driver, {
+    get(target, prop) {
+      if (prop === 'session')
+        return (config?: SessionConfig) =>
+          target.session({
+            ...config,
+            database: config?.database ?? database,
+          });
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
   C extends PolicyContext = PolicyContext,
 > {
   typeDefs: string;
   driver: Driver;
+  /**
+   * Neo4j database every OGM-opened session targets (v2.4.8). Omitted →
+   * the driver's default database, exactly as before. Sessions and
+   * transactions YOU pass in via `context` keep their own database.
+   */
+  database?: string;
   logger?: OGMLogger;
   features?: {
     filters?: { String?: { MATCHES?: boolean } };
@@ -105,7 +136,22 @@ export class OGM<
   private globalBypass = false;
 
   constructor(config: OGMConfig<TModelMap>) {
-    this.config = config;
+    if (
+      config.database !== undefined &&
+      (typeof config.database !== 'string' || config.database.length === 0)
+    )
+      throw new OGMError(
+        'OGMConfig.database must be a non-empty string when provided.',
+      );
+    // With no `database` the caller's driver is used as-is, so the
+    // default path stays byte-identical (no-arg `driver.session()`).
+    this.config =
+      config.database === undefined
+        ? config
+        : {
+            ...config,
+            driver: withDefaultDatabase(config.driver, config.database),
+          };
     // Parse schema synchronously so model() works before init()
     this.schema = parseSchema(this.config.typeDefs);
 

@@ -130,7 +130,16 @@ export async function runDbSeed(argv: string[], io: CliIO): Promise<number> {
     // The OGM constructor parses the SDL synchronously and throws on an
     // invalid schema — it lives inside this try so the driver created above
     // is still closed in that case (cli-db-seed spec: close on any failure).
-    const ogm = new OGM({ typeDefs, driver });
+    //
+    // v2.4.8 — target the resolved database (`--database` >
+    // `database.database` > NEO4J_DATABASE), as `db push` does. Pre-2.4.8
+    // the OGM had no database option and the seed always ran against the
+    // server's default database.
+    const ogm = new OGM({
+      typeDefs,
+      driver,
+      ...(connection.database ? { database: connection.database } : {}),
+    });
     await ogm.init();
 
     io.out(`running seed ${seedPath}`);

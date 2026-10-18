@@ -130,4 +130,53 @@ describe('grafeo db seed (cli-db-seed spec)', () => {
     await expect(runDbSeed([], io)).rejects.toThrow();
     expect(mock.isClosed()).toBe(true);
   });
+
+  // v2.4.8 — pre-2.4.8 the seed OGM ignored --database / database.database /
+  // NEO4J_DATABASE and always wrote to the server's default database.
+  const SEED_QUERIES = `module.exports = async (ogm) => {
+  await ogm.$queryRaw('RETURN 1');
+  await ogm.model('Book').find({});
+};`;
+
+  const seedSessionArgs = (driver: Driver) =>
+    (driver.session as jest.Mock).mock.calls.map((c: unknown[]) => c[0]);
+
+  it.each([
+    ['--database flag', ['--database', 'la_seed_db'], {}, undefined],
+    ['NEO4J_DATABASE env', [], { NEO4J_DATABASE: 'la_seed_db' }, undefined],
+    [
+      'config database.database',
+      [],
+      {},
+      { database: { database: 'la_seed_db' } },
+    ],
+  ])(
+    'seeds the database chosen by the %s',
+    async (_label, argv, env, config) => {
+      const mock = makeDriver();
+      const io = makeIO(mock.driver);
+      Object.assign(io.env, env);
+      if (config)
+        fs.writeFileSync(
+          path.join(io.cwd, 'grafeo.config.json'),
+          JSON.stringify(config),
+        );
+      fs.writeFileSync(path.join(io.cwd, 'seed.js'), SEED_QUERIES);
+
+      expect(await runDbSeed(argv as string[], io)).toBe(0);
+
+      const args = seedSessionArgs(mock.driver);
+      expect(args.length).toBeGreaterThanOrEqual(2);
+      for (const a of args) expect(a).toEqual({ database: 'la_seed_db' });
+    },
+  );
+
+  it('with no database configured, seed sessions use the default database', async () => {
+    const mock = makeDriver();
+    const io = makeIO(mock.driver);
+    fs.writeFileSync(path.join(io.cwd, 'seed.js'), SEED_QUERIES);
+
+    expect(await runDbSeed([], io)).toBe(0);
+    for (const a of seedSessionArgs(mock.driver)) expect(a).toBeUndefined();
+  });
 });

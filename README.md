@@ -358,7 +358,7 @@ export default async function seed(ogm: OGM) {
 npx grafeo db seed
 ```
 
-grafeo does not enforce idempotency — use `upsert` so re-running the seed is safe. Connection and schema resolve exactly as for `db push`.
+grafeo does not enforce idempotency — use `upsert` so re-running the seed is safe. Connection and schema resolve exactly as for `db push`, including the database (`--database` > `database.database` > `NEO4J_DATABASE`). Before v2.4.8 `db seed` ignored the database setting and always seeded the server's default database.
 
 ---
 
@@ -1945,7 +1945,7 @@ Yes — `ogm.$transaction(async (ctx) => { ... })` runs multiple operations atom
 
 ### Does it support multi-database / multi-tenant Neo4j setups?
 
-Yes — pass a `database` option per query via the `ExecutionContext`, or instantiate one OGM per database. Multi-label nodes (`@node(labels: [...])`) handle a different multi-tenant pattern where tenants share a graph but have isolated label sets.
+Yes — instantiate one OGM per database with `new OGM({ typeDefs, driver, database: 'tenant-a' })` (v2.4.8); every session the OGM opens then targets that database. Alternatively, open the session or transaction yourself (`driver.session({ database })`) and pass it via `{ context: { session } }` / `{ context: { transaction } }`. (Before v2.4.8 this answer claimed a per-query `database` option on `ExecutionContext`; there is none.) Multi-label nodes (`@node(labels: [...])`) handle a different multi-tenant pattern where tenants share a graph but have isolated label sets.
 
 ### What's the performance overhead vs. raw Cypher?
 
@@ -1967,12 +1967,12 @@ Open an issue on [GitHub](https://github.com/neomodular/grafeo-ogm/issues). For 
 
 | Method | Description |
 |---|---|
-| `new OGM(config)` | Create an OGM instance with `{ typeDefs, driver, logger?, features? }` |
+| `new OGM(config)` | Create an OGM instance with `{ typeDefs, driver, database?, logger?, features? }` |
 | `model(name)` | Get a typed Model for a node type |
 | `interfaceModel(name)` | Get a typed InterfaceModel for an interface type |
 | `$queryRaw(cypher, params?)` | Execute a read query and return mapped results |
 | `$executeRaw(cypher, params?)` | Execute a write operation and return affected counts |
-| `$transaction(fn)` | Execute operations in an atomic transaction |
+| `$transaction(fn, options?)` | Execute operations in an atomic transaction; `options.metadata` is attached when it begins |
 | `assertIndexesAndConstraints(options?)` | Create fulltext indexes and uniqueness constraints |
 | `close()` | Clear caches and release references |
 
