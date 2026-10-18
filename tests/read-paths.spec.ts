@@ -3,7 +3,7 @@
  * has a live counterpart under `tests/integration/read-*.spec.ts`; these
  * pin the emitted shape (and cover what can't run live, e.g. APOC).
  */
-import type { Driver } from 'neo4j-driver';
+import { isInt, type Driver } from 'neo4j-driver';
 import { OGM } from '../src/ogm';
 import { policies, typeDefs } from './fixtures/read-paths.fixture';
 
@@ -152,5 +152,45 @@ describe('typed select keys ending in "Connection" (v2.5.0)', () => {
     expect(h.cypher()).toContain(
       'postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { node: n0 { .`id` } }] }',
     );
+  });
+});
+
+describe('where value coercion (v2.5.0)', () => {
+  it('binds BigInt strings and bigints as Neo4j Integers', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      where: { big: '9007199254740993', big_IN: ['1', 2n], big_GT: 3 },
+    } as never);
+    const p = h.params();
+    expect(isInt(p.param0)).toBe(true);
+    expect((p.param0 as { toString(): string }).toString()).toBe(
+      '9007199254740993',
+    );
+    expect((p.param1 as unknown[]).every((v) => isInt(v))).toBe(true);
+    // Plain numbers keep their shape: Neo4j compares Float and Long
+    // numerically.
+    expect(p.param2).toBe(3);
+  });
+
+  it('rejects a non-integer string for a BigInt filter', async () => {
+    const h = harness();
+    await expect(
+      h.model('LbUser').find({ where: { big: '12abc' } } as never),
+    ).rejects.toThrow(/Expected an integer for BigInt field "big"/);
+  });
+
+  it('binds a JS Date for a DateTime filter as datetime(<ISO>)', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      where: { at_GTE: new Date('2024-01-15T10:30:00Z') },
+    } as never);
+    expect(h.cypher()).toContain('n.`at` >= datetime($param0)');
+    expect(h.params().param0).toBe('2024-01-15T10:30:00.000Z');
+  });
+
+  it('leaves string operators alone', async () => {
+    const h = harness();
+    await h.model('LbUser').find({ where: { name_CONTAINS: '5' } } as never);
+    expect(h.params().param0).toBe('5');
   });
 });

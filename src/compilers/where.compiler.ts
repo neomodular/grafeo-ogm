@@ -27,7 +27,7 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
-import { wrapWhereParam } from '../utils/write-coercion';
+import { coerceWhereValue, wrapWhereParam } from '../utils/write-coercion';
 
 export interface WhereResult {
   cypher: string;
@@ -1895,10 +1895,15 @@ export class WhereCompiler {
     // Wrap the param in the field's temporal constructor for
     // comparison-shaped operators. A wrapped param is no longer a string,
     // so case-insensitive toLower() must not apply to either side.
+    // v2.5.0 — bind the value in the stored representation first: a
+    // BigInt filter given a string (its generated input type) and a
+    // DateTime filter given a JS `Date` silently matched nothing.
+    const propDef = propsHolder?.properties.get(fieldName);
+    const bound = coerceWhereValue(value, propDef, operator ?? '');
     const rawParamRef = wrapWhereParam(
       `$${paramName}`,
-      value,
-      propsHolder?.properties.get(fieldName),
+      bound,
+      propDef,
       operator ?? '',
     );
     const temporalWrapped = rawParamRef !== `$${paramName}`;
@@ -1915,7 +1920,7 @@ export class WhereCompiler {
           : rawParamRef;
       return {
         cypher: `${fieldRef} = ${paramRef}`,
-        params: { [paramName]: value },
+        params: { [paramName]: bound },
       };
     }
 
@@ -1940,7 +1945,7 @@ export class WhereCompiler {
       .replace(/%f/g, fieldRef)
       .replace(/%p/g, paramRef);
 
-    return { cypher, params: { [paramName]: value } };
+    return { cypher, params: { [paramName]: bound } };
   }
 }
 

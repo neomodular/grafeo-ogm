@@ -295,6 +295,59 @@ export function wrapWhereParam(
 }
 
 /**
+ * Coerce a WHERE value to the representation the stored property has
+ * (v2.5.0), for comparison-shaped operators (`_IN` / `_NOT_IN`
+ * element-wise):
+ *
+ * - `Int` / `BigInt`: integer strings (the generated BigInt input type)
+ *   and `bigint`s become a Neo4j Integer via the write coercion. A String
+ *   or a raw bigint never equals the stored Long, so pre-2.5.0 these
+ *   filters silently matched nothing. JS numbers stay as they are: Neo4j
+ *   compares a Float and a Long numerically, and unit-level params keep
+ *   their shape.
+ * - `DateTime`: a JS `Date` becomes its ISO string, which `wrapWhereParam`
+ *   then wraps in `datetime()`. Pre-2.5.0 a `Date` was bound raw and never
+ *   matched.
+ *
+ * Every other value passes through unchanged.
+ */
+export function coerceWhereValue(
+  value: unknown,
+  propDef: PropertyDefinition | undefined,
+  suffix: string,
+): unknown {
+  if (propDef === undefined || value === null || value === undefined)
+    return value;
+  if (!COMPARABLE_SUFFIXES.has(suffix)) return value;
+  const elementWise =
+    suffix === '_IN' || suffix === '_NOT_IN' || propDef.isArray;
+  if (elementWise)
+    return Array.isArray(value)
+      ? value.map((element) => coerceWhereElement(element, propDef))
+      : value;
+  return coerceWhereElement(value, propDef);
+}
+
+function coerceWhereElement(
+  value: unknown,
+  propDef: PropertyDefinition,
+): unknown {
+  if (value === null || value === undefined) return value;
+  if (INTEGER_SCALAR_TYPES.has(propDef.type))
+    return typeof value === 'string' || typeof value === 'bigint'
+      ? coerceIntegerElement(value, propDef)
+      : value;
+  if (propDef.type === 'DateTime' && value instanceof Date) {
+    if (Number.isNaN(value.getTime()))
+      throw new OGMError(
+        `Invalid Date given for DateTime field "${propDef.name}" in a where filter.`,
+      );
+    return value.toISOString();
+  }
+  return value;
+}
+
+/**
  * Materialize a parsed `@default` into a driver-ready bound value. The
  * parser stores every default as a string (`'true'`, `'5'`, `'WELCOME'`);
  * conversion is by declared scalar type, and Int/BigInt defaults route
