@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.4.6 (2026-10-18) — `createMany` writes every item's fields
+
+### 🐛 `createMany` took its columns from the first item only
+
+The column list came from `data[0]`'s keys, so with mixed items:
+
+- **Fields only later items supplied were silently dropped.** `createMany({ data: [{ email: 'a' }, { email: 'b', name: 'B', age: 4 }] })` stored `b` without `name` or `age`.
+- **An `@id` supplied by some items left the others with a null id.**
+- **A `@default` column overwrote values that later items supplied** (`status: 'banned'` was stored as the default `'active'`).
+
+The column set is now the union of every item's keys. An item that omits a field gets what `create()` would give it, which is what the README documents for `@default`:
+
+- a generated `@id`, if the field is an `@id`
+- the `@default` value, if the field has one
+- nothing, otherwise
+
+An explicit `null` stays `null`. With `skipDuplicates`, the `MERGE` key is now the `@id`/`@unique` fields that **every** item supplies, so no item ever merges on a null. Batches where every item has the same keys emit the same Cypher as before.
+
+**Unchanged on purpose:** a relationship field is still rejected only in the **first** item. In later items it is still skipped without being written. Rejecting it in every item would make calls that succeed today throw, so that is tracked as a separate change.
+
+A new opt-in live suite, `tests/integration/create-many.spec.ts`, covers each case. Against Neo4j 5.26.32, the 4 bug cases fail without the fix.
+
 ## 2.4.5 (2026-10-18) — nested creates inside `update` store edge properties
 
 ### 🐛 `edge` was silently dropped on a nested `create` inside `update`
