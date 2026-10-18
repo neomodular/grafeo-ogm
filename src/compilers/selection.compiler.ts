@@ -560,18 +560,53 @@ export class SelectionCompiler {
 
     // Wrap with apoc.coll.sortMulti() if orderBy is present.
     // Requires the APOC plugin installed on the Neo4j instance.
-    if (node.orderBy && node.orderBy.length > 0) {
-      const sortKeys = node.orderBy
-        .map(({ field, direction }) => {
-          assertSafeIdentifier(field, 'orderBy sort key');
-          // apoc.coll.sortMulti convention: ^ prefix = ASC, no prefix = DESC
-          return direction === 'ASC' ? `'^${field}'` : `'${field}'`;
-        })
-        .join(', ');
-      return `apoc.coll.sortMulti(${comprehension}, [${sortKeys}])`;
-    }
+    if (node.orderBy && node.orderBy.length > 0)
+      return this.compileSortedComprehension(
+        `${pattern}${whereClause}`,
+        innerProjection,
+        childVar,
+        targetDef,
+        node.orderBy,
+      );
 
     return comprehension;
+  }
+
+  /**
+   * A pattern comprehension sorted with `apoc.coll.sortMulti` (v2.5.0).
+   * Each element is wrapped as `{ __node: <projection>, __skN: <sort
+   * value> }` — sortMulti only reads top-level map keys — and unwrapped
+   * after the sort, the same synthetic-key approach `compileConnection`
+   * uses. Pre-2.5.0 the projected maps were sorted by the field NAMES,
+   * which the projection often doesn't contain (`select: { id: true }`,
+   * `orderBy: { rank: 'DESC' }`), so the list wasn't sorted at all.
+   */
+  private compileSortedComprehension(
+    patternWithWhere: string,
+    innerProjection: string,
+    childVar: string,
+    targetDef: NodeDefinition,
+    orderBy: ReadonlyArray<{ field: string; direction: 'ASC' | 'DESC' }>,
+  ): string {
+    const sortParts: string[] = [];
+    const sortKeys: string[] = [];
+    orderBy.forEach(({ field, direction }, i) => {
+      assertSafeIdentifier(field, 'orderBy sort key');
+      const propDef = targetDef.properties.get(field);
+      const value =
+        propDef?.isCypher && propDef.cypherStatement
+          ? buildInlineCypherFieldExpr(
+              propDef.cypherStatement,
+              childVar,
+              `${targetDef.typeName}.${field}`,
+            )
+          : `${childVar}.${escapeIdentifier(field)}`;
+      sortParts.push(`__sk${i}: ${value}`);
+      // apoc.coll.sortMulti convention: ^ prefix = ASC, no prefix = DESC
+      sortKeys.push(direction === 'ASC' ? `'^__sk${i}'` : `'__sk${i}'`);
+    });
+    const wrapped = `[${patternWithWhere} | { __node: ${innerProjection}, ${sortParts.join(', ')} }]`;
+    return `[__sk IN apoc.coll.sortMulti(${wrapped}, [${sortKeys.join(', ')}]) | __sk.__node]`;
   }
 
   /**

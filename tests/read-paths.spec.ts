@@ -155,6 +155,34 @@ describe('typed select keys ending in "Connection" (v2.5.0)', () => {
   });
 });
 
+describe('nested relationship orderBy (v2.5.0)', () => {
+  // Verified by shape only: the live test database has no APOC.
+  it('sorts on synthetic keys and strips them', async () => {
+    const h = harness();
+    await h.model('LbUser').find({
+      select: {
+        posts: {
+          select: { id: true },
+          orderBy: [{ rank: 'DESC' }, { title: 'ASC' }],
+        },
+      },
+    } as never);
+    expect(h.cypher()).toContain(
+      "posts: [__sk IN apoc.coll.sortMulti([(n)-[:`LB_WROTE`]->(n0:`LbPost`) | { __node: n0 { .`id` }, __sk0: n0.`rank`, __sk1: n0.`title` }], ['__sk0', '^__sk1']) | __sk.__node]",
+    );
+  });
+
+  it('keeps the read policy inside the sorted comprehension', async () => {
+    const h = harness(true);
+    await h.model('LbUser').find({
+      select: { posts: { select: { id: true }, orderBy: { rank: 'ASC' } } },
+    } as never);
+    expect(h.cypher()).toContain(
+      "posts: [__sk IN apoc.coll.sortMulti([(n)-[:`LB_WROTE`]->(n0:`LbPost`) WHERE (true AND (n0.`secret` = $param0)) | { __node: n0 { .`id` }, __sk0: n0.`rank` }], ['^__sk0']) | __sk.__node]",
+    );
+  });
+});
+
 describe('aggregate on @cypher fields (v2.5.0)', () => {
   it('Model.aggregate refuses a @cypher field by name', async () => {
     const h = harness();
