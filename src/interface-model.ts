@@ -309,15 +309,7 @@ export class InterfaceModel<
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
 
-    // MATCH with interface label
-    const validatedLabels = (params?.labels ?? []).map((l) =>
-      assertSafeLabel(l),
-    );
-    const labels = [
-      escapeIdentifier(this.interfaceDef.label),
-      ...validatedLabels,
-    ];
-    cypherParts.push(`MATCH (n:${labels.join(':')})`);
+    cypherParts.push(this.compileMatch(params?.labels));
 
     // Use cached synthetic NodeDefinition for WHERE compilation
     const syntheticNodeDef = this.syntheticNodeDef;
@@ -500,14 +492,7 @@ export class InterfaceModel<
     const allParams: Record<string, unknown> = {};
     const paramCounter = { count: 0 };
 
-    const validatedLabels = (params.labels ?? []).map((l) =>
-      assertSafeLabel(l),
-    );
-    const labels = [
-      escapeIdentifier(this.interfaceDef.label),
-      ...validatedLabels,
-    ];
-    cypherParts.push(`MATCH (n:${labels.join(':')})`);
+    cypherParts.push(this.compileMatch(params.labels));
 
     const syntheticNodeDef = this.syntheticNodeDef;
     // v1.8.5 — see corresponding comment in `find()`. Synthetic bundle
@@ -708,6 +693,29 @@ export class InterfaceModel<
       unsafe: params?.unsafe,
     });
     return (result.count as number) ?? 0;
+  }
+
+  /**
+   * `MATCH (n:(A|B…)&Extra…)` over the implementers' labels (v2.5.0).
+   *
+   * BREAKING: pre-2.5.0 this matched `(n:<Interface>)`, but implementers
+   * never carry the interface label (`Model.create` writes only the
+   * type's own labels), so find / count / aggregate missed every node the
+   * OGM itself created. Matching the implementers is what upstream
+   * @neo4j/graphql does. Nodes that carry ONLY the interface label are no
+   * longer returned. An interface with no implementers keeps the old
+   * interface-label match. The `labels` filter ANDs onto the expression.
+   */
+  private compileMatch(extraLabels?: string[]): string {
+    const extras = (extraLabels ?? []).map((l) => assertSafeLabel(l));
+    const members = this.interfaceDef.implementedBy.map((typeName) =>
+      escapeIdentifier(this.schema.nodes.get(typeName)?.label ?? typeName),
+    );
+    if (members.length === 0)
+      return `MATCH (n:${[escapeIdentifier(this.interfaceDef.label), ...extras].join(':')})`;
+    const memberExpr =
+      members.length === 1 ? members[0] : `(${members.join('|')})`;
+    return `MATCH (n:${[memberExpr, ...extras].join('&')})`;
   }
 
   private buildSyntheticNodeDef(): NodeDefinition {

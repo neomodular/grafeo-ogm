@@ -133,7 +133,7 @@ describe('InterfaceModel — @cypher fields', () => {
     });
     const cypher = getCypher(mockSession);
 
-    const matchIdx = cypher.indexOf('MATCH (n:`Entity`)');
+    const matchIdx = cypher.indexOf('MATCH (n:(`User`|`Organization`))');
     const callIdx = cypher.indexOf('CALL {');
     const whereIdx = cypher.indexOf('WHERE __where_n_lowerName');
     expect(matchIdx).toBeGreaterThan(-1);

@@ -151,11 +151,11 @@ describe('InterfaceModel', () => {
   });
 
   describe('find()', () => {
-    it('should produce MATCH (n:`Entity`) + CASE __typename resolution + RETURN with default selection when no params', async () => {
+    it('should produce MATCH over the implementer labels + CASE __typename resolution + RETURN with default selection when no params', async () => {
       await model.find();
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`))');
       // __typename CASE resolution
       expect(cypher).toContain('WITH n, CASE');
       expect(cypher).toContain("WHEN n:`User` THEN 'User'");
@@ -179,7 +179,7 @@ describe('InterfaceModel', () => {
       await model.find({ where: { id: 'abc-123' } });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`))');
       expect(cypher).toContain('WHERE');
       expect(cypher).toContain('n.`id` = $param0');
       expect(cypher).toContain('RETURN n {');
@@ -202,7 +202,7 @@ describe('InterfaceModel', () => {
       await model.find({ labels: ['Active'] });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`:`Active`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)');
     });
 
     it('should produce ORDER BY + SKIP + LIMIT with options', async () => {
@@ -264,7 +264,7 @@ describe('InterfaceModel', () => {
       });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`))');
       expect(cypher).toContain('RETURN count(n) AS count');
 
       expect(result.count).toBe(10);
@@ -288,7 +288,7 @@ describe('InterfaceModel', () => {
       });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`))');
       expect(cypher).toContain('WHERE');
       expect(cypher).toContain('n.`name` = $param0');
       expect(cypher).toContain('RETURN count(n) AS count');
@@ -409,7 +409,7 @@ describe('InterfaceModel', () => {
       });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`:`Active`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)');
       expect(cypher).toContain('RETURN count(n) AS count');
     });
   });
@@ -430,7 +430,7 @@ describe('InterfaceModel', () => {
       await model.find({ selectionSet: '{ id name status { id label } }' });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:`Entity`)');
+      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`))');
       expect(cypher).toContain('RETURN n {');
       expect(cypher).toContain('.`id`');
       expect(cypher).toContain('.`name`');
