@@ -56,6 +56,13 @@ const typeDefs = /* GraphQL */ `
   type LdActedIn @relationshipProperties {
     role: String
   }
+
+  type LdTagged @node {
+    runId: String
+    name: String!
+    tags: [String!]
+    scores: [Int!]
+  }
 `;
 
 describeLive('schema parity — live Neo4j', () => {
@@ -172,5 +179,38 @@ describeLive('schema parity — live Neo4j', () => {
       .model('LdActor')
       .aggregate({ where: { runId }, aggregate: { count: true, name: true } });
     expect(agg).toEqual({ count: 2, name: { min: 'Ana', max: 'Bo' } });
+  });
+
+  // List-scalar where semantics the generated types now describe: the
+  // equality / _NOT operand is the whole list, _IN / _NOT_IN take a list of
+  // lists, and the element-typed operators (string, comparison) can never
+  // match a list property. Through v2.4.7 the types offered only the
+  // element-typed forms.
+  it('matches list scalars by whole-list equality, _NOT and _IN', async () => {
+    await ogm.model('LdTagged').create({
+      input: [
+        { runId, name: 'ab', tags: ['a', 'b'], scores: [1, 2] },
+        { runId, name: 'c', tags: ['c'], scores: [3] },
+      ],
+    });
+    const names = async (where: Record<string, unknown>): Promise<string[]> =>
+      (
+        await ogm
+          .model('LdTagged')
+          .find({ where: { runId, ...where }, selectionSet: '{ name }' })
+      )
+        .map((r) => r.name as string)
+        .sort();
+
+    expect(await names({ tags: ['a', 'b'] })).toEqual(['ab']);
+    expect(await names({ scores: [1, 2] })).toEqual(['ab']);
+    expect(await names({ tags_NOT: ['a', 'b'] })).toEqual(['c']);
+    expect(await names({ tags_IN: [['c'], ['z']] })).toEqual(['c']);
+    expect(await names({ tags_NOT_IN: [['c']] })).toEqual(['ab']);
+    // The element-typed forms the old types offered never match.
+    expect(await names({ tags: 'a' })).toEqual([]);
+    expect(await names({ tags_IN: ['a', 'c'] })).toEqual([]);
+    expect(await names({ tags_CONTAINS: 'a' })).toEqual([]);
+    expect(await names({ scores_GT: 0 })).toEqual([]);
   });
 });

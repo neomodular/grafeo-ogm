@@ -287,3 +287,46 @@ author.booksAggregate;
     expect(errors).toEqual([]);
   });
 });
+
+describe('generated where operators for list scalars', () => {
+  // The runtime compares a list property as a whole: equality / _NOT take
+  // the full list, _IN / _NOT_IN a list of lists. Through v2.4.7 the
+  // generated operators were typed as the element type, so the forms that
+  // work failed to compile and the ones that compiled never matched.
+  it('types list operators as lists and drops element-only operators', async () => {
+    const { generated, errors } = await typecheckGenerated(
+      `
+      type Post @node {
+        id: ID! @id
+        title: String
+        tags: [String!]
+        scores: [Int!]!
+        seenAt: [DateTime!]
+      }
+    `,
+      `${PRELUDE}
+async function run() {
+  const Post = ogm.model('Post');
+  await Post.find({ where: { tags: ['a', 'b'], tags_NOT: ['c'] } });
+  await Post.find({ where: { tags_IN: [['a'], ['b', 'c']], scores_NOT_IN: [[1]] } });
+  await Post.find({ where: { scores: [1, 2] } });
+  // @ts-expect-error a list property never equals a single element
+  await Post.find({ where: { tags: 'a' } });
+  // @ts-expect-error _IN takes a list of lists
+  await Post.find({ where: { tags_IN: ['a'] } });
+  // @ts-expect-error string operators never match a list property
+  await Post.find({ where: { tags_CONTAINS: 'a' } });
+  // @ts-expect-error comparison operators never match a list property
+  await Post.find({ where: { scores_GT: 1 } });
+  // Scalar (non-list) fields keep their full operator set.
+  await Post.find({ where: { title_CONTAINS: 'x', title_IN: ['a'] } });
+}
+`,
+    );
+    expect(errors).toEqual([]);
+    for (const op of ['STARTS_WITH', 'ENDS_WITH', 'MATCHES', 'LT', 'GTE'])
+      expect(generated).not.toMatch(
+        new RegExp(`\\b(tags|scores|seenAt)_${op}\\?`),
+      );
+  });
+});

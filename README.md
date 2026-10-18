@@ -587,6 +587,15 @@ const book = await Book.findUniqueOrThrow({
 | `_NOT_ENDS_WITH` | `NOT ENDS WITH` | `{ name_NOT_ENDS_WITH: 'x' }` |
 | `_MATCHES` | `=~` (regex) | `{ name_MATCHES: '^A.*' }` |
 
+**List fields** (`tags: [String!]`) are compared as a whole list, so only these operators exist for them:
+
+| Operator | Matches when | Example |
+|---|---|---|
+| *(equality)* | the stored list equals the given list | `{ tags: ['a', 'b'] }` |
+| `_NOT` | the stored list differs from the given list | `{ tags_NOT: ['a'] }` |
+| `_IN` | the stored list equals one of the given lists | `{ tags_IN: [['a'], ['b', 'c']] }` |
+| `_NOT_IN` | the stored list equals none of the given lists | `{ tags_NOT_IN: [['a']] }` |
+
 **Relationship quantifiers:**
 
 | Operator | Meaning | Example |

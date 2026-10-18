@@ -189,6 +189,22 @@ function emitScalarOperators(
   const inputType = scalarInputType(type, schema.enums);
   const wrap = (inner: string): string => `InputMaybe<${inner}>`;
 
+  // List properties are compared as a whole by the where compiler
+  // (`n.tags = $p`, `n.tags IN $p`): equality / `_NOT` take the full list
+  // and `_IN` / `_NOT_IN` a list of lists. String and comparison operators
+  // apply to the property value itself, a list, so they can never match.
+  // Through v2.4.7 every operator was typed as the element type: the forms
+  // that work failed to compile and the ones that compiled matched nothing.
+  if (prop.isArray) {
+    const listType = `Array<${inputType}>`;
+    lines.push(`  ${name}?: ${wrap(listType)};`);
+    lines.push(`  ${name}_NOT?: ${wrap(listType)};`);
+    if (category === 'boolean') return lines;
+    lines.push(`  ${name}_IN?: ${wrap(`Array<${listType}>`)};`);
+    lines.push(`  ${name}_NOT_IN?: ${wrap(`Array<${listType}>`)};`);
+    return lines;
+  }
+
   // Exact match
   lines.push(`  ${name}?: ${wrap(inputType)};`);
 
