@@ -466,7 +466,7 @@ describe('deleteSubgraph', () => {
 
     const callArgs = (tx.run as jest.Mock).mock.calls[0][1];
     expect(callArgs.rootId).toBe('root-1');
-    expect(callArgs.relFilter).toBe('HAS_COMMENT');
+    expect(callArgs.relFilter).toBe('HAS_COMMENT>');
     expect(callArgs.labelFilter).toBe('+Post|+Comment');
     expect(callArgs.maxLevel).toBe(5);
   });
@@ -535,7 +535,71 @@ describe('deleteSubgraph', () => {
     await deleteSubgraph('root-1', config, tx);
 
     const callArgs = (tx.run as jest.Mock).mock.calls[0][1];
-    expect(callArgs.relFilter).toBe('HAS_COMMENT|HAS_REPLY');
+    expect(callArgs.relFilter).toBe('HAS_COMMENT>|HAS_REPLY>');
     expect(callArgs.labelFilter).toBe('+Post|+Comment|+Reply');
   });
+});
+
+// v2.5.0 — `ownedRelationships.join('|')` gave APOC bare types, which it
+// expands in BOTH directions: deleting Book A climbed from a shared
+// Chapter back up to Book B and deleted it, and deleting a Chapter
+// deleted its parent Book. A bare type now means OUTGOING.
+describe.each([
+  [
+    'deleteSubgraph',
+    (config: SubgraphConfig, tx: Transaction) =>
+      deleteSubgraph('root-1', config, tx),
+  ],
+  [
+    'cloneSubgraph',
+    (config: SubgraphConfig, tx: Transaction) =>
+      cloneSubgraph('root-1', config, tx),
+  ],
+])('%s owned relationship direction (v2.5.0)', (_name, op) => {
+  const base: SubgraphConfig = {
+    ownedLabels: ['Book', 'Chapter'],
+    ownedRelationships: ['HAS_CHAPTER'],
+    maxLevel: 5,
+    referenceRelationships: [],
+  };
+
+  const relFilterFor = async (ownedRelationships: string[]) => {
+    const tx = createMockTransaction([
+      {
+        records: [
+          mockRecord({
+            deletedCount: 0,
+            originalId: 'root-1',
+            cloneElementId: 'e1',
+          }),
+        ],
+      },
+      { records: [mockRecord({ elemId: 'e1', newId: 'n1' })] },
+    ]);
+    await op({ ...base, ownedRelationships }, tx);
+    return (tx.run as jest.Mock).mock.calls[0][1].relFilter as string;
+  };
+
+  it('treats a bare type as outgoing', async () => {
+    expect(await relFilterFor(['HAS_CHAPTER', 'HAS_SECTION'])).toBe(
+      'HAS_CHAPTER>|HAS_SECTION>',
+    );
+  });
+
+  it('passes an explicit direction through, sending <TYPE> as the bare type', async () => {
+    expect(await relFilterFor(['HAS_CHAPTER>', '<CHILD_OF', '<LINKS>'])).toBe(
+      'HAS_CHAPTER>|<CHILD_OF|LINKS',
+    );
+  });
+
+  it.each(['HAS CHAPTER', '>HAS_CHAPTER', 'HAS_CHAPTER<', '<>', '1ABC', 'A|B'])(
+    'rejects %p before running any Cypher',
+    async (bad) => {
+      const tx = createMockTransaction();
+      await expect(
+        op({ ...base, ownedRelationships: [bad] }, tx),
+      ).rejects.toThrow(/Invalid owned relationship/);
+      expect(tx.run).not.toHaveBeenCalled();
+    },
+  );
 });

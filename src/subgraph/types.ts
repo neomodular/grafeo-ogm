@@ -8,6 +8,13 @@ export interface SubgraphReferenceRelationship {
 /** Configuration for clone/delete operations — domain-agnostic blueprint. */
 export interface SubgraphConfig {
   ownedLabels: string[];
+  /**
+   * Relationship types the traversal follows from the root. A bare
+   * `'TYPE'` is followed OUTGOING only; write `'<TYPE'` for incoming and
+   * `'<TYPE>'` for both directions (v2.5.0). Before v2.5.0 a bare type was
+   * followed both ways, so the traversal could climb from a shared child
+   * up to another parent and take it in too.
+   */
   ownedRelationships: string[];
   maxLevel: number;
   referenceRelationships: SubgraphReferenceRelationship[];

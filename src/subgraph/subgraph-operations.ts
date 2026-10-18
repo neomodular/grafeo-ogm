@@ -16,6 +16,36 @@ import {
 const NOOP_LOGGER: OGMLogger = { debug: () => {} };
 
 /**
+ * An owned relationship entry: a type with an optional APOC direction
+ * marker. APOC parses the joined relationshipFilter itself, so nothing
+ * outside this shape (e.g. a `|` smuggling in another type) may pass.
+ */
+const OWNED_RELATIONSHIP = /^<?[A-Za-z_][A-Za-z0-9_]*>?$/;
+
+/**
+ * The APOC relationshipFilter for the owned relationships. A bare type is
+ * traversed OUTGOING (`TYPE>`); `<TYPE` is incoming and `<TYPE>` is both.
+ *
+ * Before v2.5.0 bare types were passed as-is, and APOC expands a bare type
+ * in BOTH directions: from a Chapter shared by two Books, deleting Book A
+ * climbed back up to Book B and deleted it too, and deleting a Chapter
+ * deleted its parent Book.
+ */
+function ownedRelationshipFilter(config: SubgraphConfig): string {
+  return config.ownedRelationships
+    .map((rel) => {
+      const incoming = rel.startsWith('<');
+      const outgoing = rel.endsWith('>');
+      // APOC reads `<TYPE>` as incoming only (checked on APOC 5.26), so
+      // "both" is sent as the bare type, which APOC expands both ways.
+      if (incoming && outgoing) return rel.slice(1, -1);
+      if (incoming || outgoing) return rel;
+      return `${rel}>`;
+    })
+    .join('|');
+}
+
+/**
  * Validates all labels and relationship types in a SubgraphConfig
  * to prevent Cypher injection (these values are string-interpolated),
  * and rejects empty filter arrays.
@@ -52,7 +82,13 @@ function validateConfig(
   for (const label of config.ownedLabels) assertSafeLabel(label);
 
   for (const rel of config.ownedRelationships)
-    assertSafeIdentifier(rel, 'owned relationship type');
+    if (!OWNED_RELATIONSHIP.test(rel))
+      throw new SubgraphOperationError(
+        operation,
+        rootId,
+        `Invalid owned relationship "${rel}": expected TYPE, TYPE>, <TYPE ` +
+          'or <TYPE> where TYPE matches [A-Za-z_][A-Za-z0-9_]*',
+      );
 
   for (const ref of config.referenceRelationships) {
     assertSafeLabel(ref.fromLabel);
@@ -143,7 +179,7 @@ export async function deleteSubgraph(
   const log = logger ?? NOOP_LOGGER;
   validateConfig(config, 'delete', rootId);
 
-  const relFilter = config.ownedRelationships.join('|');
+  const relFilter = ownedRelationshipFilter(config);
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');
 
   try {
@@ -200,7 +236,7 @@ async function executeApocClone(
   transaction: Transaction,
   logger: OGMLogger,
 ): Promise<SubgraphCloneResult> {
-  const relFilter = config.ownedRelationships.join('|');
+  const relFilter = ownedRelationshipFilter(config);
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');
 
   // Step 1: Collect subgraph and clone it

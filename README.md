@@ -1044,6 +1044,8 @@ The compiler reads `OR`, then `AND`, then `NOT`, and stops at the first one it f
 
 Clone or delete entire subgraphs using APOC procedures. Requires the APOC plugin installed in Neo4j.
 
+The traversal starts at the root and follows `ownedRelationships` into nodes carrying one of `ownedLabels`. A bare type such as `'HAS_CHAPTER'` is followed **outgoing only**; write `'<CHILD_OF'` to follow a relationship incoming, or `'<LINKED>'` to follow it both ways. Before v2.5.0 a bare type was followed both ways, so deleting one book could climb from a chapter it shared with another book up to that book and delete it too; add `<…>` to keep the old behavior for a type.
+
 ```typescript
 import { cloneSubgraph, deleteSubgraph } from 'grafeo-ogm';
 
