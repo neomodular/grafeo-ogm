@@ -1,5 +1,63 @@
 # Changelog
 
+## 2.5.0 (2026-10-18) — breaking fixes from the bug scan
+
+> **Minor release. Every item below changes behaviour that callers may depend on.** Each change fixes a confirmed bug, and the old behaviour was wrong (see each entry). The non-breaking fixes from the same scan shipped in **2.4.8**.
+
+### Upgrade checklist
+
+Use this to check whether you're affected. If none of these apply, 2.5.0 is a drop-in upgrade.
+
+| If you… | Then… |
+|---|---|
+| use `InterfaceModel` | it now finds implementor nodes **without** the interface label, so result counts can grow (see below) |
+| put arguments or aliases in `selectionSet` strings (`posts(where: …)`, `r: rank`) | they now take effect, and unsupported ones throw |
+| pass non-`@id`/`@unique` keys in `upsert` `where` | they now throw |
+| rely on `createMany({ skipDuplicates: true })` counting the skipped duplicates | it now returns the created count |
+| write keys that aren't in the schema | they now throw `Unknown field …` |
+| pass relationship fields in a later `createMany` item | they now throw |
+| filter list fields with element-typed operators (`tags: 'x'`, `tags_CONTAINS`) | those no longer compile (they never matched) |
+| use `CypherAssert` or `Neo4jRecordFactory.dateTime` in tests | stricter assertions may expose tests that passed by accident |
+| use `cloneSubgraph` / `deleteSubgraph` | traversal is now outgoing-only by default, and the root is matched by label |
+
+### Reads
+
+- **`InterfaceModel` matches implementors, not the interface label.** `find`, `count` and `aggregate` used to `MATCH (n:<Interface>)`. Nodes created with `Model.create` never carry that label, so these methods found nothing for nodes the OGM itself wrote. They now `MATCH (n:(A|B|…))` over the implementors, as `@neo4j/graphql` does. Per-member policies, `__typename` and the `labels` filter work as before.
+  - **What to do:** nodes carrying *only* the interface label, with no implementor label, are no longer returned; give them their concrete label. Recheck counts and pagination that depended on the old, smaller result. Listing the interface in `@node(labels: [...])` still works but is no longer needed.
+- **`selectionSet` arguments and aliases take effect.** They were silently ignored, so `posts(where: …)` and `posts(options: { sort, limit, offset })` returned every related node, `r: rank` came back as `rank`, and two aliases of one field collapsed into one key. Now relationship fields honour `where` (with the target `read` policy applied) and `options` (`sort` needs APOC; `limit` and `offset` are bound parameters). Connection fields honour `where`, and aliases name the output keys.
+  - **Now throw `OGMError`:** any other argument, an unknown option or sort field, `options` on a singular relationship, GraphQL `$variables`, and arguments on a field reached through a union-typed parent.
+  - **What to do:** search for `selectionSet` strings with arguments or aliases. Their results now match what they ask for: filtered, paged and re-keyed.
+
+### Writes
+
+- **`upsert` `where` accepts only `@id` / `@unique` fields.** A plain key used to join the `MERGE` pattern, so `where: { email, name: 'Bob' }` against an existing `{ email, name: 'Alice' }` created a **duplicate** with the same email. An operator key (`name_CONTAINS`) was silently dropped, which widened the match so the **wrong row** could be updated. These now throw `OGMError`: a plain, operator, logical or unknown key, and a `null` value. At least one unique key is required.
+  - **What to do:** keep only unique keys in `where` and move the other fields into `create` / `update`. For a non-unique match, use `findFirst()` followed by `create()` / `update()`.
+- **Unknown keys in write input throw.** A key that is neither a property nor a relationship of the type (a typo like `nmae`) was written as a stray property, and the intended field was left unchanged. It now throws `Unknown field …`, in `create`, `update`, `updateMany`, `createMany`, `upsert`, and nested creates and updates at any depth.
+  - **What to do:** declare every property you write in the schema.
+- **`createMany({ skipDuplicates: true })` returns the number of nodes created.** It used to include the duplicates it skipped. It now matches Prisma. Calls without `skipDuplicates` are unchanged.
+- **`createMany` rejects relationship fields in every item.** Only `data[0]` used to be checked; later items were created without their relationship input. The error names the item, e.g. `"tags" in data[1]`. Use `create()` for nested relationship writes.
+
+### Generated types
+
+- **List-scalar where operators are typed as lists (compile-time only).** For `tags: [String!]`, equality and `_NOT` take `Array<T>`, and `_IN` / `_NOT_IN` take `Array<Array<T>>`. String and comparison operators are no longer generated for list fields. The old element-typed forms (`{ tags: 'x' }`, `tags_CONTAINS`) compiled but **never matched**, while the working form `{ tags: ['x', 'y'] }` didn't compile. Runtime behaviour is unchanged.
+
+### Testing helpers
+
+- **`CypherAssert.assertContainsClause` looks for the pattern inside the clause.** The clause and the pattern were checked independently, so `assertContainsClause(q, 'WHERE', 'n { .name }')` passed when the pattern was in the `RETURN`. `'SET'` also matched `$offset`. Keywords now match whole words, outside strings, names and comments, and the pattern must sit within that clause.
+- **`CypherAssert.normalize` and `assertStructurallyEqual` keep string literals and backticked names verbatim.** `'a  b'` used to equal `'a b'`, and a `$name` inside a string was renamed as a parameter.
+- **`Neo4jRecordFactory.dateTime` reads an offset-less string as UTC**, as Neo4j does. It used to use the machine's local zone, so results differed between a laptop and CI. A string that isn't a date now throws a `TypeError`.
+
+Assertions that only passed by accident will now fail.
+
+### Subgraph operations (APOC)
+
+- **Owned relationships are followed outgoing by default.** A bare type was expanded in **both** directions. With two books sharing a chapter, `deleteSubgraph(bookA)` climbed back up the shared chapter and **deleted book B**, `deleteSubgraph(chapter)` deleted its parent book, and `cloneSubgraph` pulled in the other parents. Now a bare `'TYPE'` is outgoing, `'<TYPE'` is incoming, and `'<TYPE>'` is both directions (the old behaviour).
+  - **What to do:** mark relationships you traverse backwards as `'<TYPE'` or `'<TYPE>'`.
+- **The root is matched by label, and owned nodes without an `id` are refused.** The root was matched by `id` alone, so any node with that id became a root, found by scanning every node. It's now `(:rootLabel {id})`. The new optional `SubgraphConfig.rootLabel` defaults to `ownedLabels[0]`. `cloneSubgraph` now aborts before writing anything if an owned node has no `id` or shares one with another owned node; previously those nodes collapsed onto one mapping entry.
+  - **What to do:** set `rootLabel` if your root isn't of the first owned label.
+
+Every entry above has a regression test, live wherever behaviour depends on the server. The subgraph changes are verified against Neo4j 5.26 with APOC 5.26.
+
 ## 2.4.8 (2026-10-18) — bug-scan fixes across reads, writes, codegen, CLI and testing helpers
 
 > **A large patch release. Upgrading is safe, with no breaking changes.** Most of these bugs were found by a third, multi-area bug scan. Each fix was reproduced on Neo4j 5.26 before it was fixed, and is pinned by a regression test, live wherever behaviour depends on the server. The breaking fixes from the same scan ship separately in **2.5.0**. Cypher for queries the fixes don't touch is unchanged; the policy byte-identical suite pins this.
