@@ -27,7 +27,10 @@ export interface PropertyDefinition {
   cypherStatement?: string; // @cypher(statement: "...") — the user's Cypher subquery body
   cypherColumnName?: string; // @cypher(columnName: "...") — column to project (defaults to the field name)
   directives: string[]; // Directive names (e.g., ['id', 'unique'])
-  defaultValue?: string; // @default directive
+  // @default directive, string-encoded ('true', '5', 'RED'); list fields
+  // carry one string per element (supported since list defaults stopped
+  // being silently dropped, after v2.4.7). Converted by type at write time.
+  defaultValue?: string | string[];
 }
 
 export interface RelationshipDefinition {

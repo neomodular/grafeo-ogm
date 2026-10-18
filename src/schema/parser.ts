@@ -15,6 +15,7 @@ import {
   type EnumValueNode,
   type IntValueNode,
   type FloatValueNode,
+  type ValueNode,
 } from 'graphql';
 
 import pluralizeLib from 'pluralize';
@@ -145,6 +146,25 @@ function getDirectiveArgValue(
     | FloatValueNode;
 }
 
+/**
+ * String encoding of a scalar `@default` value (`'true'`, `'5'`, `'RED'`),
+ * or `undefined` for kinds that have no scalar encoding (lists, objects,
+ * null, variables).
+ */
+function scalarDefaultString(val: ValueNode): string | undefined {
+  switch (val.kind) {
+    case Kind.STRING:
+    case Kind.ENUM:
+    case Kind.INT:
+    case Kind.FLOAT:
+      return val.value;
+    case Kind.BOOLEAN:
+      return String(val.value);
+    default:
+      return undefined;
+  }
+}
+
 /** Parse a field definition into either a PropertyDefinition or RelationshipDefinition */
 function parseField(
   field: FieldDefinitionNode,
@@ -217,15 +237,29 @@ function parseField(
   const cypherDirective = getDirective(field, 'cypher');
   const defaultDirective = getDirective(field, 'default');
 
-  let defaultValue: string | undefined;
+  let defaultValue: string | string[] | undefined;
   if (defaultDirective) {
     const val = getDirectiveArgValue(defaultDirective, 'value');
-    if (val)
-      if (val.kind === Kind.STRING) defaultValue = val.value;
-      else if (val.kind === Kind.BOOLEAN) defaultValue = String(val.value);
-      else if (val.kind === Kind.ENUM) defaultValue = val.value;
-      else if (val.kind === Kind.INT) defaultValue = val.value;
-      else if (val.kind === Kind.FLOAT) defaultValue = val.value;
+    if (val && val.kind === Kind.LIST) {
+      // Through v2.4.7 there was no LIST branch: a list default parsed as
+      // `undefined` and creates silently wrote nothing. Elements use the
+      // same string encoding as scalar defaults (converted by type at
+      // write time, see resolveDefaultWriteValue).
+      const where = `${ownerName}.${field.name.value}`;
+      if (!isArray)
+        throw new OGMError(
+          `Invalid @default on ${where}: a list @default was given but the field is not a list type.`,
+        );
+      defaultValue = (val as ListValueNode).values.map((el) => {
+        const scalar = scalarDefaultString(el);
+        if (scalar === undefined)
+          throw new OGMError(
+            `Invalid @default on ${where}: list defaults may ` +
+              `only contain String, Int, Float, Boolean or enum values.`,
+          );
+        return scalar;
+      });
+    } else if (val) defaultValue = scalarDefaultString(val);
   }
 
   // Determine if this is truly a scalar property

@@ -305,6 +305,17 @@ export function wrapWhereParam(
 export function resolveDefaultWriteValue(propDef: PropertyDefinition): unknown {
   const raw = propDef.defaultValue;
   if (raw === undefined) return undefined;
+  // List defaults (parsed element-wise since after v2.4.7) convert each
+  // element the same way.
+  if (Array.isArray(raw))
+    return raw.map((el) => convertDefaultScalar(el, propDef));
+  return convertDefaultScalar(raw, propDef);
+}
+
+function convertDefaultScalar(
+  raw: string,
+  propDef: PropertyDefinition,
+): unknown {
   switch (propDef.type) {
     case 'Boolean':
       return raw === 'true';
@@ -312,7 +323,7 @@ export function resolveDefaultWriteValue(propDef: PropertyDefinition): unknown {
       return Number(raw);
     case 'Int':
     case 'BigInt':
-      return coerceWriteValue(raw, propDef);
+      return coerceIntegerElement(raw, propDef);
     default:
       return raw;
   }
