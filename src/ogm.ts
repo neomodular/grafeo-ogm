@@ -11,7 +11,7 @@ import {
   WhereCompilerOptions,
 } from './compilers/where.compiler';
 import { OGMError } from './errors';
-import { Executor, OGMLogger } from './execution/executor';
+import { Executor, formatParamsForLog, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { InterfaceModel, InterfaceModelCompilers } from './interface-model';
 import {
@@ -482,7 +482,7 @@ export class OGM<
       this.config.logger.debug('[OGM $queryRaw] Cypher: %s', cypher);
       this.config.logger.debug(
         '[OGM $queryRaw] Params: %s',
-        JSON.stringify(params, null, 2),
+        formatParamsForLog(params),
       );
     }
 
@@ -507,7 +507,7 @@ export class OGM<
       this.config.logger.debug('[OGM $executeRaw] Cypher: %s', cypher);
       this.config.logger.debug(
         '[OGM $executeRaw] Params: %s',
-        JSON.stringify(params, null, 2),
+        formatParamsForLog(params),
       );
     }
 

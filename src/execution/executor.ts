@@ -1,5 +1,6 @@
 import {
   Driver,
+  isInt,
   Session,
   Transaction,
   ManagedTransaction,
@@ -16,6 +17,31 @@ import {
 export interface OGMLogger {
   debug(message: string, ...args: unknown[]): void;
   warn?(message: string, ...args: unknown[]): void;
+}
+
+/**
+ * Render query params for a debug log line. Never throws.
+ *
+ * v2.4.8 — a bare `JSON.stringify(params)` threw "Do not know how to
+ * serialize a BigInt" for any bigint param, so turning `Executor.debug` on
+ * made those queries fail. Debug logging must never change behaviour:
+ * bigints and neo4j `Integer`s render as their decimal string, and any
+ * other serialization failure (a cycle) yields a placeholder.
+ */
+export function formatParamsForLog(params: unknown): string {
+  try {
+    return JSON.stringify(
+      params,
+      (_key, value: unknown) => {
+        if (typeof value === 'bigint') return value.toString();
+        if (isInt(value)) return value.toString();
+        return value;
+      },
+      2,
+    );
+  } catch (err) {
+    return `[unserializable params: ${(err as Error).message}]`;
+  }
 }
 
 /** No-op logger used when no logger is provided and debug is off. */
@@ -94,7 +120,7 @@ export class Executor {
   ): Promise<QueryResult> {
     if (Executor.debug) {
       this.logger.debug('[OGM] Cypher: %s', cypher);
-      this.logger.debug('[OGM] Params: %s', JSON.stringify(params, null, 2));
+      this.logger.debug('[OGM] Params: %s', formatParamsForLog(params));
     }
 
     // Legacy backward compatibility
