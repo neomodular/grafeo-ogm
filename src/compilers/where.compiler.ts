@@ -1137,8 +1137,8 @@ export class WhereCompiler {
               `Refactor to Connection_SOME + Connection_NONE, or remove the @cypher reference.`,
           );
 
-        // v2.5.0 — a pattern comprehension starts with the pattern
-        // itself. Pre-2.5.0 an extra `(` wrapped it, which Neo4j rejected
+        // v2.4.8 — a pattern comprehension starts with the pattern
+        // itself. Pre-2.4.8 an extra `(` wrapped it, which Neo4j rejected
         // ("Invalid input 'WHERE'"), so every Connection_SINGLE failed.
         // The target policy stays inside `whereClause`, so only visible
         // nodes are counted.
@@ -1474,7 +1474,7 @@ export class WhereCompiler {
         // skipped a slot in the param/var namespace, masking real
         // collisions if/when a future compiler shared this counter.
         //
-        // v2.5.0 — a plain pattern comprehension. Pre-2.5.0 the pattern
+        // v2.4.8 — a plain pattern comprehension. Pre-2.4.8 the pattern
         // was wrapped in an extra `(` (inside a redundant list
         // comprehension), which Neo4j rejected with "Invalid input
         // 'WHERE'", so every `_SINGLE` failed. The target policy stays in
@@ -1647,8 +1647,8 @@ export class WhereCompiler {
                 `Refactor the predicate to _SOME + _NONE, or remove the ` +
                 `@cypher reference.`,
             );
-        // v2.5.0 — plain pattern comprehensions (see the non-union
-        // `_SINGLE`: the pre-2.5.0 extra `(` made Neo4j reject the query).
+        // v2.4.8 — plain pattern comprehensions (see the non-union
+        // `_SINGLE`: the pre-2.4.8 extra `(` made Neo4j reject the query).
         const sizeExprs = members.map(
           (m) =>
             `size([${m.pattern}${
@@ -1895,7 +1895,7 @@ export class WhereCompiler {
     // Wrap the param in the field's temporal constructor for
     // comparison-shaped operators. A wrapped param is no longer a string,
     // so case-insensitive toLower() must not apply to either side.
-    // v2.5.0 — bind the value in the stored representation first: a
+    // v2.4.8 — bind the value in the stored representation first: a
     // BigInt filter given a string (its generated input type) and a
     // DateTime filter given a JS `Date` silently matched nothing.
     const propDef = propsHolder?.properties.get(fieldName);
@@ -1907,17 +1907,22 @@ export class WhereCompiler {
       operator ?? '',
     );
     const temporalWrapped = rawParamRef !== `$${paramName}`;
+    // v2.4.8 — `toLower(list)` is a Cypher type error. On a LIST field,
+    // case-insensitive equality / `_NOT` lowers element-wise; `_IN` on a
+    // list field (a list of lists) can't be lowered as one expression, so it
+    // stays case-sensitive rather than emitting invalid Cypher.
+    const isListField = Boolean(propDef?.isArray);
+    const lower = (ref: string) =>
+      isListField ? `[wc_s IN ${ref} | toLower(wc_s)]` : `toLower(${ref})`;
+    const listCiAllowed =
+      !isListField || operator === null || operator === '_NOT';
 
     if (operator === null) {
       // Exact match — always CI-aware
       const fieldRef =
-        caseInsensitive && !temporalWrapped
-          ? `toLower(${rawFieldRef})`
-          : rawFieldRef;
+        caseInsensitive && !temporalWrapped ? lower(rawFieldRef) : rawFieldRef;
       const paramRef =
-        caseInsensitive && !temporalWrapped
-          ? `toLower(${rawParamRef})`
-          : rawParamRef;
+        caseInsensitive && !temporalWrapped ? lower(rawParamRef) : rawParamRef;
       return {
         cypher: `${fieldRef} = ${paramRef}`,
         params: { [paramName]: bound },
@@ -1935,9 +1940,10 @@ export class WhereCompiler {
     if (operator === '_MATCHES' && typeof value === 'string')
       assertSafeRegexPattern(value, 'where clause');
 
-    const ci = caseInsensitive && opDef.ciAware && !temporalWrapped;
-    const fieldRef = ci ? `toLower(${rawFieldRef})` : rawFieldRef;
-    const paramRef = ci ? `toLower(${rawParamRef})` : rawParamRef;
+    const ci =
+      caseInsensitive && opDef.ciAware && !temporalWrapped && listCiAllowed;
+    const fieldRef = ci ? lower(rawFieldRef) : rawFieldRef;
+    const paramRef = ci ? lower(rawParamRef) : rawParamRef;
 
     const cypher = opDef.template
       .replace(/%rf/g, rawFieldRef)

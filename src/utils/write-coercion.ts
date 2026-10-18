@@ -285,6 +285,24 @@ export function wrapWhereParam(
   const ctor = resolveWriteConstructor(propDef);
   if (ctor === undefined) return paramRef;
   if (!COMPARABLE_SUFFIXES.has(suffix)) return paramRef;
+  // v2.4.8 — a LIST field is compared as a whole list (equality / `_NOT`)
+  // or against a list of lists (`_IN` / `_NOT_IN`). Its stored elements
+  // are native temporals, so each element of the param must be wrapped;
+  // pre-2.4.8 only `_IN` on a scalar field was, so `seenAt: ['2024-…']`
+  // compared datetimes with strings and never matched.
+  if (propDef.isArray) {
+    if (!Array.isArray(value)) return paramRef;
+    if (suffix === '_IN' || suffix === '_NOT_IN') {
+      const flattened = value
+        .filter((v): v is unknown[] => Array.isArray(v))
+        .flat();
+      if (!decideElementsWrap(flattened, ctor, propDef)) return paramRef;
+      return `[wc_l IN ${paramRef} | [wc_t IN wc_l | ${ctor.fn}(wc_t)]]`;
+    }
+    if (suffix !== '' && suffix !== '_NOT') return paramRef;
+    if (!decideElementsWrap(value, ctor, propDef)) return paramRef;
+    return `[wc_t IN ${paramRef} | ${ctor.fn}(wc_t)]`;
+  }
   if (suffix === '_IN' || suffix === '_NOT_IN') {
     if (!Array.isArray(value)) return paramRef;
     if (!decideElementsWrap(value, ctor, propDef)) return paramRef;
@@ -296,17 +314,17 @@ export function wrapWhereParam(
 
 /**
  * Coerce a WHERE value to the representation the stored property has
- * (v2.5.0), for comparison-shaped operators (`_IN` / `_NOT_IN`
+ * (v2.4.8), for comparison-shaped operators (`_IN` / `_NOT_IN`
  * element-wise):
  *
  * - `Int` / `BigInt`: integer strings (the generated BigInt input type)
  *   and `bigint`s become a Neo4j Integer via the write coercion. A String
- *   or a raw bigint never equals the stored Long, so pre-2.5.0 these
+ *   or a raw bigint never equals the stored Long, so pre-2.4.8 these
  *   filters silently matched nothing. JS numbers stay as they are: Neo4j
  *   compares a Float and a Long numerically, and unit-level params keep
  *   their shape.
  * - `DateTime`: a JS `Date` becomes its ISO string, which `wrapWhereParam`
- *   then wraps in `datetime()`. Pre-2.5.0 a `Date` was bound raw and never
+ *   then wraps in `datetime()`. Pre-2.4.8 a `Date` was bound raw and never
  *   matched.
  *
  * Every other value passes through unchanged.
