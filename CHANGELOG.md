@@ -1,5 +1,73 @@
 # Changelog
 
+## 2.4.8 (2026-10-18) — bug-scan fixes across reads, writes, codegen, CLI and testing helpers
+
+> **A large patch release. Upgrading is safe, with no breaking changes.** Most of these bugs were found by a third, multi-area bug scan. Each fix was reproduced on Neo4j 5.26 before it was fixed, and is pinned by a regression test, live wherever behaviour depends on the server. The breaking fixes from the same scan ship separately in **2.5.0**. Cypher for queries the fixes don't touch is unchanged; the policy byte-identical suite pins this.
+
+### Reads
+
+- **`_SINGLE` and `Connection_SINGLE` filters work.** Every `_SINGLE` form failed on Neo4j with `Invalid input 'WHERE'`, because of an extra parenthesis around the pattern comprehension. That covered relationship, interface, union and connection filters. They now compile to `size([pattern WHERE … | x]) = 1`. The target type's `read` policy stays inside the comprehension, so `_SINGLE` counts only nodes the caller can see.
+- **Relationship-index fulltext returns each node once.** A search on a relationship index returned a node once per matching relationship, which inflated `count` and made `limit` pages come up short. Results are now grouped per node with the best score. This also works inside `AND`, `OR` and `NOT`.
+- **Connection `totalCount` is returned.** It was declared on connection types but always came back `undefined`. It is now the size of the same filtered comprehension `edges` uses, so it honours the connection `where` and the target `read` policy. Selecting only `totalCount` returns `{ totalCount }`, and the generated connection `SelectFields` now offer it.
+- **Implementer `@cypher` fields resolve in inline fragments.** `InterfaceModel.find({ selectionSet: '{ id ... on Doc { dcount } }' })` used to return `dcount: null`. Fragment fields now project per type: `CASE WHEN n:Doc THEN … END`.
+- **Typed `select` keeps scalars whose names end in `Connection`.** A scalar such as `internetConnection: String` was silently dropped. A `*Connection` key is now treated as a connection only when its base name is a relationship.
+- **BigInt, DateTime and list where filters match.** These used to silently match nothing:
+  - a BigInt filter given a string (its generated input type) or a `bigint`
+  - a DateTime filter given a JS `Date`
+  - equality, `_NOT` or `_IN` on a temporal **list** field
+
+  Values are now bound in the stored representation. Case-insensitive mode on a list field used to emit `toLower(list)`, a Cypher type error. It now lowercases element-wise for equality and `_NOT`, and leaves `_IN` case-sensitive.
+- **Nested relationship `orderBy` sorts.** `select: { friends: { select: { id: true }, orderBy: { rank: 'DESC' } } }` sorted maps that didn't contain the sort key. It now sorts on injected keys, as connection `orderBy` does. This needs APOC and is verified by the emitted Cypher's shape.
+- **Point `srid` is a number** on the driver's default lossless integers. It used to come back as `{ low, high }`.
+- **Clear errors instead of wrong results:**
+  - Selecting an **aggregating** `@cypher` field (e.g. `RETURN count(p)`) **through a relationship** now throws an `OGMError` naming the field. Neo4j 5 rejects aggregation inside a projection, and no rewrite parses. Top-level selection still works.
+  - `aggregate` on a `@cypher` field now throws instead of returning null min/max/average and a sum of 0.
+
+### Writes
+
+- **Nested writes on interface relationships run.** A nested `connect`, `create`, `update`, `disconnect` or `delete` on an interface-typed relationship was skipped without an error. It now runs, keyed by implementer (`pets: { Dog: { create: [...] } }`) or flat. A flat nested create names its implementer: `node: { Dog: {...} }`. Each implementer's policies apply. Inputs that can't be resolved now throw `OGMError` instead of being ignored.
+- **Top-level `connect` and `disconnect` work on interface and union relationships.** They matched the abstract type's label, which no node carries, so nothing changed. Per-member union input was also never unwrapped. Both now match the members' own labels and apply each member's `read` policy. A blanket disconnect keyed by one union member now unlinks only that member, not every member.
+- **Array `connect` with a bare-property `where` links.** `connect: { posts: [{ where: { title: 'a' } }] }`, with no `node:` wrapper, used to link nothing.
+- **A connect nested in a connect item, and a disconnect nested in a disconnect item, run.** They used to be dropped, at the top level, inside `create` and inside nested `update`. Every level applies its target type's `read` policy. Nesting is capped at 5 levels.
+- **`upsert` rejects relationship fields** in `create` / `update` with an `OGMError`. They used to be ignored, so their nested ops never ran.
+
+### Schema and generated types
+
+- **`@relationship(direction:)` is validated.** A direction other than exactly `IN` or `OUT`, such as `"out"`, was accepted. Reads treated it as OUT and writes as IN, so edges were written reversed and couldn't be read back. It's now a schema error that names the field.
+- **List `@default` values work.** `@default(value: [RED, GREEN])` used to be ignored. They're now stored with native element types. A list default on a non-list field is a schema error.
+- **`@declareRelationship` interface relationships work.** They parsed with an empty relationship type, so every operator on them threw `Invalid identifier ""`. The type, direction and properties now come from the implementors, and implementors that disagree are a schema error.
+- **Generated types match the runtime:**
+  - scalar `@cypher` fields are selectable in `<T>SelectFields`
+  - required fields with `@default` are optional in `CreateInput`
+  - `IdAggregateSelection` and `StringAggregateSelection` are `{ min, max }`, not `{ shortest, longest }`
+  - interfaces are no longer in `ModelMap`, where `ogm.model('<Interface>')` type-checked but always threw
+  - unsupported `<rel>Aggregate` fields and where keys are no longer generated; the old aggregation types remain, deprecated
+- **Colliding generated type names fail at generation time.** For example, `User.postComments` and `UserPost.comments` both produce `UserPostCommentsConnectionWhere`, which used to make the generated file fail to compile. Generation now fails with an error that lists each duplicate and its sources.
+
+### CLI and execution
+
+- **`grafeo db push` reports changed index definitions.** Changing a fulltext index's fields, or a vector index's dimensions or similarity, used to print "No changes". Push now reports a **changed** bucket saying the schema is NOT in sync. It recreates those indexes only under `--force-drop`, with the usual consent rules.
+- **`grafeo db push` output is accurate:**
+  - It no longer claims "created X" when an equivalent constraint already exists under another name; that one is reported as `X covered by <name>`.
+  - A conflicting RANGE index is reported instead of crashing the push.
+  - In-sync constraints are no longer listed as "Unmanaged".
+- **`grafeo db seed` honours `--database`, `database.database` and `NEO4J_DATABASE`.** It used to seed the default database regardless. The new optional **`OGMConfig.database`** sends every session the OGM opens to that database. Without it, nothing changes.
+- **Transaction audit metadata is no longer dropped silently.** Driver 5.x transactions have no `setMetaData`, so policy audit metadata for calls inside a transaction, including `unsafe.bypassPolicies` audits, never reached the server. Per-call metadata still can't be attached to an open transaction, but each such call now logs a `warn`. The new `ogm.$transaction(fn, { metadata })` attaches metadata when the transaction begins, and its `TransactionOptions` type is exported.
+- **`Executor.debug = true` no longer breaks queries with `bigint` params.** This includes `$queryRaw` and `$executeRaw`.
+
+### Testing helpers
+
+- **`Neo4jRecordFactory.dateTime` keeps the offset, nanoseconds and zone id.** It converted values to UTC and cut the fraction to milliseconds. It now matches what the real driver returns.
+- **`CypherAssert.assertParams` ignores key order and compares bigints.** A bigint param used to throw.
+- **`Neo4jRecordFactory.node` takes `{ identity?, elementId? }`**, so mock nodes can have distinct ids.
+
+### Docs
+
+- `@id` does **not** create a unique constraint; only `@unique` does. Use `@id @unique` to have the database enforce uniqueness.
+- The README Interfaces example is now valid GraphQL (directives go after `implements`).
+- The Testing Utilities section documents the real API.
+- The directive table covers `@declareRelationship`, the `IN`/`OUT` rule and list defaults.
+
 ## 2.4.7 (2026-10-18) — `db push --force-drop` only drops constraints grafeo created
 
 ### 🐛 `--force-drop` could drop constraints on labels grafeo doesn't manage
