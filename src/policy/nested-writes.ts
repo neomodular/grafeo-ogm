@@ -20,15 +20,23 @@
  * relationship → `{ create, update, … }` (single item or array), union
  * targets keyed by member name, `create` items as `{ node, edge }` or a
  * bare node, `update` as `{ node, edge }` or a bare node. Interface
- * targets are skipped, as they are by the compiler (it emits no nested
- * create / update for them).
+ * targets are walked like unions when keyed by implementer, and in the
+ * flat shape a create checks the implementer it names while an update
+ * checks EVERY implementer it may reach (v2.5.0 — pre-2.5.0 interface
+ * targets were skipped, as the compiler then emitted no write for them).
  */
+import {
+  abstractTarget,
+  perMemberEntries,
+  unwrapAbstractCreateNode,
+} from '../compilers/mutation.compiler';
 import { OGMError } from '../errors';
 import type {
   NodeDefinition,
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
+import { resolveTargetDef } from '../schema/utils';
 import { isPlainObject } from '../utils/validation';
 import { PolicyDeniedError } from './errors';
 import {
@@ -181,12 +189,15 @@ function walkUpdate(
             string,
             unknown
           >;
-          evaluateWriteRestrictives(
-            targetBundle(bundle, targetDef.typeName, 'update'),
-            targetDef.typeName,
-            'update',
-            nodeUpdate,
-          );
+          // A flat interface update may write any implementer: each one's
+          // write restrictives must accept it.
+          for (const typeName of concreteTypes(schema, targetDef))
+            evaluateWriteRestrictives(
+              targetBundle(bundle, typeName, 'update'),
+              typeName,
+              'update',
+              nodeUpdate,
+            );
           if (isPlainObject(nodeUpdate))
             walkUpdate(schema, targetDef, nodeUpdate, bundle, depth + 1);
         }
@@ -201,24 +212,38 @@ function checkCreates(
   bundle: PolicyContextBundle,
   depth: number,
 ): void {
+  const abstract = abstractTarget(targetDef.typeName, schema);
   for (const item of asArray(creates)) {
     if (!isPlainObject(item)) continue;
     // Same node-spec resolution as the compiler's nested create.
-    const nodeSpec = (item.node ?? item) as Record<string, unknown>;
+    let nodeSpec = (item.node ?? item) as Record<string, unknown>;
+    let createDef = targetDef;
+    if (abstract) {
+      // A flat interface create names its implementer: check THAT type.
+      const [member, memberSpec] = unwrapAbstractCreateNode(
+        nodeSpec,
+        abstract,
+        targetDef.typeName,
+      );
+      createDef = schema.nodes.get(member)!;
+      nodeSpec = memberSpec;
+    }
     evaluateCreatePolicies(
-      targetBundle(bundle, targetDef.typeName, 'create'),
-      targetDef.typeName,
+      targetBundle(bundle, createDef.typeName, 'create'),
+      createDef.typeName,
       [nodeSpec],
     );
     if (isPlainObject(nodeSpec))
-      walkCreate(schema, targetDef, nodeSpec, bundle, depth + 1);
+      walkCreate(schema, createDef, nodeSpec, bundle, depth + 1);
   }
 }
 
 /**
- * Concrete targets of a relationship paired with their slice of the
- * input: the whole value for a node target, one entry per member key
- * for a union target, none for an interface target.
+ * Targets of a relationship paired with their slice of the input: the
+ * whole value for a node target, one entry per member key for a union or
+ * interface target keyed by member, and the interface itself for a flat
+ * interface input (its creates name their implementer; see checkCreates).
+ * The shape rules are the compiler's (`perMemberEntries`).
  */
 function relationshipTargets(
   schema: SchemaMetadata,
@@ -227,17 +252,26 @@ function relationshipTargets(
 ): [NodeDefinition, unknown][] {
   const nodeDef = schema.nodes.get(relDef.target);
   if (nodeDef) return [[nodeDef, value]];
-  const members = schema.unions?.get(relDef.target);
-  if (!members || !isPlainObject(value)) return [];
-  const targets: [NodeDefinition, unknown][] = [];
-  for (const [memberKey, memberValue] of Object.entries(value)) {
-    const memberDef = members.includes(memberKey)
-      ? schema.nodes.get(memberKey)
-      : undefined;
-    if (memberDef && memberValue != null)
-      targets.push([memberDef, memberValue]);
-  }
-  return targets;
+  const abstract = abstractTarget(relDef.target, schema);
+  if (!abstract) return [];
+  const entries = perMemberEntries(value, abstract, relDef.fieldName);
+  if (entries)
+    return entries.map(([member, memberValue]) => [
+      schema.nodes.get(member)!,
+      memberValue,
+    ]);
+  const ifaceDef = resolveTargetDef(relDef.target, schema);
+  return ifaceDef ? [[ifaceDef, value]] : [];
+}
+
+/** The concrete type(s) a write on `targetDef` can reach. */
+function concreteTypes(
+  schema: SchemaMetadata,
+  targetDef: NodeDefinition,
+): string[] {
+  return (
+    abstractTarget(targetDef.typeName, schema)?.members ?? [targetDef.typeName]
+  );
 }
 
 /** The target type's bundle for `op`; a type without policies is open. */

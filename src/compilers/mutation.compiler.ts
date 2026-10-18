@@ -265,6 +265,47 @@ export class MutationCompiler {
   }
 
   /**
+   * The MATCH that binds a connect TARGET by type. A node type keeps its
+   * label pattern; an interface / union target matches its MEMBERS' labels
+   * through a WHERE predicate (v2.5.0). Pre-2.5.0 it matched the abstract
+   * type's own label, which implementer and member nodes do not carry, so
+   * the connect linked nothing.
+   */
+  private targetMatch(
+    targetNodeDef: NodeDefinition,
+    targetVar: string,
+  ): { match: string; labelPredicate: string | null } {
+    const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
+    if (!abstract)
+      return {
+        match: `MATCH (${targetVar}:${this.getCachedLabelString(targetNodeDef)})`,
+        labelPredicate: null,
+      };
+    const alternatives = abstract.members.map(
+      (m) =>
+        `${targetVar}:${this.getCachedLabelString(this.schema.nodes.get(m)!)}`,
+    );
+    return {
+      match: `MATCH (${targetVar})`,
+      labelPredicate:
+        alternatives.length > 0 ? `(${alternatives.join(' OR ')})` : 'false',
+    };
+  }
+
+  /**
+   * Resolve a relationship's target for a nested write. Throws when the
+   * target is unknown — pre-2.5.0 the nested op was silently skipped.
+   */
+  private requireTargetDef(relDef: RelationshipDefinition): NodeDefinition {
+    const targetNodeDef = resolveTargetDef(relDef.target, this.schema);
+    if (!targetNodeDef)
+      throw new OGMError(
+        `Cannot resolve the target type "${relDef.target}" of relationship "${relDef.fieldName}".`,
+      );
+    return targetNodeDef;
+  }
+
+  /**
    * Generate CREATE Cypher for one or more nodes.
    * Handles scalar properties, nested relationship creates, and connects.
    */
@@ -1083,20 +1124,21 @@ export class MutationCompiler {
       const relDef = nodeDef.relationships.get(key);
       if (!relDef) continue;
 
+      if (value == null) continue;
       const relInput = value as Record<string, unknown>;
 
-      // Check if target is a union type — if so, relInput uses per-member keys
-      // e.g., items: { Ebook: { create: [...] } }
-      const isUnionTarget =
-        !this.schema.nodes.has(relDef.target) &&
-        this.schema.unions?.has(relDef.target);
+      // Union / interface targets: per-member keys (e.g. items: { Ebook:
+      // { create: [...] } }) dispatch to the concrete member; an interface
+      // also takes the flat `{ connect, create }` shape (v2.5.0 — pre-2.5.0
+      // interface targets were skipped entirely, so nothing was written).
+      const abstract = abstractTarget(relDef.target, this.schema);
+      const memberEntries = abstract
+        ? perMemberEntries(relInput, abstract, key)
+        : null;
 
-      if (isUnionTarget) {
-        const unionMembers = this.schema.unions!.get(relDef.target)!;
-        for (const [memberKey, memberValue] of Object.entries(relInput)) {
-          if (!unionMembers.includes(memberKey)) continue;
-          const memberNodeDef = this.schema.nodes.get(memberKey);
-          if (!memberNodeDef) continue;
+      if (memberEntries) {
+        for (const [memberKey, memberValue] of memberEntries) {
+          const memberNodeDef = this.schema.nodes.get(memberKey)!;
 
           const memberInput = memberValue as Record<string, unknown>;
           // Process creates/connects for this union member
@@ -1119,8 +1161,7 @@ export class MutationCompiler {
         continue;
       }
 
-      const targetNodeDef = this.schema.nodes.get(relDef.target);
-      if (!targetNodeDef) continue;
+      const targetNodeDef = this.requireTargetDef(relDef);
 
       const resultLines = this.buildCreateRelationshipsForTarget(
         relInput,
@@ -1162,7 +1203,8 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
-    const targetLabelStr = this.getCachedLabelString(targetNodeDef);
+    // A flat interface input (v2.5.0): each create names its implementer.
+    const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
 
     // --- create ---
     if (relInput.create) {
@@ -1172,24 +1214,35 @@ export class MutationCompiler {
 
       for (let ci = 0; ci < createItems.length; ci++) {
         const createSpec = createItems[ci];
-        const nodeSpec = (createSpec.node ?? createSpec) as Record<
+        let nodeSpec = (createSpec.node ?? createSpec) as Record<
           string,
           unknown
         >;
+        let createDef = targetNodeDef;
+        if (abstract) {
+          const [member, memberSpec] = unwrapAbstractCreateNode(
+            nodeSpec,
+            abstract,
+            relDef.fieldName,
+          );
+          createDef = this.schema.nodes.get(member)!;
+          nodeSpec = memberSpec;
+        }
+        const targetLabelStr = this.getCachedLabelString(createDef);
 
         const createVar = `${nodeVar}_c${startCounter + counter}`;
         counter++;
 
         const { propString, propParams } = this.buildCreateProperties(
           nodeSpec,
-          targetNodeDef,
+          createDef,
           `${prefix}_create${ci}`,
         );
 
         // Handle nested relationship creates within the created node
         const nestedRelLines = this.buildCreateRelationships(
           nodeSpec,
-          targetNodeDef,
+          createDef,
           createVar,
           `${prefix}_create${ci}`,
           params,
@@ -1201,7 +1254,7 @@ export class MutationCompiler {
         const propsClause =
           propString.length > 0
             ? ` { ${propString} }`
-            : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
+            : ` { ${this.buildGeneratedIdClause(createDef)} }`;
 
         const relPattern = buildRelPattern({
           sourceVar: nodeVar,
@@ -1236,6 +1289,9 @@ export class MutationCompiler {
             targetVar: createVar,
             edgeVar: relVar,
             targetLabel: 'auto',
+            // Abstract targets: no label — the created node never carries
+            // the union / interface label (v2.5.0).
+            schema: this.schema,
           });
           lines.push(`WITH ${[...allVars, createVar].join(', ')}`);
           lines.push(`MATCH ${relArrow}`);
@@ -1288,9 +1344,14 @@ export class MutationCompiler {
         const connectVar = `${nodeVar}_cn${startCounter + counter}`;
         counter++;
 
-        lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
+        const { match, labelPredicate } = this.targetMatch(
+          targetNodeDef,
+          connectVar,
+        );
+        lines.push(match);
 
         const connectConditions = [
+          labelPredicate,
           this.compileTargetWhere(
             whereSpec,
             connectVar,
@@ -1758,13 +1819,39 @@ export class MutationCompiler {
   }
 
   /**
-   * Dispatch update operations for a union-typed relationship.
+   * Relationships narrowed from an abstract target to one member by the
+   * per-member dispatch. A BLANKET disconnect on one adds the member's
+   * label: the relationship type alone also reaches the other members, so
+   * pre-2.5.0 `{ Ebook: [{ disconnect: [{}] }] }` unlinked every member.
+   */
+  private narrowedRelDefs = new WeakSet<RelationshipDefinition>();
+
+  private narrowToMember(
+    relDef: RelationshipDefinition,
+    member: string,
+  ): RelationshipDefinition {
+    const narrowed: RelationshipDefinition = { ...relDef, target: member };
+    this.narrowedRelDefs.add(narrowed);
+    return narrowed;
+  }
+
+  /** The label a blanket disconnect over `relDef` must keep (see above). */
+  private blanketTargetLabel(
+    relDef: RelationshipDefinition,
+  ): string | undefined {
+    if (!this.narrowedRelDefs.has(relDef)) return undefined;
+    return this.getCachedLabelString(this.schema.nodes.get(relDef.target)!);
+  }
+
+  /**
+   * Dispatch update operations for a union- or interface-typed
+   * relationship given per member (interfaces since v2.5.0).
    * Each member key in the input is recursed into buildUpdateRelationships
    * with a narrowed relDef pointing at the concrete member type.
    */
   private dispatchUnionUpdateOps(
     key: string,
-    memberEntries: Record<string, unknown>,
+    memberEntries: [string, unknown][],
     relDef: RelationshipDefinition,
     nodeDef: NodeDefinition,
     sourceVar: string,
@@ -1775,18 +1862,10 @@ export class MutationCompiler {
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
   ): string[] {
-    const unionMembers = this.schema.unions!.get(relDef.target)!;
     const lines: string[] = [];
 
-    for (const [memberKey, memberValue] of Object.entries(memberEntries)) {
-      if (!unionMembers.includes(memberKey)) continue;
-      const memberNodeDef = this.schema.nodes.get(memberKey);
-      if (!memberNodeDef || memberValue == null) continue;
-
-      const memberRelDef: RelationshipDefinition = {
-        ...relDef,
-        target: memberKey,
-      };
+    for (const [memberKey, memberValue] of memberEntries) {
+      const memberRelDef = this.narrowToMember(relDef, memberKey);
       const memberItems = Array.isArray(memberValue)
         ? (memberValue as Record<string, unknown>[])
         : [memberValue as Record<string, unknown>];
@@ -1845,16 +1924,19 @@ export class MutationCompiler {
       const relDef = nodeDef.relationships.get(key);
       if (!relDef || value == null) continue;
 
-      // Union targets use per-member keys — dispatch each member recursively
-      const isUnionTarget =
-        !this.schema.nodes.has(relDef.target) &&
-        this.schema.unions?.has(relDef.target);
+      // Union / interface targets given per member — dispatch each member
+      // recursively. A flat interface input is handled below against the
+      // interface (v2.5.0 — pre-2.5.0 it was skipped, writing nothing).
+      const abstract = abstractTarget(relDef.target, this.schema);
+      const memberEntries = abstract
+        ? perMemberEntries(value, abstract, key)
+        : null;
 
-      if (isUnionTarget) {
+      if (memberEntries) {
         lines.push(
           ...this.dispatchUnionUpdateOps(
             key,
-            value as Record<string, unknown>,
+            memberEntries,
             relDef,
             nodeDef,
             sourceVar,
@@ -1869,11 +1951,10 @@ export class MutationCompiler {
         continue;
       }
 
-      const targetNodeDef = this.schema.nodes.get(relDef.target);
-      if (!targetNodeDef) continue;
-
-      const targetLabelStr = this.getCachedLabelString(targetNodeDef);
+      const targetNodeDef = this.requireTargetDef(relDef);
       const relPrefix = `${prefix}_${key}`;
+      // Past the dispatch, `abstract` is set only for a flat INTERFACE
+      // input (a flat union input threw in perMemberEntries).
 
       // Value can be an array (e.g., chapters: [{ create: ... }, { update: ... }])
       // or an object (e.g., author: { connect: ... })
@@ -1941,6 +2022,7 @@ export class MutationCompiler {
                 relDef,
                 targetVar: predicate ? blanketTarget : '',
                 edgeVar: relVar,
+                targetLabelRaw: this.blanketTargetLabel(relDef),
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
               if (predicate) lines.push(`WHERE ${predicate}`);
@@ -1955,6 +2037,9 @@ export class MutationCompiler {
                 targetVar: discTarget,
                 edgeVar: relVar,
                 targetLabel: 'auto',
+                // An interface target matches its implementers, which do
+                // not carry the interface label (v2.5.0).
+                schema: this.schema,
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
 
@@ -2018,7 +2103,11 @@ export class MutationCompiler {
             const connectVar = `${sourceVar}_conn${varCounter}`;
             varCounter++;
 
-            lines.push(`MATCH (${connectVar}:${targetLabelStr})`);
+            const { match, labelPredicate } = this.targetMatch(
+              targetNodeDef,
+              connectVar,
+            );
+            lines.push(match);
 
             // Pre-1.8.1 this used `buildNodeWhereConditions` with
             // `(whereSpec?.node ?? whereSpec ?? {})`, which broke on
@@ -2028,6 +2117,7 @@ export class MutationCompiler {
             // top-level paths. Empty/undefined `whereSpec` short-circuits
             // to `[]` inside the helper, so the no-where case still works.
             const nestedConnConditions = [
+              labelPredicate,
               this.compileTargetWhere(
                 whereSpec,
                 connectVar,
@@ -2098,24 +2188,36 @@ export class MutationCompiler {
 
           for (let ci = 0; ci < createItems.length; ci++) {
             const createSpec = createItems[ci];
-            const nodeSpec = (createSpec.node ?? createSpec) as Record<
+            let nodeSpec = (createSpec.node ?? createSpec) as Record<
               string,
               unknown
             >;
+            // Flat interface input: the create names its implementer.
+            let createDef = targetNodeDef;
+            if (abstract) {
+              const [member, memberSpec] = unwrapAbstractCreateNode(
+                nodeSpec,
+                abstract,
+                key,
+              );
+              createDef = this.schema.nodes.get(member)!;
+              nodeSpec = memberSpec;
+            }
+            const targetLabelStr = this.getCachedLabelString(createDef);
 
             const createVar = `${sourceVar}_cr${varCounter}`;
             varCounter++;
 
             const { propString, propParams } = this.buildCreateProperties(
               nodeSpec,
-              targetNodeDef,
+              createDef,
               `${itemPrefix}_create${ci}`,
             );
 
             // Handle nested relationship creates within the created node
             const nestedRelLines = this.buildCreateRelationships(
               nodeSpec,
-              targetNodeDef,
+              createDef,
               createVar,
               `${itemPrefix}_create${ci}`,
               params,
@@ -2127,7 +2229,7 @@ export class MutationCompiler {
             const propsClause =
               propString.length > 0
                 ? ` { ${propString} }`
-                : ` { ${this.buildGeneratedIdClause(targetNodeDef)} }`;
+                : ` { ${this.buildGeneratedIdClause(createDef)} }`;
 
             // `edge` properties on the new relationship — the same input
             // create() accepts. Pre-2.4.5 this path never read
@@ -2191,6 +2293,13 @@ export class MutationCompiler {
           const nodeUpdate = (updateSpec.node ??
             (edgeUpdate ? {} : updateSpec)) as Record<string, unknown>;
           const updateWhere = item.where as Record<string, unknown> | undefined;
+          // A flat interface update writes the interface's own fields; the
+          // per-implementer `_on` form is not supported (v2.5.0).
+          if (abstract && isPlainObject(nodeUpdate) && '_on' in nodeUpdate)
+            throw new OGMError(
+              `"_on" in a nested update of "${key}" is not supported. Key the update by implementing type instead ` +
+                `(e.g. { ${key}: { ${abstract.members[0] ?? 'Member'}: [{ where, update }] } }).`,
+            );
 
           const updateVar = `${sourceVar}_u${varCounter}`;
           const relVar = `r_${key}_${i}`;
@@ -2267,6 +2376,7 @@ export class MutationCompiler {
               targetVar: updateVar,
               edgeVar: relVar,
               targetLabel: 'auto',
+              schema: this.schema,
             });
             lines.push(`MATCH ${relArrow}`);
 
@@ -2501,6 +2611,114 @@ export function connectionWhereToNodeWhere(
     }
   }
   return parts.length === 1 ? parts[0] : { AND: parts };
+}
+
+/** An interface / union relationship target and its concrete members. */
+export interface AbstractTarget {
+  kind: 'interface' | 'union';
+  name: string;
+  members: string[];
+}
+
+/**
+ * The concrete members of an interface / union relationship target, or
+ * `null` for a node type. Implementer nodes carry their OWN labels, not
+ * the interface's, so every write that has to find one matches by these
+ * members' labels (v2.5.0).
+ */
+export function abstractTarget(
+  target: string,
+  schema: SchemaMetadata,
+): AbstractTarget | null {
+  if (schema.nodes.has(target)) return null;
+  const iface = schema.interfaces?.get(target);
+  if (iface)
+    return {
+      kind: 'interface',
+      name: target,
+      members: iface.implementedBy.filter((m) => schema.nodes.has(m)),
+    };
+  const union = schema.unions?.get(target);
+  if (union)
+    return {
+      kind: 'union',
+      name: target,
+      members: union.filter((m) => schema.nodes.has(m)),
+    };
+  return null;
+}
+
+/**
+ * Classify the nested-write value of an abstract relationship (v2.5.0):
+ *
+ *   - PER-MEMBER — keyed by member type (`{ Dog: { … } }`), the shape
+ *     codegen emits for union AND interface targets. Returns the defined
+ *     `[member, value]` entries.
+ *   - FLAT — the operation keys themselves (`{ connect, create, … }`, or an
+ *     array of them), the @neo4j/graphql interface shape. Returns `null`.
+ *     Only interfaces accept it: a union has no common fields to filter or
+ *     write, so a flat union input throws.
+ *
+ * Pre-2.5.0 a key that was not a member was skipped, so a flat or typo'd
+ * input on an abstract relationship compiled to no write at all. Mixing
+ * member keys with other keys now throws instead.
+ */
+export function perMemberEntries(
+  value: unknown,
+  target: AbstractTarget,
+  fieldName: string,
+): [string, unknown][] | null {
+  if (Array.isArray(value) || !isPlainObject(value)) {
+    if (target.kind === 'union')
+      throw new OGMError(
+        `Relationship "${fieldName}" targets the union "${target.name}": key its nested input by member type ` +
+          `(${target.members.map((m) => `"${m}"`).join(', ')}).`,
+      );
+    return null;
+  }
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined);
+  const memberKeys = keys.filter((k) => target.members.includes(k));
+  if (memberKeys.length === 0 && target.kind === 'interface') return null;
+  if (memberKeys.length !== keys.length) {
+    const other = keys.filter((k) => !target.members.includes(k));
+    throw new OGMError(
+      `Unknown key(s) ${other.map((k) => `"${k}"`).join(', ')} in the nested input of "${fieldName}" ` +
+        `(${target.kind} "${target.name}"). ` +
+        (target.kind === 'union'
+          ? `Key it by member type: ${target.members.map((m) => `"${m}"`).join(', ')}.`
+          : `Use either member keys (${target.members.map((m) => `"${m}"`).join(', ')}) or the operation keys, not both.`),
+    );
+  }
+  return memberKeys
+    .filter((k) => value[k] !== null)
+    .map((k) => [k, value[k]] as [string, unknown]);
+}
+
+/**
+ * Unwrap a FLAT interface nested-create node spec — `{ Dog: { … } }`,
+ * exactly one implementer key — into the implementer and its own input
+ * (v2.5.0). Anything else throws: without a member key the compiler cannot
+ * know which labels and properties the new node gets.
+ */
+export function unwrapAbstractCreateNode(
+  nodeSpec: unknown,
+  target: AbstractTarget,
+  fieldName: string,
+): [string, Record<string, unknown>] {
+  const keys = isPlainObject(nodeSpec)
+    ? Object.keys(nodeSpec).filter((k) => nodeSpec[k] !== undefined)
+    : [];
+  if (
+    !isPlainObject(nodeSpec) ||
+    keys.length !== 1 ||
+    !target.members.includes(keys[0]) ||
+    !isPlainObject(nodeSpec[keys[0]])
+  )
+    throw new OGMError(
+      `A nested create on "${fieldName}" (${target.kind} "${target.name}") must name exactly one implementing type, ` +
+        `e.g. { node: { ${target.members[0] ?? 'Member'}: { … } } }. Allowed: ${target.members.map((m) => `"${m}"`).join(', ')}.`,
+    );
+  return [keys[0], nodeSpec[keys[0]] as Record<string, unknown>];
 }
 
 /** A nested delete item's own `delete` asks for a deeper cascade. */
