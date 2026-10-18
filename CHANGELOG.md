@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.1 (2026-10-18) — Mutations projecting `@cypher` fields work on Neo4j 5.x
+
+### 🐛 `WITH` between the write clause and `@cypher` projection preludes ([#7](https://github.com/neomodular/grafeo-ogm/issues/7))
+
+When a `create`, `update` or `upsert` projected a `@cypher` field (through `select`, `selectionSet`, or a model-level `selectionSet` default), the `CALL { … }` that computes the field was emitted directly after the `SET` / `CREATE` / `MERGE … ON CREATE SET`. Neo4j 5.x (including 5.26 LTS and Aura 5.27) rejects that at parse time with `WITH is required between SET and CALL` (or `… between CREATE and CALL`). Neo4j 2025.x and later accept it, which is why recent-server and mock-driver test suites didn't catch it.
+
+The projection now emits `WITH n` before the preludes. The generated Cypher is unchanged for mutations that select only stored fields. Find and other read paths were never affected.
+
+A new opt-in live suite (`tests/integration/mutation-cypher-projection.spec.ts`, run when `NEO4J_URI` is set) covers create, update and upsert (both the `ON CREATE` and `ON MATCH` branches) and the model-level default. Against Neo4j 5.26.32, every case fails without the fix and passes with it.
+
 ## 2.3.0 (2026-09-23) — 🛡️ Security release: NLS enforcement through relationships, nested writes and cascade delete
 
 > **Security release. Upgrade if you use `policies`.** Node-level-security (NLS) enforcement of the **root** type was sound, but enforcement of **other types reached through relationships** had several gaps. Together they let a bound `withContext(ctx)` read, link, update, create and delete nodes that the target type's policies forbid. One of them (cascade delete) deleted unrelated data with no policy involved at all. Every gap was reproduced before the fix and is pinned by a red-first regression test, both in the mock suite and in a new opt-in live-Neo4j suite.
