@@ -397,13 +397,14 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 
 | Directive | Target | Description |
 |---|---|---|
-| `@node` | Type | Marks a type as a Neo4j node. Optional `labels` argument for multi-label nodes |
-| `@relationship` | Field | Defines a relationship with `type`, `direction` (`IN`/`OUT`), and optional `properties` |
+| `@node` | Type | Marks a type as a Neo4j node. Optional `labels` argument for multi-label nodes (implementors of an interface must include the interface name, see [Interfaces](#interfaces)) |
+| `@relationship` | Field | Defines a relationship with `type`, `direction` (exactly `IN` or `OUT`; anything else is a schema error), and optional `properties` |
+| `@declareRelationship` | Interface field | Declares a relationship on an interface. Its `type`, `direction` and `properties` come from the implementors' `@relationship`, which must all agree |
 | `@relationshipProperties` | Type | Marks a type as relationship properties (edge data) |
 | `@id` | Field | Auto-generates a UUID on create (creates no constraint — add `@unique` for one) |
 | `@unique` | Field | Creates a uniqueness constraint in Neo4j |
 | `@cypher` | Field | Computed field resolved via a custom Cypher statement. Scalar return types are resolved at runtime in `select` / `selectionSet`, `where`, and `options.sort` (see [Computed Fields with @cypher](#computed-fields-with-cypher)); node/interface return types remain projection-only |
-| `@default` | Field | Sets a default value on create |
+| `@default` | Field | Sets a default `value` on create (scalar, enum, or a list of them for list fields). A required field with a default is optional in the generated `CreateInput` |
 | `@fulltext` | Type | Defines fulltext search indexes with `name` and `fields` |
 | `@vector` | Type | Registers one or more Neo4j vector indexes on a node (see [Vector Search](#vector-search)) |
 
@@ -453,25 +454,37 @@ type HasReview @relationshipProperties {
 ### Interfaces
 
 ```graphql
-interface Entity @node {
-  id: ID! @id
+interface Entity {
+  id: ID!
   name: String!
+  resources: [Resource!]! @declareRelationship
 }
 
-type User @node implements Entity {
+# Directives go after `implements` — `type User @node implements Entity` is
+# not valid GraphQL.
+type User implements Entity @node(labels: ["User", "Entity"]) {
   id: ID! @id
   name: String!
   email: String!
+  resources: [Resource!]! @relationship(type: "OWNS", direction: OUT)
 }
 
-type Organization @node implements Entity {
+type Organization implements Entity @node(labels: ["Organization", "Entity"]) {
   id: ID! @id
   name: String!
   website: String
+  resources: [Resource!]! @relationship(type: "OWNS", direction: OUT)
+}
+
+type Resource @node {
+  id: ID! @id
 }
 ```
 
 Interface types can be queried polymorphically via `ogm.interfaceModel('Entity')`. Results include `__typename` to discriminate concrete types.
+
+- The interface model matches nodes by the **interface label** (`MATCH (n:Entity)`), so every implementor must carry it: list the interface name in `@node(labels: [...])`. An implementor declared with a bare `@node` is stored with only its own label and never appears in interface queries.
+- A `@declareRelationship` field takes its relationship `type`, `direction` and `properties` from the implementors. They must all declare the same ones; if they disagree, or an implementor has no `@relationship` on that field, `parseSchema` throws.
 
 ### Enums
 

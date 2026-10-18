@@ -4,12 +4,14 @@ enum BookStatus {
   ARCHIVED
 }
 
-interface Entity @node {
+# Implementors list "Entity" in @node(labels: ...): InterfaceModel matches
+# nodes by the interface label.
+interface Entity {
   id: ID! @id
   name: String!
 }
 
-type Author implements Entity @node {
+type Author implements Entity @node(labels: ["Author", "Entity"]) {
   id: ID! @id @unique
   name: String!
   bio: String
@@ -44,7 +46,7 @@ type Review @node {
   book: Book! @relationship(type: "HAS_REVIEW", direction: IN)
 }
 
-type Publisher implements Entity @node {
+type Publisher implements Entity @node(labels: ["Publisher", "Entity"]) {
   id: ID! @id @unique
   name: String!
   website: String
