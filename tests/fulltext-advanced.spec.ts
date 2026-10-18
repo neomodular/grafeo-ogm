@@ -271,8 +271,29 @@ describe('FulltextCompiler - AND logical operator', () => {
     expect(result.cypher).toContain('CALL {');
     expect(result.cypher).toContain('PostTitleSearch');
     expect(result.cypher).toContain('PostBodySearch');
-    // Second branch uses 'm' variable and matches against nodeVar
-    expect(result.cypher).toContain('WHERE m = n');
+    // #11 — the second branch runs in an uncorrelated inner CALL under a
+    // fresh variable and is joined back on `n`. Pre-2.3.4 it reused the
+    // outer scope (`... YIELD node AS m, score ... RETURN score`), which
+    // Neo4j rejects: "Variable `score` already declared in outer scope".
+    expect(result.cypher).toContain(
+      [
+        'CALL {',
+        '  WITH n',
+        '  CALL {',
+        "    CALL db.index.fulltext.queryNodes('PostBodySearch', $ft_phrase_1)",
+        '    YIELD node AS __ft_and_1_1_v, score',
+        '    RETURN __ft_and_1_1_v AS __ft_and_1_1_m, score AS __ft_and_1_1_s',
+        '  }',
+        '  WITH n, __ft_and_1_1_m, __ft_and_1_1_s',
+        '  WHERE __ft_and_1_1_m = n',
+        '  WITH max(__ft_and_1_1_s) AS __ft_and_1_1_best',
+        '  WHERE __ft_and_1_1_best IS NOT NULL',
+        '  RETURN __ft_and_1_1_best',
+        '}',
+        'WITH n, score',
+      ].join('\n'),
+    );
+    expect(result.cypher).not.toMatch(/RETURN score\b/);
     expect(Object.keys(result.params)).toHaveLength(2);
   });
 
@@ -305,7 +326,10 @@ describe('FulltextCompiler - NOT logical operator', () => {
     compiler = new FulltextCompiler(schema);
   });
 
-  it('should compile NOT with WHERE NOT EXISTS pattern', () => {
+  // #11 — pre-2.3.4 NOT compiled to `WHERE NOT EXISTS { CALL ... YIELD
+  // ... WHERE excluded = n }`, which Neo4j rejects ("Cannot use standalone
+  // call with WHERE"). It now counts isolated inner hits per node.
+  it('should compile NOT as a zero-hit filter over the type', () => {
     const result = compiler.compile(
       {
         NOT: { PostTitleSearch: { phrase: 'spam' } },
@@ -313,11 +337,26 @@ describe('FulltextCompiler - NOT logical operator', () => {
       nodeDef,
     );
 
-    expect(result.cypher).toContain('MATCH (n:`Post`)');
-    expect(result.cypher).toContain('WHERE NOT EXISTS {');
-    expect(result.cypher).toContain('PostTitleSearch');
-    expect(result.cypher).toContain('WHERE excluded = n');
-    expect(result.cypher).toContain('0 AS score');
+    expect(result.cypher).toBe(
+      [
+        'MATCH (n:`Post`)',
+        'CALL {',
+        '  WITH n',
+        '  CALL {',
+        "    CALL db.index.fulltext.queryNodes('PostTitleSearch', $ft_phrase_0)",
+        '    YIELD node AS __ft_not_1_v, score',
+        '    RETURN __ft_not_1_v AS __ft_not_1_m, score AS __ft_not_1_s',
+        '  }',
+        '  WITH n, __ft_not_1_m, __ft_not_1_s',
+        '  WHERE __ft_not_1_m = n',
+        '  RETURN count(*) AS __ft_not_1_hits',
+        '}',
+        'WITH n, __ft_not_1_hits',
+        'WHERE __ft_not_1_hits = 0',
+        'WITH n, 0 AS score',
+      ].join('\n'),
+    );
+    expect(result.cypher).not.toContain('NOT EXISTS');
   });
 });
 
@@ -365,7 +404,7 @@ describe('FulltextCompiler - nested logical operators', () => {
     );
 
     expect(result.cypher).toContain('UNION');
-    expect(result.cypher).toContain('WHERE NOT EXISTS');
+    expect(result.cypher).toContain('WHERE __ft_not_2_hits = 0');
     expect(Object.keys(result.params)).toHaveLength(2);
   });
 

@@ -414,8 +414,16 @@ export class FulltextCompiler {
   }
 
   /**
-   * AND: sequential correlated subqueries.
-   * First branch yields nodes, subsequent branches filter to matching nodes.
+   * AND: the first branch yields nodes (and the result `score`); every
+   * subsequent branch filters them through a correlated subquery.
+   *
+   * Each filtering branch is compiled inside an UNCORRELATED inner CALL
+   * under a fresh variable, so none of its own names (`score`, `rel`, an
+   * aggregating `WITH`, a nested AND's variables) can collide with or
+   * drop the outer `n` / `score`. The match is joined back on `n`, and
+   * `max(...)` + `IS NOT NULL` turns "no match" into zero rows (dropping
+   * `n`) while collapsing duplicate matches (e.g. several relationships
+   * on one node) to one row.
    */
   private compileAnd(
     branches: FulltextInput[],
@@ -452,10 +460,12 @@ export class FulltextCompiler {
 
     // Subsequent branches: correlated subqueries that filter to matching nodes
     for (let i = 1; i < branches.length; i++) {
+      const tag = `${depth}_${i}`;
+      const branchVar = `__ft_and_${tag}_v`;
       const branch = this.compileNode(
         branches[i],
         nodeDef,
-        'm',
+        branchVar,
         paramCounter,
         depth,
       );
@@ -465,9 +475,10 @@ export class FulltextCompiler {
         [
           `CALL {`,
           `  WITH ${nodeVar}`,
-          `  ${branch.cypher.split('\n').join('\n  ')}`,
-          `  WHERE m = ${nodeVar}`,
-          `  RETURN score`,
+          ...this.joinBranchOn(branch.cypher, branchVar, nodeVar, `and_${tag}`),
+          `  WITH max(__ft_and_${tag}_s) AS __ft_and_${tag}_best`,
+          `  WHERE __ft_and_${tag}_best IS NOT NULL`,
+          `  RETURN __ft_and_${tag}_best`,
           `}`,
         ].join('\n'),
       );
@@ -480,8 +491,15 @@ export class FulltextCompiler {
   }
 
   /**
-   * NOT: produces a WHERE NOT EXISTS { ... } clause.
-   * When used standalone, wraps in a MATCH-all then filters out.
+   * NOT: every node of the type, minus the ones the inner expression
+   * matches. Score is 0.
+   *
+   * The inner expression runs through the same isolated join as an AND
+   * branch, counted per node; `count(*)` always yields one row, so a
+   * node is kept exactly when its hit count is 0. (Pre-2.3.4 this was a
+   * `NOT EXISTS { <inner> WHERE excluded = n }`, which Neo4j rejects for a
+   * leaf — a standalone CALL can't take a WHERE — and which lost `n`
+   * after an inner OR's aggregation.)
    */
   private compileNot(
     inner: FulltextInput,
@@ -490,10 +508,12 @@ export class FulltextCompiler {
     paramCounter: { count: number },
     depth: number,
   ): FulltextResult {
+    const tag = `not_${depth}`;
+    const innerVar = `__ft_${tag}_v`;
     const innerResult = this.compileNode(
       inner,
       nodeDef,
-      'excluded',
+      innerVar,
       paramCounter,
       depth,
     );
@@ -501,13 +521,42 @@ export class FulltextCompiler {
 
     const cypher = [
       `MATCH (${nodeVar}:${escapeIdentifier(nodeDef.label)})`,
-      `WHERE NOT EXISTS {`,
-      `  ${innerResult.cypher.split('\n').join('\n  ')}`,
-      `  WHERE excluded = ${nodeVar}`,
+      `CALL {`,
+      `  WITH ${nodeVar}`,
+      ...this.joinBranchOn(innerResult.cypher, innerVar, nodeVar, tag),
+      `  RETURN count(*) AS __ft_${tag}_hits`,
       `}`,
+      `WITH ${nodeVar}, __ft_${tag}_hits`,
+      `WHERE __ft_${tag}_hits = 0`,
       `WITH ${nodeVar}, 0 AS score`,
     ].join('\n');
 
     return { cypher, params: allParams };
+  }
+
+  /**
+   * Lines (for the body of a CALL that has imported `nodeVar`) that run a
+   * compiled fulltext expression in an UNCORRELATED inner CALL and keep
+   * only its rows for `nodeVar`, exposing `__ft_<tag>_s` (the branch's
+   * score). Isolation means the expression's own variables (`score`,
+   * `rel`, aggregating WITHs, nested operators) can neither collide with
+   * nor drop the outer scope.
+   */
+  private joinBranchOn(
+    branchCypher: string,
+    branchVar: string,
+    nodeVar: string,
+    tag: string,
+  ): string[] {
+    const m = `__ft_${tag}_m`;
+    const s = `__ft_${tag}_s`;
+    return [
+      `  CALL {`,
+      `    ${branchCypher.split('\n').join('\n    ')}`,
+      `    RETURN ${branchVar} AS ${m}, score AS ${s}`,
+      `  }`,
+      `  WITH ${nodeVar}, ${m}, ${s}`,
+      `  WHERE ${m} = ${nodeVar}`,
+    ];
   }
 }
