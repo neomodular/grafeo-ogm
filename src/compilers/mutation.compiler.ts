@@ -1653,14 +1653,30 @@ export class MutationCompiler {
           item == null ||
           (typeof item === 'object' && Object.keys(item).length === 0)
         ) {
-          // Blanket disconnect — remove all relationships of this type
+          // Blanket disconnect — remove every relationship of this type to
+          // a target the caller can READ. Like the `where` branch below, a
+          // policy-bound context only unlinks nodes it can see; pre-2.5.0
+          // the blanket form bound an anonymous `()` and also severed links
+          // to policy-hidden nodes. Without policies there is no predicate
+          // and the Cypher is unchanged.
+          const blanketTarget = `target_${fieldName}_${si}`;
+          const predicate = targetNodeDef
+            ? this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                blanketTarget,
+                params,
+                policyContext,
+                paramCounter,
+              )
+            : undefined;
           const pattern = buildRelPattern({
             sourceVar: 'n',
             relDef,
-            targetVar: '',
+            targetVar: predicate ? blanketTarget : '',
             edgeVar: relVar,
           });
           lines.push(`OPTIONAL MATCH ${pattern}`);
+          if (predicate) lines.push(`WHERE ${predicate}`);
           lines.push(`DELETE ${relVar}`);
         } else {
           // Specific disconnect with conditions
@@ -1882,13 +1898,25 @@ export class MutationCompiler {
             lines.push(withClause);
 
             if (!whereSpec || Object.keys(whereSpec).length === 0) {
+              // Blanket — same read-policy gate as the top-level blanket
+              // disconnect: only unlink targets the caller can read.
+              const blanketTarget = `${sourceVar}_disc${varCounter}`;
+              const predicate = this.buildTargetPolicyPredicate(
+                targetNodeDef,
+                blanketTarget,
+                params,
+                policyContext,
+                paramCounter,
+              );
+              if (predicate) varCounter++;
               const pattern = buildRelPattern({
                 sourceVar,
                 relDef,
-                targetVar: '',
+                targetVar: predicate ? blanketTarget : '',
                 edgeVar: relVar,
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
+              if (predicate) lines.push(`WHERE ${predicate}`);
               lines.push(`DELETE ${relVar}`);
             } else {
               const discTarget = `${sourceVar}_disc${varCounter}`;

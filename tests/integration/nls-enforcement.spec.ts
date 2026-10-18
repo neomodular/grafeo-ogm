@@ -153,6 +153,71 @@ describeLive('NLS enforcement — live Neo4j', () => {
     });
   });
 
+  // --- v2.5.0: blanket disconnect honours the target read policy ---------
+  // `disconnect: [{}]` bound an anonymous target and severed links to
+  // policy-HIDDEN charts too, while a `where`-scoped disconnect of the same
+  // chart was (correctly) blocked.
+
+  describe('blanket disconnect — target read policy', () => {
+    async function seedTag(tag: string): Promise<void> {
+      await run(
+        `CREATE (t:ItTag {id: $t, runId: $runId})
+         CREATE (pub:ItResource:ItChart {id: $pub, runId: $runId, secret: false, ownerId: 'u1', tenantId: 't1'})
+         CREATE (sec:ItResource:ItChart {id: $sec, runId: $runId, secret: true, ownerId: 'u1', tenantId: 't1'})
+         CREATE (t)-[:IT_TAGS]->(pub), (t)-[:IT_TAGS]->(sec)`,
+        { t: id(`${tag}-tag`), pub: id(`${tag}-pub`), sec: id(`${tag}-sec`) },
+      );
+    }
+
+    it('top-level `disconnect: [{}]` unlinks only visible charts', async () => {
+      await seedTag('bd-top');
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: id('bd-top-tag') },
+          disconnect: { charts: [{}] },
+        });
+      expect(await linked(id('bd-top-tag'), 'IT_TAGS', id('bd-top-pub'))).toBe(
+        false,
+      );
+      expect(await linked(id('bd-top-tag'), 'IT_TAGS', id('bd-top-sec'))).toBe(
+        true,
+      );
+    });
+
+    it('nested `update: { charts: [{ disconnect: [{}] }] }` unlinks only visible charts', async () => {
+      await seedTag('bd-nested');
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: id('bd-nested-tag') },
+          update: { charts: [{ disconnect: [{}] }] },
+        });
+      expect(
+        await linked(id('bd-nested-tag'), 'IT_TAGS', id('bd-nested-pub')),
+      ).toBe(false);
+      expect(
+        await linked(id('bd-nested-tag'), 'IT_TAGS', id('bd-nested-sec')),
+      ).toBe(true);
+    });
+
+    it('without policies, a blanket disconnect still unlinks everything', async () => {
+      await seedTag('bd-nopol');
+      await new OGM({ typeDefs, driver })
+        .model('ItTag')
+        .update({
+          where: { id: id('bd-nopol-tag') },
+          disconnect: { charts: [{}] },
+        });
+      expect(
+        await linked(id('bd-nopol-tag'), 'IT_TAGS', id('bd-nopol-pub')),
+      ).toBe(false);
+      expect(
+        await linked(id('bd-nopol-tag'), 'IT_TAGS', id('bd-nopol-sec')),
+      ).toBe(false);
+    });
+  });
+
   // --- H4: cascade delete ---------------------------------------------------
 
   describe('H4 — cascade delete', () => {
