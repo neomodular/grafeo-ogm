@@ -203,4 +203,79 @@ describe('planSchemaSync (cli-db-push spec)', () => {
       1,
     );
   });
+
+  // v2.4.8 — every in-sync grafeo constraint also appears in SHOW INDEXES
+  // as its backing RANGE index (owningConstraint set). Pre-2.4.8 those rows
+  // were listed as "Unmanaged — ignored" on every rerun.
+  describe('constraint-backed index rows', () => {
+    it('are not reported as unmanaged (owningConstraint set)', () => {
+      const live: LiveSchema = {
+        constraints: [uniq('Book', 'id'), uniq('Author', 'id')],
+        indexes: [
+          { name: 'BookSearch', type: 'FULLTEXT' },
+          {
+            name: 'Book_id_unique',
+            type: 'RANGE',
+            labelsOrTypes: ['Book'],
+            properties: ['id'],
+            owningConstraint: 'Book_id_unique',
+          },
+          {
+            name: 'Author_id_unique',
+            type: 'RANGE',
+            labelsOrTypes: ['Author'],
+            properties: ['id'],
+            owningConstraint: 'Author_id_unique',
+          },
+        ],
+      };
+
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), live);
+      expect(plan.unmanaged).toEqual([]);
+      expect(plan.create).toEqual([]);
+    });
+
+    it('are not reported when only the name ties them to a live constraint', () => {
+      // A server that does not expose `owningConstraint`.
+      const live: LiveSchema = {
+        constraints: [uniq('Book', 'id'), uniq('Author', 'id')],
+        indexes: [
+          { name: 'BookSearch', type: 'FULLTEXT' },
+          { name: 'Book_id_unique', type: 'RANGE' },
+          { name: 'Author_id_unique', type: 'RANGE' },
+        ],
+      };
+
+      expect(planSchemaSync(parseSchema(BOOK_AUTHOR), live).unmanaged).toEqual(
+        [],
+      );
+    });
+
+    it('still reports a DBA constraint (not its backing index) as unmanaged', () => {
+      const live: LiveSchema = {
+        constraints: [
+          uniq('Book', 'id'),
+          uniq('Author', 'id'),
+          {
+            name: 'dba_title_unique',
+            type: 'UNIQUENESS',
+            labelsOrTypes: ['Other'],
+            properties: ['title'],
+          },
+        ],
+        indexes: [
+          { name: 'BookSearch', type: 'FULLTEXT' },
+          {
+            name: 'dba_title_unique',
+            type: 'RANGE',
+            owningConstraint: 'dba_title_unique',
+          },
+        ],
+      };
+
+      expect(planSchemaSync(parseSchema(BOOK_AUTHOR), live).unmanaged).toEqual([
+        'dba_title_unique',
+      ]);
+    });
+  });
 });

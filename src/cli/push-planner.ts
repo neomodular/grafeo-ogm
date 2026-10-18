@@ -39,6 +39,12 @@ export interface LiveSchemaItem {
   labelsOrTypes?: string[];
   /** SHOW `properties` column, when the server exposes it. */
   properties?: string[];
+  /**
+   * SHOW INDEXES `owningConstraint` column — set on the index that backs a
+   * constraint. Such a row is part of the constraint, not an index of its
+   * own (v2.4.8).
+   */
+  owningConstraint?: string;
 }
 
 export interface LiveSchema {
@@ -144,6 +150,12 @@ export function planSchemaSync(
   for (const index of live.indexes) {
     if (desiredIndexNames.has(index.name)) continue;
     if (index.type === 'LOOKUP') continue;
+    // v2.4.8 — a constraint's backing index is reported by SHOW INDEXES
+    // too. It is accounted for with its constraint (in sync, orphan or
+    // unmanaged), so listing it again made every in-sync grafeo constraint
+    // show up as "Unmanaged — ignored" on rerun. Matching the live
+    // constraint name covers servers without `owningConstraint`.
+    if (index.owningConstraint || liveConstraintNames.has(index.name)) continue;
     unmanaged.push(index.name);
   }
 

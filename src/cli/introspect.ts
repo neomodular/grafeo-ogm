@@ -36,7 +36,23 @@ function toLiveItem(record: {
   const props = stringList(record, 'properties');
   if (labels) item.labelsOrTypes = labels;
   if (props) item.properties = props;
+  // v2.4.8 — SHOW INDEXES only: the constraint a backing index belongs to.
+  const owner = optionalGet(record, 'owningConstraint');
+  if (typeof owner === 'string' && owner.length > 0)
+    item.owningConstraint = owner;
   return item;
+}
+
+/** `record.get(key)`, or undefined when the server has no such column. */
+function optionalGet(
+  record: { get(key: string): unknown },
+  key: string,
+): unknown {
+  try {
+    return record.get(key);
+  } catch {
+    return undefined;
+  }
 }
 
 function stringList(
