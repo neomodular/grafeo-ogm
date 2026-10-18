@@ -1557,7 +1557,17 @@ export class MutationCompiler {
         const paramName = `${varPrefix}connect_${tag}`;
         // Strip undefined values from edge objects — Neo4j driver drops undefined,
         // causing param mismatches when the Cypher references nested edge properties.
-        params[paramName] = (spec as Record<string, unknown>[]).map((item) => {
+        params[paramName] = (spec as Record<string, unknown>[]).map((raw) => {
+          // The WHERE reads `connItem.where.node.<key>`, so a bare-property
+          // where (`{ where: { title } }`, which the fast path accepts) is
+          // rebound under `node`. Pre-2.5.0 it was sent as-is: every lookup
+          // was null, so the array connect silently linked nothing.
+          const where = raw.where;
+          const item =
+            isPlainObject(where) &&
+            !Object.keys(where).some((k) => CONNECTION_WHERE_KEYS.has(k))
+              ? { ...raw, where: { node: where } }
+              : raw;
           const edge = item.edge as Record<string, unknown> | undefined;
           if (!edge) return item;
           const cleaned: Record<string, unknown> = {};

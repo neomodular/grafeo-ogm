@@ -292,4 +292,21 @@ describeLive('Write paths — live Neo4j', () => {
       expect(await linked('o-t2', 'LC_HAS_MEDIA')).toEqual(['book-t2']);
     });
   });
+
+  describe('array connect with a bare-property where', () => {
+    it('links every item, like the { node } shape', async () => {
+      await seed(
+        `CREATE (:LcOwner {id: randomUUID(), runId: $runId, name: 'o-b1'})
+         CREATE (:LcPost {id: randomUUID(), runId: $runId, title: 'p-b1'})
+         CREATE (:LcPost {id: randomUUID(), runId: $runId, title: 'q-b1'})`,
+      );
+      await Owner().update({
+        where: { name: 'o-b1' },
+        connect: {
+          posts: [{ where: { title: 'p-b1' } }, { where: { title: 'q-b1' } }],
+        },
+      });
+      expect(await linked('o-b1', 'LC_WROTE')).toEqual(['p-b1', 'q-b1']);
+    });
+  });
 });

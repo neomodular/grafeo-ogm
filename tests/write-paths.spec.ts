@@ -468,3 +468,39 @@ describe('top-level connect / disconnect on abstract relationships (v2.5.0)', ()
     });
   });
 });
+
+describe('array connect with a bare-property where (v2.5.0)', () => {
+  it('binds each item under where.node, the path the UNWIND WHERE reads', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: {
+          posts: [{ where: { title: 'a' } }, { where: { title: 'b' } }],
+        },
+      });
+    const { cypher, params } = recorded[0];
+    expect(cypher).toContain('UNWIND $connect_posts AS connItem');
+    expect(cypher).toContain(
+      'WHERE target.`title` = connItem.where.node.title',
+    );
+    expect(params.connect_posts).toEqual([
+      { where: { node: { title: 'a' } } },
+      { where: { node: { title: 'b' } } },
+    ]);
+  });
+
+  it('leaves the { node } shape untouched', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: { posts: [{ where: { node: { title: 'a' } } }] },
+      });
+    expect(recorded[0].params.connect_posts).toEqual([
+      { where: { node: { title: 'a' } } },
+    ]);
+  });
+});
