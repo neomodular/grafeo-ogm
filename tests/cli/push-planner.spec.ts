@@ -400,4 +400,64 @@ describe('planSchemaSync (cli-db-push spec)', () => {
       expect(plan.inSync.map((s) => s.name)).toContain('DocEmbedding');
     });
   });
+
+  // v2.4.8 — a constraint was matched by name only. An equivalent one under
+  // another name (a DBA's) made `CREATE CONSTRAINT … IF NOT EXISTS` a silent
+  // no-op, yet push planned — and claimed — "created X" on every run.
+  describe('equivalent and blocking live items', () => {
+    const dbaBookId: LiveSchemaItem = {
+      name: 'sx_dba_book_id',
+      type: 'UNIQUENESS',
+      entityType: 'NODE',
+      labelsOrTypes: ['Book'],
+      properties: ['id'],
+    };
+
+    it('treats an equivalent constraint under another name as in sync', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [dbaBookId, uniq('Author', 'id')],
+        indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
+      });
+
+      expect(plan.create).toEqual([]);
+      expect(plan.inSync.map((s) => s.name)).toContain('Book_id_unique');
+      expect(plan.covered.map((c) => [c.statement.name, c.by])).toEqual([
+        ['Book_id_unique', 'sx_dba_book_id'],
+      ]);
+    });
+
+    it('does not count a constraint on another label or property as equivalent', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [
+          { ...dbaBookId, labelsOrTypes: ['Novel'] },
+          { ...dbaBookId, name: 'x2', properties: ['title'] },
+          { ...dbaBookId, name: 'x3', type: 'NODE_PROPERTY_EXISTENCE' },
+        ],
+        indexes: [],
+      });
+      expect(plan.create.map((s) => s.name)).toContain('Book_id_unique');
+      expect(plan.covered).toEqual([]);
+    });
+
+    it('reports a plain RANGE index on the property as blocking the constraint', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [uniq('Author', 'id')],
+        indexes: [
+          { name: 'BookSearch', type: 'FULLTEXT' },
+          {
+            name: 'dba_book_id_range',
+            type: 'RANGE',
+            entityType: 'NODE',
+            labelsOrTypes: ['Book'],
+            properties: ['id'],
+          },
+        ],
+      });
+
+      expect(plan.create.map((s) => s.name)).not.toContain('Book_id_unique');
+      expect(plan.blocked.map((b) => [b.statement.name, b.by])).toEqual([
+        ['Book_id_unique', 'dba_book_id_range'],
+      ]);
+    });
+  });
 });

@@ -59,7 +59,11 @@ function parseDbPushFlags(argv: string[]): DbPushFlags {
  */
 function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
   if (plan.create.length === 0)
-    if (plan.orphans.length === 0 && plan.changed.length === 0)
+    if (
+      plan.orphans.length === 0 &&
+      plan.changed.length === 0 &&
+      plan.blocked.length === 0
+    )
       // Only claim a clean "in sync" when there is genuinely nothing to do —
       // outstanding orphans or changed definitions mean it is not in sync.
       io.out('✓ No changes — constraints and indexes are in sync');
@@ -73,6 +77,13 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
       io.out(`      ${statement.cypher}`);
     }
   }
+
+  // v2.4.8 — an equivalent constraint under another name satisfies the SDL;
+  // say which one, instead of "creating" it on every run.
+  for (const cover of plan.covered)
+    io.out(
+      `  = ${cover.statement.name} covered by ${safeDisplay(cover.by)} (equivalent constraint)`,
+    );
 
   // v2.4.8 — a changed definition used to be reported "in sync". Under
   // --force-drop it is dropped and recreated; otherwise it is left alone
@@ -155,12 +166,43 @@ async function applyCreates(
   const session = driver.session(database ? { database } : undefined);
   try {
     for (const statement of plan.create) {
-      await session.run(statement.cypher);
-      io.out(`✓ created ${statement.name}`);
+      let result: Awaited<ReturnType<typeof session.run>>;
+      try {
+        result = await session.run(statement.cypher);
+      } catch (error) {
+        // v2.4.8 — an existing schema rule the plan could not see (a race,
+        // or a server that hides definition columns) used to crash the
+        // whole push with exit 1. Report it and carry on with the rest.
+        if (!isSchemaAlreadyExists(error)) throw error;
+        io.err(
+          `warning: ${statement.name} not created — ${safeDisplay((error as Error).message)}`,
+        );
+        continue;
+      }
+      // v2.4.8 — `IF NOT EXISTS` is a silent no-op when an equivalent rule
+      // exists; only claim "created" when Neo4j says something was added.
+      const updates = result?.summary?.counters?.updates?.();
+      if (
+        updates &&
+        (updates.constraintsAdded ?? 0) + (updates.indexesAdded ?? 0) === 0
+      )
+        io.out(
+          `= ${statement.name} not created — Neo4j reports an equivalent constraint or index already exists`,
+        );
+      else io.out(`✓ created ${statement.name}`);
     }
   } finally {
     await session.close();
   }
+}
+
+/** `Neo.ClientError.Schema.*AlreadyExists` (index / constraint / equivalent rule). */
+function isSchemaAlreadyExists(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return (
+    typeof code === 'string' &&
+    /^Neo\.ClientError\.Schema\.\w*AlreadyExists$/.test(code)
+  );
 }
 
 async function applyDrops(
@@ -215,6 +257,16 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
 
     // `@vector` indexes without dimensions are reported, never silently
     // skipped, and never block the rest of the plan.
+    // v2.4.8 — Neo4j refuses a unique constraint over a property a plain
+    // RANGE index already covers. Report it (the index is not grafeo's to
+    // drop) instead of letting the CREATE crash the whole push.
+    for (const block of plan.blocked)
+      io.err(
+        `warning: ${block.statement.name} not created — index "${safeDisplay(block.by)}" ` +
+          `already covers the same label and property, and Neo4j will not add a ` +
+          `unique constraint until that index is dropped. Schema is NOT in sync.`,
+      );
+
     for (const needs of plan.needsConfig)
       io.err(
         `warning: vector index "${needs.indexName}" ` +

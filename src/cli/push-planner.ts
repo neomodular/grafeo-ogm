@@ -78,6 +78,29 @@ export interface PushPlanChange {
   dropCypher: string;
 }
 
+/**
+ * A desired unique constraint satisfied by an equivalent live constraint
+ * under another name (v2.4.8) — e.g. a DBA's `sx_dba_isbn` on
+ * `(:Book).isbn`. Neo4j treats `CREATE CONSTRAINT Book_isbn_unique IF NOT
+ * EXISTS` as a no-op then, so it is in sync, not something to create.
+ */
+export interface PushPlanCovered {
+  statement: SchemaStatement;
+  /** Live constraint name (from introspection — sanitize before printing). */
+  by: string;
+}
+
+/**
+ * A desired unique constraint Neo4j will refuse to create because a plain
+ * index already covers the same label + property (v2.4.8). grafeo never
+ * drops an index it does not manage, so it is reported, not attempted.
+ */
+export interface PushPlanBlocked {
+  statement: SchemaStatement;
+  /** Live index name (from introspection — sanitize before printing). */
+  by: string;
+}
+
 export interface PushPlan {
   /** Declared in SDL, missing in the database. */
   create: SchemaStatement[];
@@ -85,6 +108,10 @@ export interface PushPlan {
   inSync: SchemaStatement[];
   /** Declared in SDL, present by name, but with a different definition. */
   changed: PushPlanChange[];
+  /** Subset of `inSync` satisfied by an equivalent item under another name. */
+  covered: PushPlanCovered[];
+  /** Declared in SDL, missing, and not creatable as the database stands. */
+  blocked: PushPlanBlocked[];
   /**
    * Present in the database, attributable to grafeo by naming convention
    * (`{Label}_{prop}_unique` over a label the schema still defines), but
@@ -137,12 +164,37 @@ export function planSchemaSync(
   const create: SchemaStatement[] = [];
   const inSync: SchemaStatement[] = [];
   const changed: PushPlanChange[] = [];
+  const covered: PushPlanCovered[] = [];
+  const blocked: PushPlanBlocked[] = [];
   for (const statement of desired) {
     const isConstraint = statement.kind === 'unique-constraint';
     const present = isConstraint
       ? liveConstraintNames.has(statement.name)
       : liveIndexNames.has(statement.name);
     if (!present) {
+      const definition = definitions.get(statement.name);
+      if (isConstraint && definition) {
+        // v2.4.8 — match by definition, not only by name.
+        const equivalent = live.constraints.find(
+          (c) => c.type === 'UNIQUENESS' && sameSchema(definition, c),
+        );
+        if (equivalent) {
+          inSync.push(statement);
+          covered.push({ statement, by: equivalent.name });
+          continue;
+        }
+        const blocker = live.indexes.find(
+          (i) =>
+            i.type === 'RANGE' &&
+            !i.owningConstraint &&
+            !liveConstraintNames.has(i.name) &&
+            sameSchema(definition, i),
+        );
+        if (blocker) {
+          blocked.push({ statement, by: blocker.name });
+          continue;
+        }
+      }
       create.push(statement);
       continue;
     }
@@ -214,6 +266,8 @@ export function planSchemaSync(
     create,
     inSync,
     changed,
+    covered,
+    blocked,
     orphans,
     // Dedup: a name can surface in both SHOW CONSTRAINTS and SHOW INDEXES.
     unmanaged: Array.from(new Set(unmanaged)),
@@ -357,6 +411,19 @@ function diffDefinition(
       );
   }
   return diffs;
+}
+
+/**
+ * Same entity, labels and properties? Requires the live row to report its
+ * definition columns — without them nothing is ever called equivalent.
+ */
+function sameSchema(want: DesiredDefinition, live: LiveSchemaItem): boolean {
+  if (!live.labelsOrTypes || !live.properties) return false;
+  if (live.entityType && live.entityType !== want.entityType) return false;
+  return (
+    sameList(live.labelsOrTypes, want.labelsOrTypes) &&
+    sameList(live.properties, want.properties)
+  );
 }
 
 function sameList(

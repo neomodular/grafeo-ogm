@@ -395,4 +395,108 @@ describe('grafeo db push (cli-db-push spec)', () => {
       expect(wrote(mock.runs)).toHaveLength(0);
     });
   });
+
+  // v2.4.8 — "created X" was printed for every CREATE that ran, even when
+  // Neo4j created nothing; a blocking RANGE index crashed the push.
+  describe('create outcomes', () => {
+    function driverWith(
+      live: LiveSchema,
+      onCreate: (cypher: string) => unknown,
+    ): MockDriver {
+      const mock = makeDriver(live);
+      const session = (mock.driver.session as jest.Mock)();
+      const base = session.run.getMockImplementation();
+      session.run.mockImplementation(async (cypher: string) => {
+        if (cypher.startsWith('CREATE')) {
+          mock.runs.push(cypher);
+          return onCreate(cypher);
+        }
+        return base(cypher);
+      });
+      return mock;
+    }
+    const counters = (added: number) => ({
+      records: [],
+      summary: {
+        counters: {
+          updates: () => ({ constraintsAdded: added, indexesAdded: 0 }),
+        },
+      },
+    });
+    const ONLY_AUTHOR: LiveSchema = {
+      constraints: [ALL_IN_SYNC.constraints[1]],
+      indexes: ALL_IN_SYNC.indexes,
+    };
+
+    it('does not claim "created" when Neo4j reports nothing was added', async () => {
+      const mock = driverWith(ONLY_AUTHOR, () => counters(0));
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush([], io)).toBe(0);
+      const out = io.stdout.join('\n');
+      expect(out).not.toContain('✓ created Book_id_unique');
+      expect(out).toMatch(/Book_id_unique.*already/);
+    });
+
+    it('still says "created" when Neo4j reports the constraint was added', async () => {
+      const mock = driverWith(ONLY_AUTHOR, () => counters(1));
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush([], io)).toBe(0);
+      expect(io.stdout.join('\n')).toContain('✓ created Book_id_unique');
+    });
+
+    it('reports an equivalent constraint under another name as covering it, and runs no CREATE', async () => {
+      const mock = makeDriver({
+        constraints: [
+          {
+            name: 'sx_dba_book_id',
+            type: 'UNIQUENESS',
+            labelsOrTypes: ['Book'],
+            properties: ['id'],
+          },
+          ALL_IN_SYNC.constraints[1],
+        ],
+        indexes: ALL_IN_SYNC.indexes,
+      });
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush([], io)).toBe(0);
+      expect(io.stdout.join('\n')).toContain(
+        'Book_id_unique covered by sx_dba_book_id',
+      );
+      expect(wrote(mock.runs)).toEqual([]);
+    });
+
+    it('reports a "schema rule already exists" failure instead of crashing', async () => {
+      const mock = driverWith(
+        { constraints: [], indexes: [] },
+        (cypher: string) => {
+          if (cypher.includes('Book_id_unique'))
+            throw Object.assign(
+              new Error('There already exists an index (:Book {id}).'),
+              {
+                code: 'Neo.ClientError.Schema.IndexAlreadyExists',
+              },
+            );
+          return counters(1);
+        },
+      );
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush([], io)).toBe(0);
+      expect(io.stderr.join('\n')).toMatch(/Book_id_unique/);
+      // The rest of the plan still applied.
+      expect(io.stdout.join('\n')).toContain('✓ created Author_id_unique');
+    });
+
+    it('still fails on any other error', async () => {
+      const mock = driverWith({ constraints: [], indexes: [] }, () => {
+        throw Object.assign(new Error('boom'), {
+          code: 'Neo.ClientError.Security.Forbidden',
+        });
+      });
+      await expect(runDbPush([], makeIO(mock.driver))).rejects.toThrow('boom');
+    });
+  });
 });
