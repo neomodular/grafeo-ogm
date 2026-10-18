@@ -189,6 +189,7 @@ export class SelectionCompiler {
               `${escapeIdentifier(node.fieldName)}: ${buildInlineCypherFieldExpr(
                 propDef.cypherStatement,
                 nodeVar,
+                `${nodeDef.typeName}.${node.fieldName}`,
               )}`,
             );
 

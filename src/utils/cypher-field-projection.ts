@@ -1,3 +1,4 @@
+import { OGMError } from '../errors';
 import type { PropertyDefinition } from '../schema/types';
 import { assertSafeIdentifier, escapeIdentifier } from './validation';
 
@@ -53,8 +54,46 @@ export function buildCypherFieldCall(
 export function buildInlineCypherFieldExpr(
   statement: string,
   nodeVar: string,
+  /**
+   * `Type.field`, for the error raised when the statement aggregates.
+   * v2.5.0 — optional so ad-hoc callers keep compiling.
+   */
+  fieldLabel?: string,
 ): string {
+  if (fieldLabel !== undefined)
+    assertInlineableCypherField(fieldLabel, statement);
   return `head(COLLECT { WITH ${nodeVar} AS this\n  ${statement}\n})`;
+}
+
+/**
+ * Cypher's aggregating functions, as a call (`count(`, not the `COUNT {`
+ * subquery expression, which does not aggregate the enclosing query).
+ */
+const AGGREGATING_CALL =
+  /\b(?:avg|collect|count|max|min|percentileCont|percentileDisc|stDev|stDevP|sum)\s*\(/i;
+
+/**
+ * Refuse an aggregating `@cypher` statement where it would be projected
+ * inline (v2.5.0). Neo4j 5 rejects ANY aggregating subquery expression
+ * nested inside a projection that also references outer variables —
+ * "Aggregation column contains implicit grouping expressions" — and fails
+ * the whole query. Verified on 5.26 for `head(COLLECT { ... })`, an inner
+ * `CALL { }`, `CALL (this) { }`, `WITH count(x) AS c` and a COLLECT in
+ * place of the pattern comprehension: none parse. Pre-2.5.0 the query
+ * reached the server and failed with that opaque error; the top-level
+ * CALL-prelude projection is unaffected and keeps working.
+ */
+export function assertInlineableCypherField(
+  fieldLabel: string,
+  statement: string,
+): void {
+  if (!AGGREGATING_CALL.test(statement)) return;
+  throw new OGMError(
+    `@cypher field "${fieldLabel}" aggregates in its statement, so it can only be selected at the top level of a query. ` +
+      `Neo4j 5 rejects aggregating subqueries nested inside a projection ("Aggregation column contains implicit grouping expressions"), ` +
+      `which is how a @cypher field selected through a relationship is projected. Select it on its own model instead, ` +
+      `or rewrite the statement without an aggregating function.`,
+  );
 }
 
 /**

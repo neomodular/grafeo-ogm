@@ -1,7 +1,10 @@
 import {
+  assertInlineableCypherField,
   buildCypherFieldCall,
+  buildInlineCypherFieldExpr,
   CypherFieldScope,
 } from '../src/utils/cypher-field-projection';
+import { OGMError } from '../src/errors';
 import type { PropertyDefinition } from '../src/schema/types';
 
 function cypherProp(
@@ -163,5 +166,34 @@ describe('CypherFieldScope', () => {
     expect(() =>
       scope.register('foo', cypherProp('foo', 'RETURN 1 AS bar', 'bar; --')),
     ).toThrow(/Invalid identifier/);
+  });
+});
+
+describe('inline @cypher projection of aggregating statements (v2.5.0)', () => {
+  it.each([
+    'MATCH (this)-[:W]->(p) RETURN count(p) AS c',
+    'MATCH (this)-[:W]->(p) RETURN count(*) AS c',
+    'MATCH (this)-[:W]->(p) RETURN size(collect(p)) AS c',
+    'MATCH (this)-[:W]->(p) WITH sum(p.x) AS s RETURN s AS c',
+    'MATCH (this)-[:W]->(p) RETURN AVG (p.x) AS c',
+  ])('refuses %s', (stmt) => {
+    expect(() => assertInlineableCypherField('User.c', stmt)).toThrow(OGMError);
+    expect(() => buildInlineCypherFieldExpr(stmt, 'n0', 'User.c')).toThrow(
+      /"User\.c" aggregates .* only be selected at the top level/,
+    );
+  });
+
+  it.each([
+    'RETURN this.rank * 10 AS c',
+    'RETURN COUNT { (this)-[:W]->() } AS c',
+    'MATCH (this)-[:W]->(p) RETURN p.counter AS c',
+  ])('accepts %s', (stmt) => {
+    expect(() => assertInlineableCypherField('User.c', stmt)).not.toThrow();
+  });
+
+  it('without a field label the expression builds as before', () => {
+    expect(buildInlineCypherFieldExpr('RETURN count(*) AS c', 'n0')).toBe(
+      'head(COLLECT { WITH n0 AS this\n  RETURN count(*) AS c\n})',
+    );
   });
 });
