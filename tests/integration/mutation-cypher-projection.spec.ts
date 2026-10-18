@@ -105,6 +105,20 @@ describeLive('Mutation @cypher projection — live Neo4j', () => {
     expect(rows(res)[0].fullName).toBe('Ada Lovelace');
   });
 
+  it('create() with several inputs projects a @cypher field on each (#12)', async () => {
+    const res = await ogm.model('ItPerson').create({
+      input: [
+        { runId, givenName: 'Ken', familyName: 'Thompson' },
+        { runId, givenName: 'Dennis', familyName: 'Ritchie' },
+      ],
+      select: { [plural]: { fullName: true } },
+    });
+    expect(rows(res).map((r) => r.fullName)).toEqual([
+      'Ken Thompson',
+      'Dennis Ritchie',
+    ]);
+  });
+
   it('create() with selectionSet projects a @cypher field', async () => {
     const res = await ogm.model('ItPerson').create({
       input: [{ runId, givenName: 'Grace', familyName: 'Hopper' }],

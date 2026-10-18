@@ -244,6 +244,52 @@ describeLive('Mutation row cardinality — live Neo4j', () => {
     expect(res[plural]).toEqual([{ id: bookId, title: 'empty-connect' }]);
   });
 
+  // #12 — a multi-input create returned only the first created node.
+  it('create with several inputs returns every node, in order', async () => {
+    const res = (await ogm.model('ItCardBook').create({
+      input: [
+        { id: id('multi-1'), runId, title: 'one' },
+        { id: id('multi-2'), runId, title: 'two' },
+        { id: id('multi-3'), runId, title: 'three' },
+      ],
+      select: { [plural]: { id: true, title: true } },
+    })) as Row;
+    expect(res[plural]).toEqual([
+      { id: id('multi-1'), title: 'one' },
+      { id: id('multi-2'), title: 'two' },
+      { id: id('multi-3'), title: 'three' },
+    ]);
+  });
+
+  it('create with several inputs and nested creates returns every root once', async () => {
+    const res = (await ogm.model('ItCardBook').create({
+      input: [
+        {
+          id: id('mn-1'),
+          runId,
+          chapters: {
+            create: [
+              { node: { id: id('mn-1-a'), runId } },
+              { node: { id: id('mn-1-b'), runId } },
+            ],
+          },
+        },
+        {
+          id: id('mn-2'),
+          runId,
+          chapters: { create: [{ node: { id: id('mn-2-a'), runId } }] },
+        },
+      ],
+      selectionSet: `{ ${plural} { id chapters { id } } }`,
+    })) as Row;
+    const books = res[plural] as { id: string; chapters: { id: string }[] }[];
+    expect(books.map((b) => b.id)).toEqual([id('mn-1'), id('mn-2')]);
+    expect(books[0].chapters.map((c) => c.id).sort()).toEqual(
+      [id('mn-1-a'), id('mn-1-b')].sort(),
+    );
+    expect(books[1].chapters.map((c) => c.id)).toEqual([id('mn-2-a')]);
+  });
+
   it('disconnect on a node with no relationships still returns it', async () => {
     const bookId = await seedBook('empty', 0);
     const res = (await ogm.model('ItCardBook').update({
