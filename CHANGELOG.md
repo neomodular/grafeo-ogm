@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.6 (2026-10-18) — `searchByPhrase` works
+
+### 🐛 `searchByPhrase` called a function as a procedure ([#13](https://github.com/neomodular/grafeo-ogm/issues/13))
+
+`searchByPhrase` emitted `CALL genai.vector.encode(…) YIELD vector`. In the GenAI plugin, `genai.vector.encode` is a **function**: the plugin's procedures are only `genai.vector.encodeBatch` and `genai.vector.listEncodingProviders`. So every call failed with `There is no procedure with the name 'genai.vector.encode' registered`. The embedding is now computed in a `WITH genai.vector.encode(…) AS __v_encoded_N` ahead of the `db.index.vector.queryNodes` call. `searchByVector` is unchanged.
+
+A new opt-in live suite, `tests/integration/vector-phrase.spec.ts`, runs when `NEO4J_GENAI_URI` points at a server with the GenAI plugin, for example `neo4j:5.26` with `NEO4J_PLUGINS=["genai"]`. It never contacts an embedding provider: an empty provider config makes the plugin fail locally, and the test asserts that this config error is what comes back, not the missing-procedure error.
+
 ## 2.3.5 (2026-10-18) — `create` with several inputs returns every node
 
 ### 🐛 Only the first created node was returned ([#12](https://github.com/neomodular/grafeo-ogm/issues/12))
