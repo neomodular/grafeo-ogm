@@ -1,6 +1,6 @@
 // Main classes
 export { OGM, OGMWithContext } from './ogm';
-export type { OGMConfig } from './ogm';
+export type { OGMConfig, TransactionOptions } from './ogm';
 /** @deprecated Use OGM instead */
 export { OGM as SafedoseOGM } from './ogm';
 export { Model, isFulltextLeaf, isFulltextIndexEntry } from './model';
