@@ -1,4 +1,4 @@
-import type { Driver } from 'neo4j-driver';
+import { isInt, type Driver } from 'neo4j-driver';
 import type { LiveSchema, LiveSchemaItem } from './push-planner';
 
 /**
@@ -40,6 +40,11 @@ function toLiveItem(record: {
   const owner = optionalGet(record, 'owningConstraint');
   if (typeof owner === 'string' && owner.length > 0)
     item.owningConstraint = owner;
+  // v2.4.8 — definition detail for the planner's "changed" check.
+  const entityType = optionalGet(record, 'entityType');
+  if (typeof entityType === 'string') item.entityType = entityType;
+  const indexConfig = readIndexConfig(optionalGet(record, 'options'));
+  if (indexConfig) item.indexConfig = indexConfig;
   return item;
 }
 
@@ -53,6 +58,26 @@ function optionalGet(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * `options.indexConfig` as a plain object, with neo4j `Integer` / bigint
+ * values converted to numbers so the planner can compare dimensions.
+ */
+function readIndexConfig(
+  options: unknown,
+): Record<string, unknown> | undefined {
+  if (!options || typeof options !== 'object') return undefined;
+  const config = (options as { indexConfig?: unknown }).indexConfig;
+  if (!config || typeof config !== 'object') return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config as object))
+    out[key] = isInt(value)
+      ? value.toNumber()
+      : typeof value === 'bigint'
+        ? Number(value)
+        : value;
+  return out;
 }
 
 function stringList(
@@ -72,7 +97,7 @@ function stringList(
 
 /**
  * Fetch the live constraint/index state for the push planner. Read-only —
- * runs exactly `SHOW CONSTRAINTS` and `SHOW INDEXES`.
+ * runs exactly `SHOW CONSTRAINTS` and `SHOW INDEXES YIELD *`.
  */
 export async function fetchLiveSchema(
   driver: Driver,
@@ -81,7 +106,9 @@ export async function fetchLiveSchema(
   const session = driver.session(database ? { database } : undefined);
   try {
     const constraintsResult = await session.run('SHOW CONSTRAINTS');
-    const indexesResult = await session.run('SHOW INDEXES');
+    // `YIELD *` (v2.4.8): the default SHOW INDEXES columns omit `options`,
+    // which carries the vector dimensions / similarity the planner compares.
+    const indexesResult = await session.run('SHOW INDEXES YIELD *');
     return {
       constraints: constraintsResult.records
         .map(toLiveItem)

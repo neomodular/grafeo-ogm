@@ -59,9 +59,9 @@ function parseDbPushFlags(argv: string[]): DbPushFlags {
  */
 function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
   if (plan.create.length === 0)
-    if (plan.orphans.length === 0)
+    if (plan.orphans.length === 0 && plan.changed.length === 0)
       // Only claim a clean "in sync" when there is genuinely nothing to do —
-      // outstanding orphans mean the schema is not in sync.
+      // outstanding orphans or changed definitions mean it is not in sync.
       io.out('✓ No changes — constraints and indexes are in sync');
     else io.out('No constraints or indexes to create.');
   else {
@@ -71,6 +71,28 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
     for (const statement of plan.create) {
       io.out(`  + ${statement.name}`);
       io.out(`      ${statement.cypher}`);
+    }
+  }
+
+  // v2.4.8 — a changed definition used to be reported "in sync". Under
+  // --force-drop it is dropped and recreated; otherwise it is left alone
+  // and the output says plainly that the schema is NOT in sync.
+  if (plan.changed.length > 0) {
+    if (willDrop)
+      io.out(
+        `Changed — ${plan.changed.length} index definition(s) differ from the SDL; eligible to recreate (--force-drop):`,
+      );
+    else
+      io.out(
+        `Changed — ${plan.changed.length} index definition(s) differ from the SDL — schema is NOT in sync (kept as-is; use --force-drop to recreate):`,
+      );
+    for (const change of plan.changed) {
+      io.out(`  ~ ${change.statement.name}`);
+      for (const diff of change.differences) io.out(`      ${diff}`);
+      if (willDrop) {
+        io.out(`      ${change.dropCypher}`);
+        io.out(`      ${change.statement.cypher}`);
+      }
     }
   }
 
@@ -116,7 +138,7 @@ async function resolveDropConsent(
     // Strict `=== true`: only an explicit boolean true consents, so a
     // misbehaving embedder returning a truthy non-boolean can't authorize a drop.
     return (await io.confirm(
-      `Drop the ${plan.orphans.length} item(s) listed above?`,
+      `Drop the ${plan.orphans.length + plan.changed.length} item(s) listed above?`,
     )) === true
       ? 'granted'
       : 'declined';
@@ -147,9 +169,16 @@ async function applyDrops(
   plan: PushPlan,
   io: CliIO,
 ): Promise<void> {
-  if (plan.orphans.length === 0) return;
+  if (plan.orphans.length === 0 && plan.changed.length === 0) return;
   const session = driver.session(database ? { database } : undefined);
   try {
+    // Drop + create, in that order: `CREATE … IF NOT EXISTS` would be a
+    // no-op while the old definition still holds the name.
+    for (const change of plan.changed) {
+      await session.run(change.dropCypher);
+      await session.run(change.statement.cypher);
+      io.out(`✓ recreated ${change.statement.name}`);
+    }
     for (const orphan of plan.orphans) {
       await session.run(orphan.dropCypher);
       io.out(`✓ dropped ${safeDisplay(orphan.name)}`);
@@ -179,7 +208,8 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
   try {
     const live = await fetchLiveSchema(driver, connection.database);
     const plan = planSchemaSync(schema, live, vectorConfig);
-    const willDrop = forceDrop && plan.orphans.length > 0;
+    const willDrop =
+      forceDrop && (plan.orphans.length > 0 || plan.changed.length > 0);
 
     renderPlan(plan, io, willDrop);
 
@@ -190,6 +220,12 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
         `warning: vector index "${needs.indexName}" ` +
           `(${needs.typeName}.${needs.embeddingProperty}) skipped — set ` +
           `vectorIndexes['${needs.indexName}'].dimensions in grafeo.config.ts to create it`,
+      );
+
+    if (plan.changed.length > 0 && !forceDrop)
+      io.err(
+        `warning: ${plan.changed.length} index definition(s) differ from the SDL and were NOT applied ` +
+          `(${plan.changed.map((c) => c.statement.name).join(', ')}) — re-run with --force-drop to drop and recreate them`,
       );
 
     // Nothing to create and nothing to drop → no writes (idempotent re-run).
@@ -218,7 +254,8 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
 
     if (consent === 'granted')
       await applyDrops(driver, connection.database, plan, io);
-    else if (consent === 'declined') io.out('Drop declined — orphans kept.');
+    else if (consent === 'declined')
+      io.out('Drop declined — orphans and changed definitions kept.');
     return 0;
   } finally {
     await driver.close();

@@ -3,6 +3,7 @@ import {
   buildRelationshipFulltextStatements,
   buildUniqueConstraintStatements,
   buildVectorIndexStatements,
+  resolveRelTypeForProps,
   SchemaStatement,
   uniqueConstraintName,
   VectorIndexCreationConfig,
@@ -45,6 +46,13 @@ export interface LiveSchemaItem {
    * own (v2.4.8).
    */
   owningConstraint?: string;
+  /** SHOW `entityType` column (NODE / RELATIONSHIP), when exposed. */
+  entityType?: string;
+  /**
+   * SHOW INDEXES `options.indexConfig`, with integer values as JS numbers
+   * (v2.4.8). Used to compare vector dimensions / similarity.
+   */
+  indexConfig?: Record<string, unknown>;
 }
 
 export interface LiveSchema {
@@ -57,11 +65,26 @@ export interface PushPlanOrphan {
   dropCypher: string;
 }
 
+/**
+ * An index present under the SDL name whose live definition differs from
+ * the SDL (v2.4.8). `CREATE … IF NOT EXISTS` is a silent no-op on an
+ * existing name, so the only way to apply it is drop + create — which
+ * `db push` does only under `--force-drop` with its consent rules.
+ */
+export interface PushPlanChange {
+  statement: SchemaStatement;
+  /** Human-readable `what: live → SDL` lines. */
+  differences: string[];
+  dropCypher: string;
+}
+
 export interface PushPlan {
   /** Declared in SDL, missing in the database. */
   create: SchemaStatement[];
-  /** Declared in SDL and already present. */
+  /** Declared in SDL and already present with the declared definition. */
   inSync: SchemaStatement[];
+  /** Declared in SDL, present by name, but with a different definition. */
+  changed: PushPlanChange[];
   /**
    * Present in the database, attributable to grafeo by naming convention
    * (`{Label}_{prop}_unique` over a label the schema still defines), but
@@ -80,7 +103,10 @@ export interface PushPlan {
  * normalized SHOW output, tests feed it fixtures.
  *
  * Matching is BY NAME: grafeo names unique constraints itself, and
- * fulltext/vector index names come verbatim from the SDL directives.
+ * fulltext/vector index names come verbatim from the SDL directives. Since
+ * v2.4.8 a name match is then checked against the live DEFINITION (labels,
+ * properties, index type, vector dimensions / similarity) when the server
+ * reports it; a mismatch is `changed`, not `inSync`.
  *
  * Orphan scoping (design decision): SDL index names are user-chosen, so a
  * live index absent from the SDL cannot be attributed to grafeo — those
@@ -105,14 +131,39 @@ export function planSchemaSync(
   const liveConstraintNames = new Set(live.constraints.map((c) => c.name));
   const liveIndexNames = new Set(live.indexes.map((i) => i.name));
 
+  const definitions = describeDesired(schema, vectorConfig);
+  const liveIndexesByName = new Map(live.indexes.map((i) => [i.name, i]));
+
   const create: SchemaStatement[] = [];
   const inSync: SchemaStatement[] = [];
+  const changed: PushPlanChange[] = [];
   for (const statement of desired) {
-    const present =
-      statement.kind === 'unique-constraint'
-        ? liveConstraintNames.has(statement.name)
-        : liveIndexNames.has(statement.name);
-    (present ? inSync : create).push(statement);
+    const isConstraint = statement.kind === 'unique-constraint';
+    const present = isConstraint
+      ? liveConstraintNames.has(statement.name)
+      : liveIndexNames.has(statement.name);
+    if (!present) {
+      create.push(statement);
+      continue;
+    }
+    // Constraints stay name-matched: grafeo names them `{Label}_{prop}_unique`
+    // itself, and a same-named constraint with another definition is not
+    // provably grafeo's, so it must never become a drop (v2.4.7 rule).
+    const definition = isConstraint
+      ? undefined
+      : definitions.get(statement.name);
+    const liveItem = liveIndexesByName.get(statement.name);
+    const differences =
+      liveItem && definition ? diffDefinition(definition, liveItem) : [];
+    if (differences.length === 0) inSync.push(statement);
+    else
+      changed.push({
+        statement,
+        differences,
+        // The name is SDL-derived and already passed assertSafeIdentifier
+        // in the statement builders.
+        dropCypher: `DROP INDEX ${statement.name} IF EXISTS`,
+      });
   }
 
   const desiredConstraintNames = new Set(
@@ -162,6 +213,7 @@ export function planSchemaSync(
   return {
     create,
     inSync,
+    changed,
     orphans,
     // Dedup: a name can surface in both SHOW CONSTRAINTS and SHOW INDEXES.
     unmanaged: Array.from(new Set(unmanaged)),
@@ -197,4 +249,123 @@ function isGrafeoConstraint(
     knownLabels.has(label) &&
     constraint.name === uniqueConstraintName(label, prop)
   );
+}
+
+/** What a desired SDL statement should look like in SHOW output. */
+interface DesiredDefinition {
+  type: 'UNIQUENESS' | 'FULLTEXT' | 'VECTOR';
+  entityType: 'NODE' | 'RELATIONSHIP';
+  labelsOrTypes: string[];
+  properties: string[];
+  /** Fulltext `ON EACH [...]` order carries no meaning. */
+  unorderedProperties?: boolean;
+  vector?: { dimensions: number; similarity: string };
+}
+
+/**
+ * Definition of every desired statement, keyed by statement name. Walks
+ * the same schema metadata the statement builders in
+ * `schema/index-statements.ts` walk (and is fed the same vector config),
+ * so names and definitions line up one-to-one with `desired`.
+ */
+function describeDesired(
+  schema: SchemaMetadata,
+  vectorConfig: Record<string, VectorIndexCreationConfig> | undefined,
+): Map<string, DesiredDefinition> {
+  const defs = new Map<string, DesiredDefinition>();
+  for (const [, nodeDef] of schema.nodes) {
+    for (const [, prop] of nodeDef.properties)
+      if (prop.isUnique)
+        defs.set(uniqueConstraintName(nodeDef.label, prop.name), {
+          type: 'UNIQUENESS',
+          entityType: 'NODE',
+          labelsOrTypes: [nodeDef.label],
+          properties: [prop.name],
+        });
+    for (const ftIndex of nodeDef.fulltextIndexes)
+      if (ftIndex.fields.length > 0)
+        defs.set(ftIndex.name, {
+          type: 'FULLTEXT',
+          entityType: 'NODE',
+          labelsOrTypes: [nodeDef.label],
+          properties: [...ftIndex.fields],
+          unorderedProperties: true,
+        });
+    for (const vIndex of nodeDef.vectorIndexes ?? []) {
+      const cfg = vectorConfig?.[vIndex.indexName];
+      if (!cfg) continue;
+      defs.set(vIndex.indexName, {
+        type: 'VECTOR',
+        entityType: 'NODE',
+        labelsOrTypes: [nodeDef.label],
+        properties: [vIndex.embeddingProperty],
+        vector: {
+          dimensions: cfg.dimensions,
+          similarity: cfg.similarity ?? 'cosine',
+        },
+      });
+    }
+  }
+  for (const [, relPropsDef] of schema.relationshipProperties)
+    for (const ftIndex of relPropsDef.fulltextIndexes ?? [])
+      defs.set(ftIndex.name, {
+        type: 'FULLTEXT',
+        entityType: 'RELATIONSHIP',
+        labelsOrTypes: [resolveRelTypeForProps(schema, relPropsDef.typeName)],
+        properties: [...ftIndex.fields],
+        unorderedProperties: true,
+      });
+  return defs;
+}
+
+const fmt = (list: readonly string[]) => `[${list.join(', ')}]`;
+
+/**
+ * Compare a desired definition with the live row. Only columns the server
+ * actually reported are compared — a server (or fixture) without them
+ * keeps the pre-2.4.8 name-only behaviour, never a false "changed".
+ */
+function diffDefinition(
+  want: DesiredDefinition,
+  live: LiveSchemaItem,
+): string[] {
+  const diffs: string[] = [];
+  if (live.type && live.type !== want.type)
+    diffs.push(`type: ${live.type} → ${want.type}`);
+  if (live.entityType && live.entityType !== want.entityType)
+    diffs.push(`entity: ${live.entityType} → ${want.entityType}`);
+  if (live.labelsOrTypes && !sameList(live.labelsOrTypes, want.labelsOrTypes))
+    diffs.push(
+      `labels: ${fmt(live.labelsOrTypes)} → ${fmt(want.labelsOrTypes)}`,
+    );
+  if (
+    live.properties &&
+    !sameList(live.properties, want.properties, want.unorderedProperties)
+  )
+    diffs.push(`properties: ${fmt(live.properties)} → ${fmt(want.properties)}`);
+  if (want.vector && live.indexConfig) {
+    const dims = live.indexConfig['vector.dimensions'];
+    if (typeof dims === 'number' && dims !== want.vector.dimensions)
+      diffs.push(`dimensions: ${dims} → ${want.vector.dimensions}`);
+    const sim = live.indexConfig['vector.similarity_function'];
+    if (
+      typeof sim === 'string' &&
+      sim.toLowerCase() !== want.vector.similarity.toLowerCase()
+    )
+      diffs.push(
+        `similarity: ${sim.toLowerCase()} → ${want.vector.similarity.toLowerCase()}`,
+      );
+  }
+  return diffs;
+}
+
+function sameList(
+  a: readonly string[],
+  b: readonly string[],
+  unordered = false,
+): boolean {
+  if (a.length !== b.length) return false;
+  const x = unordered ? [...a].sort() : a;
+  const y = unordered ? [...b].sort() : b;
+  return x.every((v, i) => v === y[i]);
 }

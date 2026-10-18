@@ -317,19 +317,20 @@ npx grafeo db push                    # apply (additive: creates only what's mis
 npx grafeo db push --force-drop --yes # also drop orphaned grafeo-managed items
 ```
 
-`db push` introspects `SHOW CONSTRAINTS` / `SHOW INDEXES`, diffs against your SDL, and prints a plan in four buckets:
+`db push` introspects `SHOW CONSTRAINTS` / `SHOW INDEXES`, diffs against your SDL, and prints a plan in five buckets:
 
 - **create** — declared in SDL, missing in the database
-- **in sync** — already present
+- **in sync** — already present with the declared definition
+- **changed** — an index present under the SDL name whose definition differs (fulltext fields or label, vector dimensions or similarity, index type). The output says the schema is **NOT in sync**; the index is **kept as-is** unless you pass `--force-drop`, which drops and recreates it under the same consent rules as orphans. Before v2.4.8 indexes were matched by name only, so a changed definition was reported as in sync and never applied.
 - **orphans** — grafeo-named (`{Label}_{prop}_unique`) constraints no longer in your SDL; **reported and kept** unless you pass `--force-drop`
 - **unmanaged** — constraints/indexes that don't follow grafeo's naming convention (hand-created DBA indexes, etc.); **never touched, never counted as drift**
 
-It is **additive by default** and **idempotent** — a second run with no schema change is a no-op. Dropping orphans is destructive and gated: `--force-drop` lists the exact drops (shown in `--dry-run` too) and requires interactive confirmation, or `--yes` in non-interactive sessions like CI.
+It is **additive by default** and **idempotent** — a second run with no schema change is a no-op. Dropping orphans and recreating changed indexes is destructive and gated: `--force-drop` lists the exact drops (shown in `--dry-run` too) and requires interactive confirmation, or `--yes` in non-interactive sessions like CI.
 
 | Flag | Description |
 |---|---|
 | `--dry-run` | Print the full plan (including the exact Cypher, drops included) and exit without writing |
-| `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes |
+| `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes, and dropping + recreating indexes whose definition changed |
 | `--yes` | Confirm destructive drops non-interactively (required with `--force-drop` in CI) |
 | `--schema <path>`, `--uri`, `--username`, `--database` | Schema path and connection overrides |
 

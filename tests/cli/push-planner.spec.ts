@@ -278,4 +278,126 @@ describe('planSchemaSync (cli-db-push spec)', () => {
       ]);
     });
   });
+
+  // v2.4.8 — indexes used to be matched by NAME only, so an index whose
+  // definition no longer matched the SDL was reported "in sync" and never
+  // applied (`CREATE … IF NOT EXISTS` on an existing name is a no-op).
+  describe('changed index definitions', () => {
+    const inSyncConstraints = [uniq('Book', 'id'), uniq('Author', 'id')];
+    const bookSearch = (
+      over: Partial<LiveSchemaItem> = {},
+    ): LiveSchemaItem => ({
+      name: 'BookSearch',
+      type: 'FULLTEXT',
+      entityType: 'NODE',
+      labelsOrTypes: ['Book'],
+      properties: ['title'],
+      ...over,
+    });
+
+    it('reports a fulltext index whose fields changed', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: inSyncConstraints,
+        indexes: [bookSearch({ properties: ['title', 'body'] })],
+      });
+
+      expect(plan.create).toEqual([]);
+      expect(plan.inSync.map((s) => s.name)).not.toContain('BookSearch');
+      expect(plan.changed).toHaveLength(1);
+      expect(plan.changed[0].statement.name).toBe('BookSearch');
+      expect(plan.changed[0].dropCypher).toBe(
+        'DROP INDEX BookSearch IF EXISTS',
+      );
+      expect(plan.changed[0].differences.join(' ')).toMatch(/properties/);
+    });
+
+    it('reports a fulltext index whose label changed', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: inSyncConstraints,
+        indexes: [bookSearch({ labelsOrTypes: ['Novel'] })],
+      });
+      expect(plan.changed.map((c) => c.statement.name)).toEqual(['BookSearch']);
+    });
+
+    it('ignores fulltext property order', () => {
+      const schema = BOOK_AUTHOR.replace(
+        'fields: ["title"]',
+        'fields: ["title", "body"]',
+      ).replace('title: String!', 'title: String!\n  body: String');
+      const plan = planSchemaSync(parseSchema(schema), {
+        constraints: inSyncConstraints,
+        indexes: [bookSearch({ properties: ['body', 'title'] })],
+      });
+      expect(plan.changed).toEqual([]);
+      expect(plan.inSync.map((s) => s.name)).toContain('BookSearch');
+    });
+
+    it('keeps a row without definition columns in sync (older servers)', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: inSyncConstraints,
+        indexes: [{ name: 'BookSearch', type: 'FULLTEXT' }],
+      });
+      expect(plan.changed).toEqual([]);
+    });
+
+    it('reports an index whose name is now held by another index type', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: inSyncConstraints,
+        indexes: [bookSearch({ type: 'RANGE' })],
+      });
+      expect(plan.changed.map((c) => c.statement.name)).toEqual(['BookSearch']);
+    });
+
+    const vecLive = (dims: unknown, sim: string): LiveSchema => ({
+      constraints: [uniq('Doc', 'id')],
+      indexes: [
+        {
+          name: 'DocEmbedding',
+          type: 'VECTOR',
+          entityType: 'NODE',
+          labelsOrTypes: ['Doc'],
+          properties: ['embedding'],
+          indexConfig: {
+            'vector.dimensions': dims,
+            'vector.similarity_function': sim,
+          },
+        },
+      ],
+    });
+
+    it('reports a vector index whose dimensions or similarity changed', () => {
+      const dims = planSchemaSync(
+        parseSchema(DOC_VECTOR),
+        vecLive(4, 'COSINE'),
+        {
+          DocEmbedding: { dimensions: 8 },
+        },
+      );
+      expect(dims.changed.map((c) => c.statement.name)).toEqual([
+        'DocEmbedding',
+      ]);
+      expect(dims.changed[0].differences.join(' ')).toMatch(/dimensions/);
+
+      const sim = planSchemaSync(
+        parseSchema(DOC_VECTOR),
+        vecLive(8, 'COSINE'),
+        {
+          DocEmbedding: { dimensions: 8, similarity: 'euclidean' },
+        },
+      );
+      expect(sim.changed[0].differences.join(' ')).toMatch(/similarity/);
+    });
+
+    it('treats a matching vector index as in sync (similarity case-insensitive)', () => {
+      const plan = planSchemaSync(
+        parseSchema(DOC_VECTOR),
+        vecLive(8, 'COSINE'),
+        {
+          DocEmbedding: { dimensions: 8, similarity: 'cosine' },
+        },
+      );
+      expect(plan.changed).toEqual([]);
+      expect(plan.inSync.map((s) => s.name)).toContain('DocEmbedding');
+    });
+  });
 });

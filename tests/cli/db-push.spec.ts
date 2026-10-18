@@ -53,7 +53,7 @@ function makeDriver(live: LiveSchema): MockDriver {
       runs.push(cypher);
       if (cypher === 'SHOW CONSTRAINTS')
         return { records: live.constraints.map((c) => record({ ...c })) };
-      if (cypher === 'SHOW INDEXES')
+      if (cypher.startsWith('SHOW INDEXES'))
         return { records: live.indexes.map((i) => record({ ...i })) };
       return { records: [] };
     }),
@@ -321,5 +321,78 @@ describe('grafeo db push (cli-db-push spec)', () => {
     );
     expect(mock.runs.filter((c) => c.startsWith('DROP'))).toHaveLength(0);
     expect(io.stdout.join('\n')).toContain('Drop declined');
+  });
+
+  // v2.4.8 — a changed index definition used to print "No changes".
+  describe('changed index definitions', () => {
+    const CHANGED: LiveSchema = {
+      constraints: ALL_IN_SYNC.constraints,
+      indexes: [
+        {
+          name: 'BookSearch',
+          type: 'FULLTEXT',
+          entityType: 'NODE',
+          labelsOrTypes: ['Book'],
+          properties: ['title', 'body'],
+        },
+      ],
+    };
+
+    it('warns that the schema is NOT in sync and leaves it without --force-drop', async () => {
+      const mock = makeDriver(CHANGED);
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush([], io)).toBe(0);
+
+      const out = io.stdout.join('\n');
+      expect(out).not.toContain('No changes');
+      expect(out).toContain('BookSearch');
+      expect(out).toMatch(/NOT in sync/);
+      expect(out).toContain('--force-drop');
+      expect(wrote(mock.runs)).toHaveLength(0);
+    });
+
+    it('--force-drop --yes drops and recreates it', async () => {
+      const mock = makeDriver(CHANGED);
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush(['--force-drop', '--yes'], io)).toBe(0);
+
+      expect(wrote(mock.runs)).toEqual([
+        'DROP INDEX BookSearch IF EXISTS',
+        'CREATE FULLTEXT INDEX BookSearch IF NOT EXISTS FOR (n:Book) ON EACH [n.title]',
+      ]);
+      expect(io.stdout.join('\n')).toContain('✓ recreated BookSearch');
+    });
+
+    it('--force-drop without --yes fails non-interactively and changes nothing', async () => {
+      const mock = makeDriver(CHANGED);
+      const io = makeIO(mock.driver);
+
+      await expect(runDbPush(['--force-drop'], io)).rejects.toThrow(/--yes/);
+      expect(wrote(mock.runs)).toHaveLength(0);
+    });
+
+    it('--dry-run --force-drop previews the drop and the create', async () => {
+      const mock = makeDriver(CHANGED);
+      const io = makeIO(mock.driver);
+
+      expect(await runDbPush(['--dry-run', '--force-drop'], io)).toBe(0);
+      const out = io.stdout.join('\n');
+      expect(out).toContain('DROP INDEX BookSearch IF EXISTS');
+      expect(out).toContain('CREATE FULLTEXT INDEX BookSearch');
+      expect(wrote(mock.runs)).toHaveLength(0);
+    });
+
+    it('interactive decline keeps the old definition', async () => {
+      const mock = makeDriver(CHANGED);
+      const io = makeIO(mock.driver, {
+        interactive: true,
+        confirm: async () => false,
+      });
+
+      expect(await runDbPush(['--force-drop'], io)).toBe(0);
+      expect(wrote(mock.runs)).toHaveLength(0);
+    });
   });
 });
