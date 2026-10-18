@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.5 (2026-10-18) — nested creates inside `update` store edge properties
+
+### 🐛 `edge` was silently dropped on a nested `create` inside `update`
+
+`update({ update: { posts: [{ create: [{ node, edge: { role: 'author', weight: 3 } }] }] } })` created the node and the relationship, but the relationship got **no properties**. The `edge` input was never read on this path. The generated `CreateFieldInput` type offers `edge` here, and `create()` already honours the same input. The relationship is now bound in the `CREATE` and its properties are `SET` with the same coercion `create()` uses, so an `Int` edge value is stored as an `INTEGER`. A nested create without `edge` emits the same Cypher as before.
+
+**Data written by earlier versions:** relationships created this way exist but have no properties.
+
+A new opt-in live suite, `tests/integration/edge-properties.spec.ts`, covers single and multiple nested creates and checks parity with `create()`.
+
 ## 2.4.4 (2026-10-18) — 🛡️ Security: a blanket `disconnect` honours the target's `read` policy
 
 > **Security release. Upgrade if you use `policies`.** OGMs without `policies` emit byte-identical Cypher and are unaffected.
