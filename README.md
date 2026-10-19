@@ -1025,6 +1025,8 @@ await Book.update({
 - **Nested connect / disconnect** recurse: `connect: { posts: [{ where, connect: { tags: [...] } }] }` links the post *and* its tags (max 5 levels).
 - **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
 - With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
+- **Each row sees the writes of the rows before it.** The nested ops run once per matched row (each root, and each target of an enclosing nested `update`), in no guaranteed order, and each run sees what the earlier runs of the same statement wrote, as in `@neo4j/graphql`. So when two roots share a related node, a node that one root's nested `create` links to it is also matched by the other root's nested `update`.
+- **Known limitation: a `connect` / `create` on a field an enclosing nested `update` iterates** (`charts → categories → charts → categories`). Every later row's nested `update` matches the links the earlier rows added and runs its ops on them again, so the work can grow geometrically with the matched rows (5 charts: about 7,300 nodes created). Snapshot semantics, where each row matches the graph as it was before the statement, are not available in 2.x in either mode. Since 2.7.1 the OGM logs one `warn` per such shape (default mode). Split the write into separate calls, or narrow the nested `where`.
 
 ---
 

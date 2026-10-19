@@ -37,6 +37,24 @@ export class StrictMode {
    * @param fix   what `strict: true` does instead
    */
   warn(code: string, detail: string, problem: string, fix: string): void {
+    this.log(
+      code,
+      detail,
+      `[OGM] ${problem} Enable \`strict: true\` (default in 3.0) to ${fix}.`,
+    );
+  }
+
+  /**
+   * v2.7.1 — log a warning, once per instance and key, for a shape whose
+   * behaviour is a documented limitation that `strict: true` does NOT
+   * change (so the message names no switch). Default mode only, like
+   * {@link StrictMode.warn}: strict mode never warns.
+   */
+  notice(code: string, detail: string, message: string): void {
+    this.log(code, detail, `[OGM] ${message}`);
+  }
+
+  private log(code: string, detail: string, message: string): void {
     if (this.strict) return;
     const warn = this.logger?.warn;
     if (!warn) return;
@@ -45,10 +63,7 @@ export class StrictMode {
       key = code;
     if (this.warned.has(key)) return;
     this.warned.add(key);
-    warn.call(
-      this.logger,
-      `[OGM] ${problem} Enable \`strict: true\` (default in 3.0) to ${fix}.`,
-    );
+    warn.call(this.logger, message);
   }
 }
 

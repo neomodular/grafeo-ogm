@@ -54,6 +54,11 @@ interface NestedUpdateState {
   readonly guardDeleted: boolean;
   /** Set when a nested delete's target type can be a held node (F1). */
   cycleDelete: boolean;
+  /**
+   * `Type.field` of each nested `connect` / `create` on a field an
+   * enclosing nested update item iterates (F2).
+   */
+  readonly feedback: Set<string>;
 }
 
 /**
@@ -663,7 +668,11 @@ export class MutationCompiler {
     // Continue after the root WHERE's params when the caller threads no
     // counter, so nested filters can never collide with them.
     const counter = paramCounter ?? counterAfter(whereResult.params);
-    const state: NestedUpdateState = { guardDeleted, cycleDelete: false };
+    const state: NestedUpdateState = {
+      guardDeleted,
+      cycleDelete: false,
+      feedback: new Set<string>(),
+    };
 
     // Apply runtime labels to MATCH pattern (same as find())
     if (labels && labels.length > 0) {
@@ -711,6 +720,19 @@ export class MutationCompiler {
       );
       lines.push(...relLines);
     }
+
+    // v2.7.1 (finding F2) — a known limitation in both modes; see the
+    // `iterated` check in buildUpdateRelationships.
+    for (const field of state.feedback)
+      this.strictMode.notice(
+        'nested-update-feedback',
+        `${nodeDef.typeName}\u0000${field}`,
+        `${returnMode === 'count' ? 'updateMany' : 'update'} on ${nodeDef.typeName} has a nested connect / create ` +
+          `on "${field}" inside a nested update that iterates "${field}" itself. Each row of that nested update ` +
+          `also sees the links and nodes the earlier rows of the statement added, so the work can grow ` +
+          `geometrically with the matched rows, and the result depends on row order. Split the write into ` +
+          `separate calls, or narrow the nested "where".`,
+      );
 
     // v2.7.1 (finding F1) — default mode keeps v2.7.0's Cypher, so a root
     // a nested delete removed is still counted by `updateMany`.
@@ -2504,6 +2526,7 @@ export class MutationCompiler {
     paramCounter?: { count: number },
     deleted?: Set<string>,
     state?: NestedUpdateState,
+    iterated?: readonly string[],
   ): string[] {
     const lines: string[] = [];
 
@@ -2531,6 +2554,7 @@ export class MutationCompiler {
           paramCounter,
           deleted,
           state,
+          iterated,
         ),
       );
     }
@@ -2562,7 +2586,16 @@ export class MutationCompiler {
      * this level may delete, for the enclosing level's guard (F1).
      */
     deleted: Set<string> = new Set<string>(),
-    state: NestedUpdateState = { guardDeleted: false, cycleDelete: false },
+    state: NestedUpdateState = {
+      guardDeleted: false,
+      cycleDelete: false,
+      feedback: new Set<string>(),
+    },
+    /**
+     * v2.7.1 — `Type.field` of every relationship an enclosing nested
+     * update item iterates (F2).
+     */
+    iterated: readonly string[] = [],
   ): string[] {
     if (depth > 5)
       throw new OGMError(
@@ -2627,6 +2660,7 @@ export class MutationCompiler {
             paramCounter,
             deleted,
             state,
+            iterated,
           ),
         );
         continue;
@@ -2637,11 +2671,28 @@ export class MutationCompiler {
       // Past the dispatch, `abstract` is set only for a flat INTERFACE
       // input (a flat union input threw in perMemberEntries).
 
+      // v2.7.1 — finding F2. A `connect` / `create` on a field an ENCLOSING
+      // nested update item iterates (chart -> categories -> charts ->
+      // categories) adds links that the enclosing item's MATCH sees again
+      // for every later row (the statement's own writes are visible to its
+      // later rows, as in @neo4j/graphql), so the work can grow
+      // geometrically with the matched rows. Snapshot semantics are not
+      // offered (see the README); recorded here for a warning.
+      const field = `${nodeDef.typeName}.${key}`;
+
       // Value can be an array (e.g., chapters: [{ create: ... }, { update: ... }])
       // or an object (e.g., author: { connect: ... })
       const items = Array.isArray(value)
         ? (value as Record<string, unknown>[])
         : [value as Record<string, unknown>];
+      if (
+        iterated.includes(field) &&
+        items.some(
+          (it) =>
+            isPlainObject(it) && (it.connect != null || it.create != null),
+        )
+      )
+        state.feedback.add(field);
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -3000,6 +3051,7 @@ export class MutationCompiler {
                 paramCounter,
                 deleted,
                 state,
+                iterated,
               ),
             );
             continue;
@@ -3064,6 +3116,7 @@ export class MutationCompiler {
             paramCounter,
             nestedDeleted,
             state,
+            [...iterated, field],
           );
 
           // Only emit the MATCH block if there's actual work to do

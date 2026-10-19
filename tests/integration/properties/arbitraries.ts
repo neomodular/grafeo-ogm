@@ -18,7 +18,8 @@
  * - F1 `writeOp` (default mode only): nested `delete` whose target type is
  *   an ancestor; generated with `cycleDelete` for a strict OGM (v2.7.1).
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
- *   update item is iterating (explosive, not a hang; see the generator).
+ *   update item is iterating (explosive, not a hang; a documented
+ *   limitation in both modes since v2.7.1, see the generator).
  * - F5 `writeOp` (default mode only): blanket disconnect on a shared
  *   relationship type; generated with `sharedBlanketDisconnect` for a
  *   strict OGM.
@@ -828,7 +829,10 @@ function updateItem(
   // and nodes the earlier rows added, so the work grows geometrically with
   // the matched roots (the 5-chart repro creates 7,345 nodes in ~24 s,
   // past the 20 s case timeout). Statement-level snapshot semantics would
-  // change the results of inputs that work today. Not generated meanwhile.
+  // change the results of inputs that work today, and are not offered in
+  // either mode (@neo4j/graphql 5.x has the same per-row semantics): a
+  // documented limitation that default mode warns about since v2.7.1. Not
+  // generated, in either mode.
   if (!path.iterated.includes(`${parent}.${def.field}`)) {
     ops.connect = connectItems(connectItem(def, member, depth));
     ops.create = items(createItem(def, member, depth));
