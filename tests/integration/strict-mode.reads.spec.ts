@@ -346,4 +346,50 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       ).rejects.toThrow(OGMError);
     });
   });
+
+  describe('item 10 — two differently aliased edges', () => {
+    const selectionSet =
+      '{ id reviewsConnection { a: edges { node { id } } b: edges { node { stars } } } }';
+    const byId = (list: unknown) =>
+      [...(list as Row[])].sort((x, y) =>
+        JSON.stringify(x).localeCompare(JSON.stringify(y)),
+      );
+
+    it('default: only the first alias, both selections merged, one warning', async () => {
+      const { doc, logger } = make();
+      for (let i = 0; i < 2; i++) {
+        const [row] = (await doc.find({
+          where: { id: id('both') } as never,
+          selectionSet,
+        })) as Row[];
+        const conn = row.reviewsConnection as Row;
+        expect(Object.keys(conn)).toEqual(['a']);
+        expect(byId(conn.a)).toEqual(
+          byId([
+            { node: { id: id('r1'), stars: 1 } },
+            { node: { id: id('r5'), stars: 5 } },
+          ]),
+        );
+      }
+      expectOneWarning(
+        logger,
+        'selects `edges` under two response keys ("a", "b")',
+      );
+    });
+
+    it('strict: each alias with its own selection', async () => {
+      const { doc } = make(true);
+      const [row] = (await doc.find({
+        where: { id: id('both') } as never,
+        selectionSet,
+      })) as Row[];
+      const conn = row.reviewsConnection as Row;
+      expect(byId(conn.a)).toEqual(
+        byId([{ node: { id: id('r1') } }, { node: { id: id('r5') } }]),
+      );
+      expect(byId(conn.b)).toEqual(
+        byId([{ node: { stars: 1 } }, { node: { stars: 5 } }]),
+      );
+    });
+  });
 });

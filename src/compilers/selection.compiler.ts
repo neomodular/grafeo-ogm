@@ -108,6 +108,14 @@ export interface SelectionNode {
     node?: string;
     properties?: string;
   };
+  /**
+   * Connection only, strict mode (v2.6.0): further `edges` selections under
+   * OTHER response keys (`a: edges { … } b: edges { … }`). Each carries its
+   * own `children`, `edgeChildren` and `connectionAliases` (`edges` = its
+   * key); the connection's pattern, filter and policy are shared. 2.x
+   * merges them into the first `edges` under the first alias.
+   */
+  extraEdges?: SelectionNode[];
 }
 
 /**
@@ -207,6 +215,18 @@ function mergeSelection(
     });
     return;
   }
+  if (existing.isConnection) {
+    if (ctx.strict) {
+      mergeConnectionEdgeSets(existing, incoming, ctx);
+      return;
+    }
+    if (
+      !existing.totalCountOnly &&
+      !incoming.totalCountOnly &&
+      edgesKeyOf(existing) !== edgesKeyOf(incoming)
+    )
+      warnAliasedEdges(ctx, key, edgesKeyOf(existing), edgesKeyOf(incoming));
+  }
   if (incoming.children)
     existing.children = mergeSelectionLists(
       existing.children,
@@ -229,6 +249,102 @@ function mergeSelection(
         ...existing.connectionAliases,
       };
   }
+}
+
+/** The response key of a connection's (first) `edges` selection. */
+function edgesKeyOf(node: SelectionNode): string {
+  return node.connectionAliases?.edges ?? 'edges';
+}
+
+/** v2.6.0 — 2.x merges differently aliased `edges` under the first alias. */
+function warnAliasedEdges(
+  ctx: ParseContext,
+  connection: string,
+  first: string,
+  second: string,
+): void {
+  parseWarn(ctx, {
+    code: 'selection-aliased-edges',
+    detail: `${connection}:${first}:${second}`,
+    problem:
+      `"${connection}" selects \`edges\` under two response keys ("${first}", "${second}"); ` +
+      `2.x returns only "${first}", with both selections merged into it.`,
+    fix: 'return each `edges` alias with its own selection',
+  });
+}
+
+/** A connection's edges selection as a standalone edge set (strict). */
+function asEdgeSet(node: SelectionNode): SelectionNode | null {
+  if (node.totalCountOnly) return null;
+  const set: SelectionNode = {
+    fieldName: node.fieldName,
+    isScalar: false,
+    isRelationship: false,
+    isConnection: true,
+  };
+  if (node.children) set.children = node.children;
+  if (node.edgeChildren) set.edgeChildren = node.edgeChildren;
+  const { totalCount: _total, ...aliases } = node.connectionAliases ?? {};
+  if (Object.keys(aliases).length > 0) set.connectionAliases = aliases;
+  return set;
+}
+
+/**
+ * v2.6.0 — strict merge of a connection selected twice (same arguments):
+ * edge sets merge by response key, so `a: edges` and `b: edges` stay apart.
+ */
+function mergeConnectionEdgeSets(
+  existing: SelectionNode,
+  incoming: SelectionNode,
+  ctx: ParseContext,
+): void {
+  const sets = new Map<string, SelectionNode>();
+  const add = (set: SelectionNode) => {
+    const k = edgesKeyOf(set);
+    const prev = sets.get(k);
+    if (!prev) {
+      sets.set(k, { ...set });
+      return;
+    }
+    if (set.children)
+      prev.children = mergeSelectionLists(prev.children, set.children, ctx);
+    if (set.edgeChildren)
+      prev.edgeChildren = mergeSelectionLists(
+        prev.edgeChildren,
+        set.edgeChildren,
+        ctx,
+      );
+    if (set.connectionAliases)
+      prev.connectionAliases = {
+        ...set.connectionAliases,
+        ...prev.connectionAliases,
+      };
+  };
+  for (const node of [existing, incoming]) {
+    const main = asEdgeSet(node);
+    if (main) add(main);
+    for (const extra of node.extraEdges ?? []) add(extra);
+  }
+  const totalAlias =
+    existing.connectionAliases?.totalCount ??
+    incoming.connectionAliases?.totalCount;
+  if (incoming.totalCount) existing.totalCount = true;
+  const [main, ...rest] = [...sets.values()];
+  if (main) {
+    delete existing.totalCountOnly;
+    if (main.children) existing.children = main.children;
+    else delete existing.children;
+    if (main.edgeChildren) existing.edgeChildren = main.edgeChildren;
+    else delete existing.edgeChildren;
+  }
+  const aliases = {
+    ...(main?.connectionAliases ?? {}),
+    ...(totalAlias !== undefined ? { totalCount: totalAlias } : {}),
+  };
+  if (Object.keys(aliases).length > 0) existing.connectionAliases = aliases;
+  else delete existing.connectionAliases;
+  if (rest.length > 0) existing.extraEdges = rest;
+  else delete existing.extraEdges;
 }
 
 /** Two scalars under one key, from fragments on different types (v2.5.3). */
@@ -954,6 +1070,10 @@ export class SelectionCompiler {
     ctx: ParseContext,
   ): void {
     let selectsEdges = false;
+    // v2.6.0 — the response key of the first `edges`, and (strict) the edge
+    // sets of `edges` selected under other keys.
+    let firstEdgesKey: string | undefined;
+    const extras = new Map<string, SelectionNode>();
     for (const sel of selectionSet.selections) {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
@@ -971,9 +1091,32 @@ export class SelectionCompiler {
         parentNode.totalCount = true;
         this.recordConnectionAlias(parentNode, 'totalCount', field);
       }
+      let target = parentNode;
       if (field.name.value === 'edges') {
         selectsEdges = true;
-        this.recordConnectionAlias(parentNode, 'edges', field);
+        const edgesKey = field.alias?.value ?? 'edges';
+        firstEdgesKey ??= edgesKey;
+        if (edgesKey !== firstEdgesKey)
+          if (ctx.strict) {
+            let extra = extras.get(edgesKey);
+            if (!extra) {
+              extra = {
+                fieldName: parentNode.fieldName,
+                isScalar: false,
+                isRelationship: false,
+                isConnection: true,
+              };
+              extras.set(edgesKey, extra);
+            }
+            target = extra;
+          } else
+            warnAliasedEdges(
+              ctx,
+              parentNode.alias ?? parentNode.fieldName,
+              firstEdgesKey,
+              edgesKey,
+            );
+        this.recordConnectionAlias(target, 'edges', field);
       }
 
       if (field.name.value === 'edges' && field.selectionSet)
@@ -996,18 +1139,18 @@ export class SelectionCompiler {
           // v2.5.3 — a repeated `edges { node { … } }` merges its
           // sub-selections; pre-2.5.3 the last one replaced the others.
           if (edgeField.name.value === 'node' && edgeField.selectionSet) {
-            this.recordConnectionAlias(parentNode, 'node', edgeField);
-            parentNode.children = mergeSelectionLists(
-              parentNode.children,
+            this.recordConnectionAlias(target, 'node', edgeField);
+            target.children = mergeSelectionLists(
+              target.children,
               this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
               ctx,
             );
           }
 
           if (edgeField.name.value === 'properties' && edgeField.selectionSet) {
-            this.recordConnectionAlias(parentNode, 'properties', edgeField);
-            parentNode.edgeChildren = mergeSelectionLists(
-              parentNode.edgeChildren,
+            this.recordConnectionAlias(target, 'properties', edgeField);
+            target.edgeChildren = mergeSelectionLists(
+              target.edgeChildren,
               this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
               ctx,
             );
@@ -1016,6 +1159,7 @@ export class SelectionCompiler {
     }
     if (parentNode.totalCount && !selectsEdges)
       parentNode.totalCountOnly = true;
+    if (extras.size > 0) parentNode.extraEdges = [...extras.values()];
   }
 
   /**
@@ -1595,7 +1739,25 @@ export class SelectionCompiler {
       ? `${totalCountKey}: size([${pattern}${whereClause} | 1])`
       : '';
     if (node.totalCountOnly) return `{ ${totalCount} }`;
-    const withTotal = totalCount ? `, ${totalCount}` : '';
+    // v2.6.0 — strict: `edges` selected under further response keys, each
+    // its own list over the same pattern and filter. Empty otherwise.
+    const extraEdges = (node.extraEdges ?? [])
+      .map(
+        (extra) =>
+          `, ${escapeIdentifier(edgesKeyOf(extra))}: [${pattern}${whereClause} | ${this.compileEdgeSetMap(
+            extra,
+            childVar,
+            edgeVar,
+            targetDef,
+            maxDepth,
+            currentDepth,
+            params,
+            paramCounter,
+            policyContext,
+          )}]`,
+      )
+      .join('');
+    const withTotal = `${extraEdges}${totalCount ? `, ${totalCount}` : ''}`;
 
     if (sortKeyTokens.length === 0)
       return `{ ${edgesKey}: [${pattern}${whereClause} | ${innerMap}]${withTotal} }`;
@@ -1609,6 +1771,54 @@ export class SelectionCompiler {
     return `{ ${edgesKey}: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
       ', ',
     )}]) | ${outerProjection}]${withTotal} }`;
+  }
+
+  /**
+   * v2.6.0 — the `{ node: …, properties: … }` map of one strict-mode extra
+   * edge set (see `SelectionNode.extraEdges`), mirroring `compileConnection`.
+   */
+  private compileEdgeSetMap(
+    set: SelectionNode,
+    childVar: string,
+    edgeVar: string,
+    targetDef: NodeDefinition,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string {
+    const parts: string[] = [];
+    const aliases = set.connectionAliases ?? {};
+    if (set.children && set.children.length > 0)
+      parts.push(
+        `${aliases.node ? escapeIdentifier(aliases.node) : 'node'}: ${this.compile(
+          set.children,
+          childVar,
+          targetDef,
+          maxDepth,
+          currentDepth + 1,
+          params,
+          paramCounter,
+          null,
+          policyContext,
+        )}`,
+      );
+    if (set.edgeChildren && set.edgeChildren.length > 0) {
+      const edgeFields = set.edgeChildren
+        .filter((c) => c.isScalar)
+        .map((c) => {
+          if (c.alias === undefined || c.alias === c.fieldName)
+            return `.${escapeIdentifier(c.fieldName)}`;
+          assertSafeIdentifier(c.alias, 'selection alias');
+          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
+        })
+        .join(', ');
+      parts.push(
+        `${aliases.properties ? escapeIdentifier(aliases.properties) : 'properties'}: ${edgeVar} { ${edgeFields} }`,
+      );
+    }
+    return `{ ${parts.join(', ')} }`;
   }
 
   /**
