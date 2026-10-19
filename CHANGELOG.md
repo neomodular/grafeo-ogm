@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.5.3 (2026-10-18) — non-breaking fixes from bug scan 4
+
+> **Patch release.** Fixes from the fourth bug scan that don't change results callers can rely on. No API changes. Only queries that errored or silently returned wrong data behave differently.
+
+### Reads
+
+- **The same alias on different fields in sibling fragments returned the first field for every type.** `{ ... on A { x: title } ... on B { x: body } }` (valid GraphQL) gave B rows A's `title`. Each type now projects its own field.
+- **Aliases inside a connection were ignored.** `t: totalCount`, `e: edges`, `nd: node`, `pr: properties` and aliased edge properties came back under their field names. They now name the output keys.
+- **A key selected twice kept only one selection's sub-fields.** `{ posts { id } posts { title } }`, its aliased form, the same field inside a fragment, and a repeated `edges { node { … } }` dropped fields. Sub-selections are now merged. Selections with different arguments keep the first one, as before.
+- **Relationship fields inside an interface fragment were dropped.** `... on D { owners(where: …) { id } }` (and connection fields) silently disappeared with their arguments, on `InterfaceModel` and on nested interface relationships. They are now projected per implementer, with their arguments and the target's `read` policy.
+- **List-field `_IN` / `_NOT_IN` silently matched nothing for BigInt strings and `Date`s.** The inner lists were not coerced. They now are.
+- **A `@cypher` `columnName` equal to a variable in scope failed the query.** `columnName: "n"`, `"score"` (with fulltext) or `"__typename"` gave "Variable already declared". The column is now returned under a private alias.
+- **`InterfaceModel.find` on an interface with no implementers was a Cypher syntax error.** It now returns its rows with a `null` `__typename`.
+- **`mode: 'insensitive'` failed on non-String fields.** An Int, BigInt, Float, Boolean, Point or temporal field (scalar or list) in the same `where` was wrapped in `toLower()`. Those fields now compare as-is.
+- **Nested `@cypher` fields were refused over a literal `'count('`, a comment, or `apoc.coll.max(`.** Only real aggregating calls are refused now.
+- **A huge selectionSet `options.limit` / `offset` failed** with "long overflow" or a 32-bit slice error. The bounds are now clamped, and the page is unchanged.
+- **Connection `select` `true` forms returned empty edges.** `xConnection: true`, `edges: true`, `node: true` and `properties: true` now select all scalars, as the generated types promise.
+
+### Writes
+
+- **`createMany` threw on a `null` relationship field.** It now skips it, as `upsert` does.
+
+### Schema and codegen
+
+- **A scalar `@default` on a list field was stored as a scalar.** It is now wrapped into a one-element list.
+- **Node names that shadow an imported identifier produced a file that didn't compile.** `DocumentNode`, `ExecutionContext`, `ModelInterface`, `InterfaceModelInterface` and `SelectionSetNode` caused this. The import is now aliased in that case only, so other schemas generate byte-identical output.
+
+### Transactions
+
+- **The "metadata not attached" warning fired on every model call inside `$transaction`.** It now fires once per transaction, and the message says the metadata given when the transaction began is unaffected.
+
+### Testing helpers
+
+- **`Neo4jRecordFactory.dateTime` now matches the driver** for `-00:00`, DST gaps and overlaps, years 0–99 and BC with a zone id, and the basic format (`20240101T100000Z`).
+- **`CypherAssert.assertContainsClause` cut a clause at `|`.** Label expressions (`n:A|B`) and `||` no longer end a clause; only a comprehension's `|` does.
+
+### Examples
+
+- Examples 09 and 12 no longer call `InterfaceModel.create`, which was removed in 1.2.0.
+
 ## 2.5.2 (2026-10-18) — security fix
 
 > **Security patch.** Fixes an authorization bypass in nested `connect` / `disconnect` under node-level security. Affects **2.4.8–2.5.1** (the releases that support a connect nested in a connect item and a disconnect nested in a disconnect item). OGMs without `policies` are unaffected and compile byte-identical Cypher. Upgrade if you use `policies`.
