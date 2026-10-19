@@ -4,6 +4,10 @@ import type {
   RelationshipDefinition,
   SchemaMetadata,
 } from '../../schema/types';
+import {
+  hasRelAggregateField,
+  relAggregationSelectionName,
+} from './aggregation-emitter';
 import { mapScalarType, toPascalCase, wrapMaybe } from './helpers';
 
 /**
@@ -13,11 +17,9 @@ import { mapScalarType, toPascalCase, wrapMaybe } from './helpers';
  * Each type includes:
  * - `__typename?: "<TypeName>"`
  * - Scalar properties (skipping `@cypher` fields)
+ * - Relationship aggregate fields (`<rel>Aggregate`, optional — v2.7.0)
  * - Relationship fields (array or singular, required or optional)
  * - Connection fields for every relationship
- *
- * Relationship aggregate fields (`<rel>Aggregate`) are not emitted: the
- * runtime does not support them.
  */
 export function emitNodeTypes(schema: SchemaMetadata): string {
   const blocks: string[] = [];
@@ -79,10 +81,11 @@ function emitSingleNodeType(
   }
 
   // --- Relationship fields ---
-  // No `<rel>Aggregate` field: the runtime selection never populates it.
-  // Through v2.4.7 one was emitted per relationship and always read as
-  // `undefined`.
+  // v2.7.0 — `<rel>Aggregate` is back: the runtime selection populates it.
+  // (2.4.8–2.6.x left it out because it always read `undefined`.)
   for (const [, rel] of node.relationships) {
+    if (hasRelAggregateField(node, rel))
+      members.push(emitAggregateField(node.typeName, rel));
     members.push(emitRelationshipField(rel));
     members.push(emitConnectionField(node.typeName, rel));
   }
@@ -142,6 +145,19 @@ function emitRelationshipField(rel: RelationshipDefinition): string {
   const type = wrapMaybe(rel.target, rel.isRequired);
 
   return `  ${rel.fieldName}${optional}: ${type};`;
+}
+
+/**
+ * Emits the aggregate field for a relationship (v2.7.0), optional: it is
+ * present only when selected.
+ *
+ * Example: `  drugsAggregate?: Maybe<ChartDrugDrugsAggregationSelection>;`
+ */
+export function emitAggregateField(
+  ownerTypeName: string,
+  rel: RelationshipDefinition,
+): string {
+  return `  ${rel.fieldName}Aggregate?: Maybe<${relAggregationSelectionName(ownerTypeName, rel)}>;`;
 }
 
 /**

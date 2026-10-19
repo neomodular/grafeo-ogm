@@ -5,6 +5,12 @@ import type {
   RelationshipDefinition,
   SchemaMetadata,
 } from '../../schema/types';
+import {
+  hasRelAggregateField,
+  REL_AGGREGATE_OPS,
+  relAggregateFields,
+  relAggregateTargetProperties,
+} from './aggregation-emitter';
 import { toPascalCase } from './helpers';
 
 /**
@@ -72,6 +78,11 @@ function emitNodeSelectFields(
   for (const [, rel] of node.relationships)
     members.push(emitConnectionField(node.typeName, rel, schema));
 
+  // v2.7.0 — relationship aggregate fields
+  for (const [, rel] of node.relationships)
+    if (hasRelAggregateField(node, rel))
+      members.push(emitAggregateSelectField(rel, schema));
+
   return `export type ${node.typeName}SelectFields = {\n${members.join('\n')}\n};`;
 }
 
@@ -98,6 +109,11 @@ function emitInterfaceSelectFields(
   // Connection fields — interfaces can also expose connections
   for (const [, rel] of iface.relationships)
     members.push(emitConnectionField(iface.name, rel, schema));
+
+  // v2.7.0 — relationship aggregate fields
+  for (const [, rel] of iface.relationships)
+    if (hasRelAggregateField(iface, rel))
+      members.push(emitAggregateSelectField(rel, schema));
 
   return `export type ${iface.name}SelectFields = {\n${members.join('\n')}\n};`;
 }
@@ -248,6 +264,60 @@ function emitConnectionField(
   ];
 
   return lines.join('\n');
+}
+
+/**
+ * v2.7.0 — a `<rel>Aggregate` select entry, mirroring the runtime
+ * (`SelectNormalizer.normalizeAggregate`): `true` selects `count` and every
+ * aggregate of every aggregatable node / edge field; the object form takes
+ * `where` (the target's where input), `directed` and a `select` of `count`,
+ * `node` and (with edge properties) `edge`, each field `true` (all its
+ * aggregates) or `{ select: { <aggregate>: true } }`.
+ *
+ * ```
+ * postsAggregate?: boolean | {
+ *   where?: PostWhere;
+ *   directed?: boolean;
+ *   select?: {
+ *     count?: boolean;
+ *     node?: boolean | { select: { views?: boolean | { select: { min?: boolean; … } } } };
+ *   };
+ * };
+ * ```
+ */
+function emitAggregateSelectField(
+  rel: RelationshipDefinition,
+  schema: SchemaMetadata,
+): string {
+  const fieldsSelect = (props: Map<string, PropertyDefinition>): string => {
+    const members = relAggregateFields(props).map(([name, aggType]) => {
+      const ops = REL_AGGREGATE_OPS[aggType]
+        .map((op) => `${op}?: boolean`)
+        .join('; ');
+      return `${name}?: boolean | { select: { ${ops} } }`;
+    });
+    return `boolean | { select: { ${members.join('; ')} } }`;
+  };
+  const isUnion = !!schema.unions?.get(rel.target)?.length;
+  const edgeProps = rel.properties
+    ? schema.relationshipProperties.get(rel.properties)?.properties
+    : undefined;
+  const selectMembers = [`        count?: boolean;`];
+  if (!isUnion)
+    selectMembers.push(
+      `        node?: ${fieldsSelect(relAggregateTargetProperties(rel.target, schema))};`,
+    );
+  if (edgeProps)
+    selectMembers.push(`        edge?: ${fieldsSelect(edgeProps)};`);
+  return [
+    `  ${rel.fieldName}Aggregate?: boolean | {`,
+    `    where?: ${rel.target}Where;`,
+    `    directed?: boolean;`,
+    `    select?: {`,
+    ...selectMembers,
+    `    };`,
+    `  };`,
+  ].join('\n');
 }
 
 /**

@@ -1,9 +1,15 @@
 import { OGMError } from '../errors';
 import type {
   NodeDefinition,
+  PropertyDefinition,
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
+import {
+  AGGREGATE_SUFFIX,
+  AGGREGATES_BY_KIND,
+  aggregateKind,
+} from './relationship-aggregate';
 import { resolveTargetDef } from '../schema/utils';
 import {
   assertSafeIdentifier,
@@ -12,6 +18,7 @@ import {
   isPlainObject,
 } from '../utils/validation';
 import { lenientStrictMode, type StrictMode } from '../utils/strict-mode';
+import { normalizeConnectionOrderBy } from './connection-order-by';
 import {
   aggregateFieldHint,
   reportUnknownSelectedField,
@@ -89,6 +96,22 @@ export class SelectNormalizer {
       }
 
       const relDef = nodeDef.relationships.get(fieldName);
+
+      // v2.7.0 — `postsAggregate: true | { where?, directed?, select? }`.
+      // Pre-2.7.0 the key was not a relationship and dropped.
+      if (
+        !relDef &&
+        fieldName.endsWith(AGGREGATE_SUFFIX) &&
+        !nodeDef.properties.has(fieldName)
+      ) {
+        const aggregated = nodeDef.relationships.get(
+          fieldName.slice(0, -AGGREGATE_SUFFIX.length),
+        );
+        if (aggregated) {
+          nodes.push(this.normalizeAggregate(fieldName, value, aggregated));
+          continue;
+        }
+      }
 
       if (relDef) {
         // It's a relationship field
@@ -235,6 +258,158 @@ export class SelectNormalizer {
   }
 
   /**
+   * v2.7.0 — a typed `<rel>Aggregate` select into the selection the
+   * selectionSet `postsAggregate(where, directed) { count node { … } edge
+   * { … } }` parses to. `true` (at any level) selects everything below:
+   * `count`, and every aggregate of every aggregatable node / edge field.
+   * Unknown keys throw: the compiler validates the rest.
+   */
+  private normalizeAggregate(
+    fieldName: string,
+    value: unknown,
+    relDef: RelationshipDefinition,
+  ): SelectionNode {
+    const node: SelectionNode = {
+      fieldName,
+      isScalar: false,
+      isRelationship: true,
+      isConnection: false,
+    };
+    const scalar = (name: string): SelectionNode => ({
+      fieldName: name,
+      isScalar: true,
+      isRelationship: false,
+      isConnection: false,
+    });
+    const targetProps = this.schema.unions?.get(relDef.target)?.length
+      ? undefined
+      : resolveTargetDef(relDef.target, this.schema)?.properties;
+    const edgeProps = relDef.properties
+      ? this.schema.relationshipProperties.get(relDef.properties)?.properties
+      : undefined;
+    /** `node` / `edge`: `true` → every aggregatable field, all aggregates. */
+    const fieldsOf = (
+      which: 'node' | 'edge',
+      props: Map<string, PropertyDefinition> | undefined,
+      v: unknown,
+    ): SelectionNode => {
+      const out: SelectionNode = {
+        fieldName: which,
+        isScalar: false,
+        isRelationship: true,
+        isConnection: false,
+        children: [],
+      };
+      const where = `${fieldName}.${which}`;
+      if (v === true) {
+        for (const prop of props?.values() ?? []) {
+          const kind = aggregateKind(prop);
+          if (kind)
+            out.children!.push({
+              fieldName: prop.name,
+              isScalar: false,
+              isRelationship: true,
+              isConnection: false,
+              children: AGGREGATES_BY_KIND[kind].map(scalar),
+            });
+        }
+        return out;
+      }
+      const sel = selectOf(v, where);
+      for (const [field, fv] of Object.entries(sel)) {
+        if (fv == null || fv === false) continue;
+        assertSafeKey(field, 'select input');
+        const prop = props?.get(field);
+        const kind = prop ? aggregateKind(prop) : null;
+        if (!kind)
+          throw new OGMError(
+            prop?.isArray
+              ? `Field "${field}" on ${where} has no aggregates: list fields are not aggregated.`
+              : `Field "${field}" on ${where} has no aggregates (unknown, or not aggregatable).`,
+          );
+        const ops =
+          fv === true
+            ? [...AGGREGATES_BY_KIND[kind]]
+            : Object.entries(selectOf(fv, `${where}.${field}`))
+                .filter(([, on]) => on === true)
+                .map(([op]) => {
+                  assertSafeKey(op, 'select input');
+                  return op;
+                });
+        out.children!.push({
+          fieldName: field,
+          isScalar: false,
+          isRelationship: true,
+          isConnection: false,
+          children: ops.map(scalar),
+        });
+      }
+      return out;
+    };
+    /** The `select` object of `{ select: { … } }`, validated. */
+    const selectOf = (v: unknown, where: string): Record<string, unknown> => {
+      if (!isPlainObject(v) || !isPlainObject(v.select))
+        throw new OGMError(
+          `select for ${where} must be true or { select: { … } }.`,
+        );
+      for (const k of Object.keys(v))
+        if (k !== 'select')
+          throw new OGMError(`Unknown key "${k}" in select for ${where}.`);
+      return v.select;
+    };
+
+    let select: Record<string, unknown>;
+    if (value === true)
+      select = {
+        count: true,
+        ...(targetProps ? { node: true } : {}),
+        ...(edgeProps ? { edge: true } : {}),
+      };
+    else if (isPlainObject(value)) {
+      for (const k of Object.keys(value))
+        if (!['where', 'directed', 'select'].includes(k))
+          throw new OGMError(
+            `Unknown key "${k}" in select for relationship aggregate "${fieldName}". ` +
+              `Supported: where, directed, select.`,
+          );
+      if (value.where !== undefined) {
+        if (!isPlainObject(value.where))
+          throw new OGMError(
+            `where on relationship aggregate "${fieldName}" must be an object.`,
+          );
+        node.relationshipWhere = value.where;
+      }
+      if (value.directed !== undefined) {
+        if (typeof value.directed !== 'boolean')
+          throw new OGMError(
+            `directed on relationship aggregate "${fieldName}" must be true or false.`,
+          );
+        node.directed = value.directed;
+      }
+      select = isPlainObject(value.select) ? value.select : { count: true };
+    } else
+      throw new OGMError(
+        `select for relationship aggregate "${fieldName}" must be true or an object.`,
+      );
+
+    node.children = [];
+    for (const [key, v] of Object.entries(select)) {
+      if (v == null || v === false) continue;
+      if (key === 'count' && v === true) node.children.push(scalar('count'));
+      else if (key === 'node')
+        node.children.push(fieldsOf('node', targetProps, v));
+      else if (key === 'edge')
+        node.children.push(fieldsOf('edge', edgeProps, v));
+      else
+        throw new OGMError(
+          `Unknown key "${key}" in select for relationship aggregate "${fieldName}". ` +
+            `Supported: count, node, edge.`,
+        );
+    }
+    return node;
+  }
+
+  /**
    * Normalize and validate an orderBy input into the internal format.
    * Accepts a single object `{ field: 'ASC' }` or an array `[{ field: 'ASC' }, ...]`.
    */
@@ -329,11 +504,11 @@ export class SelectNormalizer {
 
     // Extract orderBy (node/edge scoped) for edge sorting
     if (obj.orderBy !== undefined)
-      node.connectionOrderBy = this.normalizeConnectionOrderBy(
+      node.connectionOrderBy = normalizeConnectionOrderBy(
         obj.orderBy,
-        targetDef,
-        relDef,
         fieldName,
+        'orderBy',
+        { targetDef, relDef, schema: this.schema },
       );
 
     // Extract edges -> node and edges -> properties from select
@@ -399,104 +574,6 @@ export class SelectNormalizer {
     }
 
     return node;
-  }
-
-  /**
-   * Normalize and validate a connection orderBy input.
-   * Each entry must be an object with exactly one key: `node` or `edge`.
-   * The inner value is a `{ field: 'ASC' | 'DESC' }` map, which may contain
-   * multiple fields (preserving insertion order as sort priority).
-   */
-  private normalizeConnectionOrderBy(
-    orderByInput: unknown,
-    targetDef: NodeDefinition,
-    relDef: RelationshipDefinition,
-    fieldName: string,
-  ): Array<{
-    field: string;
-    direction: 'ASC' | 'DESC';
-    scope: 'node' | 'edge';
-  }> {
-    const items = Array.isArray(orderByInput) ? orderByInput : [orderByInput];
-    const result: Array<{
-      field: string;
-      direction: 'ASC' | 'DESC';
-      scope: 'node' | 'edge';
-    }> = [];
-
-    for (const item of items) {
-      if (typeof item !== 'object' || item === null)
-        throw new OGMError(
-          `Invalid orderBy entry on connection "${fieldName}". ` +
-            `Each entry must be an object like { node: { field: 'ASC' } } or { edge: { field: 'DESC' } }.`,
-        );
-
-      const entries = Object.entries(item as Record<string, unknown>);
-      if (entries.length === 0) continue;
-      if (entries.length > 1)
-        throw new OGMError(
-          `Invalid orderBy entry on connection "${fieldName}". ` +
-            `Each entry must have exactly one of "node" or "edge" — got keys: ${entries
-              .map(([k]) => `"${k}"`)
-              .join(', ')}.`,
-        );
-
-      const [scopeKey, scopeValue] = entries[0];
-      if (scopeKey !== 'node' && scopeKey !== 'edge')
-        throw new OGMError(
-          `Invalid orderBy scope "${scopeKey}" on connection "${fieldName}". ` +
-            `Use "node" (to sort by target node fields) or "edge" (to sort by relationship property fields).`,
-        );
-
-      if (!isPlainObject(scopeValue))
-        throw new OGMError(
-          `Invalid orderBy "${scopeKey}" value on connection "${fieldName}". ` +
-            `Expected an object like { field: 'ASC' }.`,
-        );
-
-      const scope = scopeKey as 'node' | 'edge';
-      let edgePropsDef:
-        | { properties: NodeDefinition['properties'] }
-        | undefined;
-      if (scope === 'edge') {
-        if (!relDef.properties)
-          throw new OGMError(
-            `Invalid orderBy on connection "${fieldName}": relationship has no @relationshipProperties, ` +
-              `so "edge" sort keys are not available. Use { node: { ... } } instead.`,
-          );
-        const resolved = this.schema.relationshipProperties.get(
-          relDef.properties,
-        );
-        if (!resolved)
-          throw new OGMError(
-            `Invalid orderBy on connection "${fieldName}": relationship properties type ` +
-              `"${relDef.properties}" is not defined in the schema.`,
-          );
-        edgePropsDef = resolved;
-      }
-
-      for (const [sortField, rawDirection] of Object.entries(scopeValue)) {
-        assertSafeKey(sortField, `orderBy ${scope} field`);
-        assertSafeIdentifier(sortField, `orderBy ${scope} field`);
-
-        if (scope === 'node') {
-          if (!targetDef.properties.has(sortField))
-            throw new OGMError(
-              `Invalid orderBy node field "${sortField}" on connection "${fieldName}". ` +
-                `Field must be a scalar property of ${targetDef.typeName}.`,
-            );
-        } else if (!edgePropsDef?.properties.has(sortField))
-          throw new OGMError(
-            `Invalid orderBy edge field "${sortField}" on connection "${fieldName}". ` +
-              `Field must be a scalar property of relationship type "${relDef.properties}".`,
-          );
-
-        const direction = assertSortDirection(String(rawDirection));
-        result.push({ field: sortField, direction, scope });
-      }
-    }
-
-    return result;
   }
 
   /**

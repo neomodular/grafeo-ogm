@@ -282,12 +282,11 @@ const i: G.IdAggregateSelection = { longest: 'b' };
   });
 });
 
-describe('generated types omit unsupported <rel>Aggregate fields', () => {
-  // Through v2.4.7 every relationship produced a `<rel>Aggregate` field on
-  // the node type and a `<rel>Aggregate` where key. The selection never
-  // returns the field (always undefined) and the where compiler throws on
-  // the key, so both are gone from the generated surface.
-  it('rejects <rel>Aggregate in where and on the node type', async () => {
+describe('generated <rel>Aggregate where keys stay out', () => {
+  // Through v2.4.7 every relationship produced a `<rel>Aggregate` where
+  // key, which the where compiler throws on. Aggregate FILTERS are still
+  // unsupported (the aggregate SELECTION is supported since v2.7.0).
+  it('rejects <rel>Aggregate in where', async () => {
     const { errors } = await typecheckGenerated(
       `
       type Author @node {
@@ -306,12 +305,197 @@ async function run() {
   });
   await ogm.model('Author').find({ where: { books_SOME: { id: 'b' } } });
 }
-declare const author: G.Author;
-// @ts-expect-error never populated by the runtime
-author.booksAggregate;
 `,
     );
     expect(errors).toEqual([]);
+  });
+});
+
+describe('generated <rel>Aggregate selection types match the runtime (v2.7.0)', () => {
+  // 2.4.8–2.6.x left `<rel>Aggregate` out of the node types because the
+  // runtime never populated it (issue #23). It now does, with upstream's
+  // shape; the node / interface types and SelectFields offer it again.
+  const typeDefs = `
+    interface Content {
+      id: ID!
+      title: String
+      comments: [Comment!]! @declareRelationship
+    }
+    type Wrote @relationshipProperties {
+      weight: Int
+      score: Float
+      big: BigInt
+      note: String
+      at: DateTime
+      dur: Duration
+      flag: Boolean
+      marks: [Int!]
+    }
+    union Item = Post | Note
+    type User @node {
+      id: ID! @id
+      posts: [Post!]! @relationship(type: "WROTE", direction: OUT, properties: "Wrote")
+      content: [Content!]! @relationship(type: "HAS", direction: OUT)
+      items: [Item!]! @relationship(type: "ITEM", direction: OUT, properties: "Wrote")
+    }
+    type Post implements Content @node {
+      id: ID! @id
+      title: String
+      views: Int
+      rating: Float
+      big: BigInt
+      at: DateTime
+      ldt: LocalDateTime
+      lt: LocalTime
+      t: Time
+      dur: Duration
+      d: Date
+      flag: Boolean
+      tags: [String!]
+      comments: [Comment!]! @relationship(type: "ON", direction: IN)
+    }
+    type Note implements Content @node {
+      id: ID! @id
+      title: String
+      comments: [Comment!]! @relationship(type: "ON", direction: IN)
+    }
+    type Comment @node {
+      id: ID! @id
+      likes: Int
+    }
+  `;
+
+  it('types the selectionSet result, node and edge aggregates', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+async function run() {
+  const [u] = await ogm.model('User').find({
+    selectionSet: '{ postsAggregate { count node { views { sum } } edge { weight { max } } } }',
+  });
+  const count: number | undefined = u.postsAggregate?.count;
+  const sum: G.Maybe<number> | undefined = u.postsAggregate?.node?.views.sum;
+  const longest: G.Maybe<string> | undefined = u.postsAggregate?.node?.title.longest;
+  const shortestId: G.Maybe<string> | undefined = u.postsAggregate?.node?.id.shortest;
+  const big: G.Maybe<string> | undefined = u.postsAggregate?.node?.big.average;
+  const at: unknown = u.postsAggregate?.node?.ldt.min;
+  const dur: G.Maybe<string> | undefined = u.postsAggregate?.edge?.dur.max;
+  const weight: G.Maybe<number> | undefined = u.postsAggregate?.edge?.weight.max;
+  const items: number | undefined = u.itemsAggregate?.count;
+  const contentTitle: G.Maybe<string> | undefined = u.contentAggregate?.node?.title.shortest;
+  return [count, sum, longest, shortestId, big, at, dur, weight, items, contentTitle];
+}
+declare const agg: G.UserPostPostsAggregationSelection;
+// @ts-expect-error Boolean fields have no aggregates
+agg.node?.flag;
+// @ts-expect-error Date fields have no aggregates
+agg.node?.d;
+// @ts-expect-error Int has no shortest
+agg.node?.views.shortest;
+declare const edge: G.UserPostPostsEdgeAggregateSelection;
+// @ts-expect-error Boolean edge properties have no aggregates
+edge.flag;
+// The pre-2.4.8 field shape: optional, Maybe.
+type _f = Expect<Equal<G.User['postsAggregate'], G.Maybe<G.UserPostPostsAggregationSelection> | undefined>>;
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts the typed select forms the runtime accepts', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+async function run() {
+  const rows = await ogm.model('User').find({
+    select: {
+      id: true,
+      postsAggregate: {
+        where: { views_GT: 1 },
+        directed: false,
+        select: {
+          count: true,
+          node: { select: { views: { select: { sum: true, average: true } }, title: true } },
+          edge: { select: { weight: { select: { max: true } } } },
+        },
+      },
+      itemsAggregate: true,
+      contentAggregate: { select: { node: true } },
+    },
+  });
+  const c: number | undefined = rows[0].postsAggregate?.count;
+  const s: G.Maybe<number> | undefined = rows[0].postsAggregate?.node?.views?.sum;
+  return [c, s];
+}
+const bad1: G.UserSelectFields = {
+  // @ts-expect-error a union target has no node aggregates
+  itemsAggregate: { select: { node: true } },
+};
+const bad2: G.UserSelectFields = {
+  // @ts-expect-error Int has no longest
+  postsAggregate: { select: { node: { select: { views: { select: { longest: true } } } } } },
+};
+const bad3: G.UserSelectFields = {
+  // @ts-expect-error Boolean fields have no aggregates
+  postsAggregate: { select: { node: { select: { flag: true } } } },
+};
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('InterfaceModel results and interface SelectFields carry it too', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+async function run() {
+  const rows = await ogm.interfaceModel('Content').find({
+    selectionSet: '{ id commentsAggregate { count } }',
+  });
+  const c: number | undefined = rows[0].commentsAggregate?.count;
+  return c;
+}
+const f: G.ContentSelectFields = { commentsAggregate: { select: { count: true } } };
+`,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the aggregation type names and every v2.6.3 member', async () => {
+    // Additive: the names existing code imports are unchanged, every
+    // member v2.6.3 declared is still there with a type assignable to its
+    // v2.6.3 one (ID / String: supersets offering min / max too), and the
+    // v2.6.3 list members keep their exact v2.6.3 type, deprecated.
+    const { errors, generated } = await typecheckGenerated(
+      typeDefs,
+      `${PRELUDE}
+declare const n: G.UserPostPostsNodeAggregateSelection;
+declare const e: G.UserPostPostsEdgeAggregateSelection;
+// v2.6.3 members of UserPostPostsNodeAggregateSelection, with v2.6.3 types.
+const n1: G.IdAggregateSelection = n.id;
+const n2: G.StringAggregateSelection = n.title;
+const n3: G.IntAggregateSelection = n.views;
+const n4: G.FloatAggregateSelection = n.rating;
+const n5: G.DateTimeAggregateSelection = n.at;
+type _nl = Expect<Equal<G.UserPostPostsNodeAggregateSelection['tags'], G.StringAggregateSelection>>;
+// v2.6.3 members of UserPostPostsEdgeAggregateSelection.
+const e1: G.IntAggregateSelection = e.weight;
+const e2: G.FloatAggregateSelection = e.score;
+const e3: G.StringAggregateSelection = e.note;
+const e4: G.DateTimeAggregateSelection = e.at;
+type _el = Expect<Equal<G.UserPostPostsEdgeAggregateSelection['marks'], G.IntAggregateSelection>>;
+const mn: G.Maybe<string> | undefined = n.title.min;
+type _i = G.UserPostsAggregateInput;
+`,
+    );
+    expect(errors).toEqual([]);
+    for (const member of [
+      'tags: StringAggregateSelection;',
+      'marks: IntAggregateSelection;',
+    ])
+      expect(generated).toContain(
+        `  /** @deprecated List fields are not aggregated (never supported at runtime: selecting it throws). Removed in 3.0. */\n  ${member}`,
+      );
   });
 });
 

@@ -138,6 +138,12 @@ export interface BuildRelPatternOptions {
    * and omits the target label. Requires `schema` to be passed.
    */
   schema?: SchemaMetadata;
+  /**
+   * v2.7.0 — match the relationship in either direction (`(a)-[:T]-(b)`),
+   * for a `<rel>Aggregate(directed: false)` selection. Omitted: the
+   * relationship's declared direction, as before.
+   */
+  undirected?: boolean;
 }
 
 /**
@@ -180,6 +186,7 @@ export function buildRelPattern(opts: BuildRelPatternOptions): string {
   else targetPart = opts.targetVar ? `(${opts.targetVar})` : `()`;
 
   const sourcePart = `(${opts.sourceVar})`;
+  if (opts.undirected) return `${sourcePart}-${relPart}-${targetPart}`;
   if (opts.relDef.direction === 'IN')
     return `${sourcePart}<-${relPart}-${targetPart}`;
 

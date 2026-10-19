@@ -108,6 +108,7 @@ export type Author = {
   name: Scalars["String"]["output"];
   bio?: Maybe<Scalars["String"]["output"]>;
   bornYear?: Maybe<Scalars["Int"]["output"]>;
+  booksAggregate?: Maybe<AuthorBookBooksAggregationSelection>;
   books: Array<Book>;
   booksConnection: AuthorBooksConnection;
 };
@@ -121,10 +122,13 @@ export type Book = {
   price?: Maybe<Scalars["Float"]["output"]>;
   published?: Maybe<Scalars["DateTime"]["output"]>;
   status?: Maybe<BookStatus>;
+  authorAggregate?: Maybe<BookAuthorAuthorAggregationSelection>;
   author: Author;
   authorConnection: BookAuthorConnection;
+  categoriesAggregate?: Maybe<BookCategoryCategoriesAggregationSelection>;
   categories: Array<Category>;
   categoriesConnection: BookCategoriesConnection;
+  reviewsAggregate?: Maybe<BookReviewReviewsAggregationSelection>;
   reviews: Array<Review>;
   reviewsConnection: BookReviewsConnection;
 };
@@ -133,6 +137,7 @@ export type Category = {
   __typename?: "Category";
   id: Scalars["ID"]["output"];
   name: Scalars["String"]["output"];
+  booksAggregate?: Maybe<CategoryBookBooksAggregationSelection>;
   books: Array<Book>;
   booksConnection: CategoryBooksConnection;
 };
@@ -149,6 +154,7 @@ export type Review = {
   id: Scalars["ID"]["output"];
   rating: Scalars["Int"]["output"];
   comment?: Maybe<Scalars["String"]["output"]>;
+  bookAggregate?: Maybe<ReviewBookBookAggregationSelection>;
   book: Book;
   bookConnection: ReviewBookConnection;
 };
@@ -1188,6 +1194,54 @@ export type DateTimeAggregateSelection = {
   max?: Maybe<Scalars["DateTime"]["output"]>;
 };
 
+export type IdRelationshipAggregateSelection = {
+  __typename?: "IDAggregateSelection";
+  shortest?: Maybe<Scalars["ID"]["output"]>;
+  longest?: Maybe<Scalars["ID"]["output"]>;
+  min?: Maybe<Scalars["ID"]["output"]>;
+  max?: Maybe<Scalars["ID"]["output"]>;
+};
+
+export type StringRelationshipAggregateSelection = {
+  __typename?: "StringAggregateSelection";
+  shortest?: Maybe<Scalars["String"]["output"]>;
+  longest?: Maybe<Scalars["String"]["output"]>;
+  min?: Maybe<Scalars["String"]["output"]>;
+  max?: Maybe<Scalars["String"]["output"]>;
+};
+
+export type BigIntAggregateSelection = {
+  __typename?: "BigIntAggregateSelection";
+  max?: Maybe<string>;
+  min?: Maybe<string>;
+  average?: Maybe<string>;
+  sum?: Maybe<string>;
+};
+
+export type LocalDateTimeAggregateSelection = {
+  __typename?: "LocalDateTimeAggregateSelection";
+  min?: Maybe<Scalars["LocalDateTime"]["output"]>;
+  max?: Maybe<Scalars["LocalDateTime"]["output"]>;
+};
+
+export type LocalTimeAggregateSelection = {
+  __typename?: "LocalTimeAggregateSelection";
+  min?: Maybe<Scalars["LocalTime"]["output"]>;
+  max?: Maybe<Scalars["LocalTime"]["output"]>;
+};
+
+export type TimeAggregateSelection = {
+  __typename?: "TimeAggregateSelection";
+  min?: Maybe<Scalars["Time"]["output"]>;
+  max?: Maybe<Scalars["Time"]["output"]>;
+};
+
+export type DurationAggregateSelection = {
+  __typename?: "DurationAggregateSelection";
+  min?: Maybe<Scalars["Duration"]["output"]>;
+  max?: Maybe<Scalars["Duration"]["output"]>;
+};
+
 export type AuthorAggregateSelection = {
   __typename?: "AuthorAggregateSelection";
   count: Scalars["Int"]["output"];
@@ -1197,7 +1251,6 @@ export type AuthorAggregateSelection = {
   bornYear: IntAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type AuthorBookBooksAggregationSelection = {
   __typename?: "AuthorBookBooksAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1207,21 +1260,21 @@ export type AuthorBookBooksAggregationSelection = {
 
 export type AuthorBookBooksNodeAggregateSelection = {
   __typename?: "AuthorBookBooksNodeAggregateSelection";
-  id: IdAggregateSelection;
-  title: StringAggregateSelection;
-  isbn: StringAggregateSelection;
-  description: StringAggregateSelection;
+  id: IdRelationshipAggregateSelection;
+  title: StringRelationshipAggregateSelection;
+  isbn: StringRelationshipAggregateSelection;
+  description: StringRelationshipAggregateSelection;
   price: FloatAggregateSelection;
   published: DateTimeAggregateSelection;
 };
 
 export type AuthorBookBooksEdgeAggregateSelection = {
   __typename?: "AuthorBookBooksEdgeAggregateSelection";
-  role: StringAggregateSelection;
+  role: StringRelationshipAggregateSelection;
   year: IntAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type AuthorBooksAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1244,7 +1297,6 @@ export type BookAggregateSelection = {
   published: DateTimeAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookAuthorAuthorAggregationSelection = {
   __typename?: "BookAuthorAuthorAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1254,19 +1306,19 @@ export type BookAuthorAuthorAggregationSelection = {
 
 export type BookAuthorAuthorNodeAggregateSelection = {
   __typename?: "BookAuthorAuthorNodeAggregateSelection";
-  id: IdAggregateSelection;
-  name: StringAggregateSelection;
-  bio: StringAggregateSelection;
+  id: IdRelationshipAggregateSelection;
+  name: StringRelationshipAggregateSelection;
+  bio: StringRelationshipAggregateSelection;
   bornYear: IntAggregateSelection;
 };
 
 export type BookAuthorAuthorEdgeAggregateSelection = {
   __typename?: "BookAuthorAuthorEdgeAggregateSelection";
-  role: StringAggregateSelection;
+  role: StringRelationshipAggregateSelection;
   year: IntAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type BookAuthorAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1278,7 +1330,6 @@ export type BookAuthorAggregateInput = {
   NOT?: InputMaybe<BookAuthorAggregateInput>;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookCategoryCategoriesAggregationSelection = {
   __typename?: "BookCategoryCategoriesAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1288,8 +1339,8 @@ export type BookCategoryCategoriesAggregationSelection = {
 
 export type BookCategoryCategoriesNodeAggregateSelection = {
   __typename?: "BookCategoryCategoriesNodeAggregateSelection";
-  id: IdAggregateSelection;
-  name: StringAggregateSelection;
+  id: IdRelationshipAggregateSelection;
+  name: StringRelationshipAggregateSelection;
 };
 
 export type BookCategoryCategoriesEdgeAggregateSelection = {
@@ -1297,7 +1348,7 @@ export type BookCategoryCategoriesEdgeAggregateSelection = {
   addedAt: DateTimeAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type BookCategoriesAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1309,7 +1360,6 @@ export type BookCategoriesAggregateInput = {
   NOT?: InputMaybe<BookCategoriesAggregateInput>;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type BookReviewReviewsAggregationSelection = {
   __typename?: "BookReviewReviewsAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1318,12 +1368,12 @@ export type BookReviewReviewsAggregationSelection = {
 
 export type BookReviewReviewsNodeAggregateSelection = {
   __typename?: "BookReviewReviewsNodeAggregateSelection";
-  id: IdAggregateSelection;
+  id: IdRelationshipAggregateSelection;
   rating: IntAggregateSelection;
-  comment: StringAggregateSelection;
+  comment: StringRelationshipAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type BookReviewsAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1342,7 +1392,6 @@ export type CategoryAggregateSelection = {
   name: StringAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type CategoryBookBooksAggregationSelection = {
   __typename?: "CategoryBookBooksAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1351,15 +1400,15 @@ export type CategoryBookBooksAggregationSelection = {
 
 export type CategoryBookBooksNodeAggregateSelection = {
   __typename?: "CategoryBookBooksNodeAggregateSelection";
-  id: IdAggregateSelection;
-  title: StringAggregateSelection;
-  isbn: StringAggregateSelection;
-  description: StringAggregateSelection;
+  id: IdRelationshipAggregateSelection;
+  title: StringRelationshipAggregateSelection;
+  isbn: StringRelationshipAggregateSelection;
+  description: StringRelationshipAggregateSelection;
   price: FloatAggregateSelection;
   published: DateTimeAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type CategoryBooksAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1387,7 +1436,6 @@ export type ReviewAggregateSelection = {
   comment: StringAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
 export type ReviewBookBookAggregationSelection = {
   __typename?: "ReviewBookBookAggregationSelection";
   count: Scalars["Int"]["output"];
@@ -1396,15 +1444,15 @@ export type ReviewBookBookAggregationSelection = {
 
 export type ReviewBookBookNodeAggregateSelection = {
   __typename?: "ReviewBookBookNodeAggregateSelection";
-  id: IdAggregateSelection;
-  title: StringAggregateSelection;
-  isbn: StringAggregateSelection;
-  description: StringAggregateSelection;
+  id: IdRelationshipAggregateSelection;
+  title: StringRelationshipAggregateSelection;
+  isbn: StringRelationshipAggregateSelection;
+  description: StringRelationshipAggregateSelection;
   price: FloatAggregateSelection;
   published: DateTimeAggregateSelection;
 };
 
-/** @deprecated Relationship aggregates are not supported at runtime; this type is unused. */
+/** @deprecated Relationship aggregate filters are not supported at runtime; this type is unused. */
 export type ReviewBookAggregateInput = {
   count?: InputMaybe<Scalars["Int"]["input"]>;
   count_LT?: InputMaybe<Scalars["Int"]["input"]>;
@@ -1594,6 +1642,100 @@ export type AuthorSelectFields = {
               };
         };
       };
+  booksAggregate?:
+    | boolean
+    | {
+        where?: BookWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  title?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  isbn?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  description?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  price?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                  published?:
+                    | boolean
+                    | { select: { min?: boolean; max?: boolean } };
+                };
+              };
+          edge?:
+            | boolean
+            | {
+                select: {
+                  role?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  year?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                };
+              };
+        };
+      };
 };
 
 export type BookSelectFields = {
@@ -1671,6 +1813,176 @@ export type BookSelectFields = {
               };
         };
       };
+  authorAggregate?:
+    | boolean
+    | {
+        where?: AuthorWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  name?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  bio?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  bornYear?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                };
+              };
+          edge?:
+            | boolean
+            | {
+                select: {
+                  role?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  year?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                };
+              };
+        };
+      };
+  categoriesAggregate?:
+    | boolean
+    | {
+        where?: CategoryWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  name?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                };
+              };
+          edge?:
+            | boolean
+            | {
+                select: {
+                  addedAt?:
+                    | boolean
+                    | { select: { min?: boolean; max?: boolean } };
+                };
+              };
+        };
+      };
+  reviewsAggregate?:
+    | boolean
+    | {
+        where?: ReviewWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  rating?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                  comment?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                };
+              };
+        };
+      };
 };
 
 export type CategorySelectFields = {
@@ -1694,6 +2006,74 @@ export type CategorySelectFields = {
             | boolean
             | {
                 node?: boolean | { select: BookSelectFields };
+              };
+        };
+      };
+  booksAggregate?:
+    | boolean
+    | {
+        where?: BookWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  title?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  isbn?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  description?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  price?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                  published?:
+                    | boolean
+                    | { select: { min?: boolean; max?: boolean } };
+                };
               };
         };
       };
@@ -1721,6 +2101,74 @@ export type ReviewSelectFields = {
             | boolean
             | {
                 node?: boolean | { select: BookSelectFields };
+              };
+        };
+      };
+  bookAggregate?:
+    | boolean
+    | {
+        where?: BookWhere;
+        directed?: boolean;
+        select?: {
+          count?: boolean;
+          node?:
+            | boolean
+            | {
+                select: {
+                  id?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  title?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  isbn?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  description?:
+                    | boolean
+                    | {
+                        select: {
+                          shortest?: boolean;
+                          longest?: boolean;
+                          min?: boolean;
+                          max?: boolean;
+                        };
+                      };
+                  price?:
+                    | boolean
+                    | {
+                        select: {
+                          min?: boolean;
+                          max?: boolean;
+                          average?: boolean;
+                          sum?: boolean;
+                        };
+                      };
+                  published?:
+                    | boolean
+                    | { select: { min?: boolean; max?: boolean } };
+                };
               };
         };
       };
