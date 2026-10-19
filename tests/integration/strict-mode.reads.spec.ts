@@ -30,7 +30,11 @@ const typeDefs = /* GraphQL */ `
     body: String
     stars: Int
   }
-  type ItSmDoc
+  interface ItSmScored {
+    runId: String
+    scores: [Int!]
+  }
+  type ItSmDoc implements ItSmScored
     @node
     @fulltext(
       indexes: [
@@ -254,6 +258,34 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       expect(ids(await find({ pages_IN: [10] }))).toEqual([id('both')]);
       expect(logger.warn).not.toHaveBeenCalled();
     });
+  });
+
+  describe('item 11 — aggregate avg / sum on a list field (both modes)', () => {
+    it.each([undefined, true])(
+      'strict=%s: list keys come back null, the rest still aggregates',
+      async (strict) => {
+        const { doc, ogm, logger } = make(strict);
+        const agg = await doc.aggregate({
+          where: { runId } as never,
+          aggregate: { count: true, scores: true, ratings: true, pages: true },
+        });
+        expect(agg).toEqual({
+          count: 3,
+          scores: { min: [1, 2], max: [5], average: null, sum: null },
+          ratings: { min: [0.5, 1.5], max: [2.5], average: null, sum: null },
+          pages: { min: 10, max: 20, average: 15, sum: 30 },
+        });
+        const iface = await ogm.interfaceModel('ItSmScored').aggregate({
+          where: { runId } as never,
+          aggregate: { count: true, scores: true },
+        });
+        expect(iface).toEqual({
+          count: 3,
+          scores: { min: [1, 2], max: [5], average: null, sum: null },
+        });
+        expect(logger.warn).not.toHaveBeenCalled();
+      },
+    );
   });
 });
 

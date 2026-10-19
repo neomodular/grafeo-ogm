@@ -559,7 +559,7 @@ export class InterfaceModel<
     // fall back to `other` so only `min` / `max` are emitted.
     const fieldTypeCategories = new Map<
       string,
-      'numeric' | 'temporal' | 'other'
+      'numeric' | 'numericList' | 'temporal' | 'other'
     >();
     const ifaceProps = this.interfaceDef.properties;
     for (const [field, enabled] of Object.entries(params.aggregate)) {
@@ -620,6 +620,11 @@ export class InterfaceModel<
           record.get(`${field}_avg`),
         );
         entry.sum = ResultMapper.convertNeo4jTypes(record.get(`${field}_sum`));
+      } else if (category === 'numericList') {
+        // v2.6.0 — the keys the generated types declare, with no value:
+        // a list has no average / sum (pre-2.6.0 the query failed).
+        entry.average = null;
+        entry.sum = null;
       }
       aggregateResult[field] = entry;
     }
@@ -788,11 +793,13 @@ function combineWhereWithPolicy(
  */
 function resolveInterfaceFieldCategory(
   fieldName: string,
-  ifaceProps: Map<string, { type: string }>,
-): 'numeric' | 'temporal' | 'other' {
+  ifaceProps: Map<string, { type: string; isArray?: boolean }>,
+): 'numeric' | 'numericList' | 'temporal' | 'other' {
   const prop = ifaceProps.get(fieldName);
   if (!prop) return 'other';
-  if (prop.type === 'Int' || prop.type === 'Float') return 'numeric';
+  if (prop.type === 'Int' || prop.type === 'Float')
+    // v2.6.0 — see `resolveFieldAggregateCategory`: no avg / sum on a list.
+    return prop.isArray ? 'numericList' : 'numeric';
   if (
     prop.type === 'DateTime' ||
     prop.type === 'Date' ||

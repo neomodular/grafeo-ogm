@@ -363,3 +363,32 @@ describe("item 8 — mode: 'insensitive' with _IN / _NOT_IN (v2.6.0)", () => {
     expect(cypher).toContain('n.`pages` IN $param1');
   });
 });
+
+describe('item 11 — aggregate avg / sum on a list field (v2.6.0, both modes)', () => {
+  it.each([undefined, false, true])(
+    'strict=%s: no avg / sum for [Int] / [Float]; scalars keep them',
+    async (strict) => {
+      const { cypher, logger } = await runCase(strict, {
+        label: 'agg',
+        expected: '',
+        run: (ogm) =>
+          ogm.model('Book').aggregate({
+            aggregate: {
+              count: true,
+              scores: true,
+              ratings: true,
+              pages: true,
+            },
+          }),
+      });
+      expect(cypher).toBe(
+        'MATCH (n:`Book`)\n' +
+          'RETURN count(n) AS count, min(n.`scores`) AS scores_min, max(n.`scores`) AS scores_max, ' +
+          'min(n.`ratings`) AS ratings_min, max(n.`ratings`) AS ratings_max, ' +
+          'min(n.`pages`) AS pages_min, max(n.`pages`) AS pages_max, ' +
+          'avg(n.`pages`) AS pages_avg, sum(n.`pages`) AS pages_sum',
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    },
+  );
+});

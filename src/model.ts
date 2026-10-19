@@ -1271,6 +1271,11 @@ export class Model<
           record.get(`${field}_avg`),
         );
         entry.sum = ResultMapper.convertNeo4jTypes(record.get(`${field}_sum`));
+      } else if (category === 'numericList') {
+        // v2.6.0 — the keys the generated types declare, with no value:
+        // a list has no average / sum (pre-2.6.0 the query failed).
+        entry.average = null;
+        entry.sum = null;
       }
       aggregateResult[field] = entry;
     }
@@ -2228,7 +2233,7 @@ export class Model<
  * Tracked for a future release; the codegen-emitted keys remain
  * `undefined` at runtime until then.
  */
-type FieldAggregateCategory = 'numeric' | 'temporal' | 'other';
+type FieldAggregateCategory = 'numeric' | 'numericList' | 'temporal' | 'other';
 
 function resolveFieldAggregateCategory(
   fieldName: string,
@@ -2236,7 +2241,10 @@ function resolveFieldAggregateCategory(
 ): FieldAggregateCategory {
   const prop = nodeDef.properties.get(fieldName);
   if (!prop) return 'other';
-  if (prop.type === 'Int' || prop.type === 'Float') return 'numeric';
+  if (prop.type === 'Int' || prop.type === 'Float')
+    // v2.6.0 — an `[Int]` / `[Float]` list has no avg / sum: the server
+    // rejects `avg(n.list)`, which failed the whole aggregate query.
+    return prop.isArray ? 'numericList' : 'numeric';
   if (
     prop.type === 'DateTime' ||
     prop.type === 'Date' ||
