@@ -7,6 +7,7 @@ import { toPascalCase } from './type-emitters/helpers';
 import {
   emitHeader,
   emitImports,
+  importRefs,
   emitUtilityTypes,
 } from './type-emitters/utility-types';
 import { emitEnums } from './type-emitters/enum-emitter';
@@ -119,6 +120,8 @@ function countExportedTypes(source: string): number {
   return count;
 }
 
+const IMPORT_PATTERN = /^import (?:type )?\{([^}]*)\}/gm;
+
 const DECLARATION_PATTERN =
   /^export (?:declare )?(?:type|interface|enum|const enum|class|const|function) ([A-Za-z_$][\w$]*)/gm;
 
@@ -135,6 +138,16 @@ const DECLARATION_PATTERN =
 function assertUniqueTypeNames(output: string, schema: SchemaMetadata): void {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
+  // v2.5.3 — imported names are local declarations too; pre-2.5.3 a clash
+  // with one (TS2440) went unreported.
+  for (const match of output.matchAll(IMPORT_PATTERN))
+    for (const spec of match[1].split(','))
+      seen.add(
+        spec
+          .trim()
+          .split(/\s+as\s+/)
+          .pop()!,
+      );
   for (const match of output.matchAll(DECLARATION_PATTERN)) {
     const name = match[1];
     if (seen.has(name)) duplicates.add(name);
@@ -251,9 +264,19 @@ export async function generateTypes(
 
   // 5. Emit sections in order ----------------------------------------------
   const packageName = options.config?.packageName ?? 'grafeo-ogm';
+  // v2.5.3 — alias an import the schema also declares (see `importRefs`).
+  const refs = importRefs(
+    new Set([
+      ...metadata.nodes.keys(),
+      ...metadata.interfaces.keys(),
+      ...metadata.unions.keys(),
+      ...metadata.enums.keys(),
+      ...metadata.relationshipProperties.keys(),
+    ]),
+  );
   const sections: string[] = [
     emitHeader(config, packageName),
-    emitImports(packageName),
+    emitImports(packageName, refs),
     emitUtilityTypes(),
     emitEnums(metadata),
     emitNodeTypes(metadata),
@@ -269,7 +292,7 @@ export async function generateTypes(
     emitVectorTypes(metadata),
     emitSelectFieldTypes(metadata),
     emitSelectResultType(),
-    emitModelDeclarations(metadata),
+    emitModelDeclarations(metadata, refs),
     emitModelMap(metadata),
     emitInterfaceModelMap(metadata),
   ];

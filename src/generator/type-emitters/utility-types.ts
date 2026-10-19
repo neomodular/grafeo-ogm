@@ -25,10 +25,43 @@ export function emitHeader(
 // Imports
 // ---------------------------------------------------------------------------
 
-export function emitImports(packageName = 'grafeo-ogm'): string {
+/** Identifiers the generated file imports. */
+export const IMPORTED_NAMES = [
+  'SelectionSetNode',
+  'DocumentNode',
+  'ModelInterface',
+  'InterfaceModelInterface',
+  'ExecutionContext',
+] as const;
+
+/**
+ * Local name the generated file uses for each import. v2.5.3 — an import
+ * whose name the schema also declares (a node `ModelInterface`,
+ * `ExecutionContext`, `DocumentNode`, ...) is aliased with a `__` prefix,
+ * which GraphQL reserves, so it cannot clash. Pre-2.5.3 such a schema
+ * produced a file that did not compile (TS2440). Every other schema keeps
+ * the unaliased imports, byte for byte.
+ */
+export type ImportRefs = Record<(typeof IMPORTED_NAMES)[number], string>;
+
+export function importRefs(declared: ReadonlySet<string>): ImportRefs {
+  const refs = {} as ImportRefs;
+  for (const name of IMPORTED_NAMES)
+    refs[name] = declared.has(name) ? `__${name}` : name;
+  return refs;
+}
+
+const DEFAULT_REFS = importRefs(new Set());
+
+export function emitImports(
+  packageName = 'grafeo-ogm',
+  refs: ImportRefs = DEFAULT_REFS,
+): string {
+  const spec = (name: keyof ImportRefs) =>
+    refs[name] === name ? name : `${name} as ${refs[name]}`;
   return [
-    'import type { SelectionSetNode, DocumentNode } from "graphql";',
-    `import type { ModelInterface, InterfaceModelInterface, ExecutionContext } from "${packageName}";`,
+    `import type { ${spec('SelectionSetNode')}, ${spec('DocumentNode')} } from "graphql";`,
+    `import type { ${spec('ModelInterface')}, ${spec('InterfaceModelInterface')}, ${spec('ExecutionContext')} } from "${packageName}";`,
   ].join('\n');
 }
 

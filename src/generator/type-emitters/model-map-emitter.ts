@@ -1,5 +1,6 @@
 import type { SchemaMetadata } from '../../schema/types';
 import { nodeHasAnyFulltext } from './fulltext-emitter';
+import type { ImportRefs } from './utility-types';
 
 /**
  * Emits a model declaration type for each node type, wrapping the generic
@@ -32,7 +33,12 @@ import { nodeHasAnyFulltext } from './fulltext-emitter';
  * >;
  * ```
  */
-export function emitModelDeclarations(schema: SchemaMetadata): string {
+export function emitModelDeclarations(
+  schema: SchemaMetadata,
+  refs?: Pick<ImportRefs, 'ModelInterface' | 'InterfaceModelInterface'>,
+): string {
+  const modelRef = refs?.ModelInterface ?? 'ModelInterface';
+  const ifaceRef = refs?.InterfaceModelInterface ?? 'InterfaceModelInterface';
   const blocks: string[] = [];
 
   const sortedNodes = [...schema.nodes.keys()].sort();
@@ -42,14 +48,14 @@ export function emitModelDeclarations(schema: SchemaMetadata): string {
     const hasRels = node.relationships.size > 0;
     const hasFulltext = nodeHasAnyFulltext(node, schema);
     blocks.push(
-      buildModelType(typeName, node.pluralName, hasRels, hasFulltext),
+      buildModelType(typeName, node.pluralName, hasRels, hasFulltext, modelRef),
     );
   }
 
   // Interface model declarations
   const sortedInterfaces = [...schema.interfaces.keys()].sort();
   for (const ifaceName of sortedInterfaces)
-    blocks.push(buildInterfaceModelType(ifaceName));
+    blocks.push(buildInterfaceModelType(ifaceName, ifaceRef));
 
   return blocks.join('\n\n');
 }
@@ -107,6 +113,7 @@ function buildModelType(
   pluralName: string,
   hasRels: boolean,
   hasFulltext: boolean,
+  modelRef = 'ModelInterface',
 ): string {
   const connectType = hasRels
     ? `${typeName}ConnectInput`
@@ -121,7 +128,7 @@ function buildModelType(
   const fulltextGeneric = hasFulltext ? `,\n  ${typeName}FulltextInput` : '';
 
   const baseAlias = [
-    `ModelInterface<`,
+    `${modelRef}<`,
     `  ${typeName},`,
     `  ${typeName}SelectFields,`,
     `  ${typeName}Where,`,
@@ -139,9 +146,12 @@ function buildModelType(
   return `export type ${typeName}Model = ${baseAlias};`;
 }
 
-function buildInterfaceModelType(ifaceName: string): string {
+function buildInterfaceModelType(
+  ifaceName: string,
+  ifaceRef = 'InterfaceModelInterface',
+): string {
   return [
-    `export type ${ifaceName}Model = InterfaceModelInterface<`,
+    `export type ${ifaceName}Model = ${ifaceRef}<`,
     `  ${ifaceName},`,
     `  ${ifaceName}Where,`,
     `  ${ifaceName}Sort`,

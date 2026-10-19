@@ -208,6 +208,33 @@ describe('generated type-name collisions', () => {
     ).rejects.toThrow(/"BookWhere".*type BookWhere.*type Book\b/s);
   });
 
+  // v2.5.3 — the generated file imports ModelInterface,
+  // InterfaceModelInterface, ExecutionContext, DocumentNode and
+  // SelectionSetNode. A node with one of those names produced a file that
+  // did not compile (TS2440) while the collision detector, which only saw
+  // `export` declarations, reported nothing. The imports are now aliased.
+  it('compiles a schema whose node names match the imported identifiers', async () => {
+    const { errors, generated } = await typecheckGenerated(
+      `
+      type DocumentNode @node { id: ID! @id }
+      type ExecutionContext @node { id: ID! @id }
+      type SelectionSetNode @node { id: ID! @id }
+      type ModelInterface @node { id: ID! @id }
+      type InterfaceModelInterface @node { id: ID! @id }
+    `,
+      `${PRELUDE}
+async function run() {
+  const rows = await ogm.model('ModelInterface').find({ where: { id: 'x' } });
+  const id: string | undefined = rows[0]?.id;
+  await ogm.model('DocumentNode').find({ select: { id: true } });
+  return id;
+}
+`,
+    );
+    expect(errors).toEqual([]);
+    expect(generated).toMatch(/export type ModelInterface = /);
+  });
+
   it('accepts schemas without collisions', async () => {
     await expect(
       generate(
