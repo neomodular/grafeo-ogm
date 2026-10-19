@@ -116,6 +116,14 @@ export interface SelectionNode {
    * merges them into the first `edges` under the first alias.
    */
   extraEdges?: SelectionNode[];
+  /**
+   * Strict mode (v2.6.0): the same response key selected with DIFFERENT
+   * arguments by inline fragments whose types can never be the same object
+   * (`... on Dog { pals(where: A) } ... on Cat { pals(where: B) }`) — valid
+   * GraphQL. Each variant keeps its own arguments and is projected per
+   * concrete type. 2.x keeps the first selection for every type.
+   */
+  typeVariants?: SelectionNode[];
 }
 
 /**
@@ -147,6 +155,62 @@ const parseWarnings = new WeakMap<SelectionNode[], ParseWarning[]>();
 interface ParseContext {
   strict: boolean;
   warnings: ParseWarning[];
+  /**
+   * The concrete object types a fragment type condition can apply to: the
+   * type itself, an interface's implementers or a union's members.
+   */
+  possibleTypes: (typeName: string) => readonly string[];
+}
+
+/**
+ * v2.6.0 — whether two selections of one response key can apply to the
+ * same object. A selection outside any fragment applies to every object;
+ * fragment-only selections overlap when their type conditions share a
+ * possible concrete type. Only overlapping selections with different
+ * arguments conflict (GraphQL's "fields in set can merge" rule).
+ */
+function canApplyToSameObject(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+  ctx: ParseContext,
+): boolean {
+  if (!a || !b) return true;
+  const types = new Set(a.flatMap((t) => ctx.possibleTypes(t)));
+  return b.some((t) => ctx.possibleTypes(t).some((p) => types.has(p)));
+}
+
+/**
+ * v2.6.0 — strict merge of a response key selected with different
+ * arguments: a conflict throws (as GraphQL validation does) when the two
+ * selections can apply to the same object; otherwise the incoming
+ * selection becomes (or joins) a per-type variant.
+ */
+function mergeTypeVariant(
+  existing: SelectionNode,
+  incoming: SelectionNode,
+  key: string,
+  ctx: ParseContext,
+): void {
+  const groups = [existing, ...(existing.typeVariants ?? [])];
+  for (const group of groups)
+    if (
+      !sameArguments(group, incoming) &&
+      canApplyToSameObject(group.typeConditions, incoming.typeConditions, ctx)
+    )
+      throw new OGMError(
+        `Fields "${key}" conflict because they have differing arguments. ` +
+          `Use different aliases on the fields to fetch both.`,
+      );
+  const same = groups.find((g) => sameArguments(g, incoming));
+  if (!same) {
+    existing.typeVariants = [...(existing.typeVariants ?? []), incoming];
+    return;
+  }
+  if (same.typeConditions && incoming.typeConditions)
+    same.typeConditions = [
+      ...new Set([...same.typeConditions, ...incoming.typeConditions]),
+    ];
+  mergeSameArguments(same, incoming, ctx);
 }
 
 function parseWarn(ctx: ParseContext, warning: ParseWarning): void {
@@ -191,6 +255,14 @@ function mergeSelection(
     mergeFragmentField(existing, incoming);
     return;
   }
+  if (
+    ctx.strict &&
+    (!sameArguments(existing, incoming) || existing.typeVariants)
+  ) {
+    mergeTypeVariant(existing, incoming, key, ctx);
+    return;
+  }
+  const priorTypes = existing.typeConditions;
   if (existing.typeConditions && incoming.typeConditions)
     existing.typeConditions = [
       ...new Set([...existing.typeConditions, ...incoming.typeConditions]),
@@ -199,12 +271,11 @@ function mergeSelection(
   else delete existing.typeConditions;
   if (!sameArguments(existing, incoming)) {
     // v2.6.0 — GraphQL rejects one response key selected with different
-    // arguments; 2.x keeps the first selection and drops the second.
-    if (ctx.strict)
-      throw new OGMError(
-        `Fields "${key}" conflict because they have differing arguments. ` +
-          `Use different aliases on the fields to fetch both.`,
-      );
+    // arguments when both selections can apply to the same object; 2.x
+    // keeps the first selection and drops the second. Fragments on types
+    // that can never be the same object are valid GraphQL: no warning
+    // (strict projects each per type, see `mergeTypeVariant`).
+    if (!canApplyToSameObject(priorTypes, incoming.typeConditions, ctx)) return;
     parseWarn(ctx, {
       code: 'selection-key-arguments',
       detail: key,
@@ -215,6 +286,16 @@ function mergeSelection(
     });
     return;
   }
+  mergeSameArguments(existing, incoming, ctx);
+}
+
+/** Merge a repeat of a response key with the same arguments (v2.5.3). */
+function mergeSameArguments(
+  existing: SelectionNode,
+  incoming: SelectionNode,
+  ctx: ParseContext,
+): void {
+  const key = incoming.alias ?? incoming.fieldName;
   if (existing.isConnection) {
     if (ctx.strict) {
       mergeConnectionEdgeSets(existing, incoming, ctx);
@@ -723,6 +804,24 @@ export class SelectionCompiler {
         continue;
       }
 
+      // v2.6.0 — strict: one key selected with different arguments by
+      // fragments on disjoint types, projected per concrete type.
+      if (node.typeVariants && node.typeVariants.length > 0) {
+        const variantCypher = this.compileTypeVariants(
+          node,
+          nodeVar,
+          maxDepth,
+          currentDepth,
+          params,
+          paramCounter,
+          policyContext,
+        );
+        if (variantCypher) {
+          parts.push(`${key}: ${variantCypher}`);
+          continue;
+        }
+      }
+
       // v2.5.3 — a relationship / connection field selected through an
       // inline fragment on an abstract type that doesn't declare it.
       // (Union relationship fields keep their per-member CASE below.)
@@ -946,7 +1045,11 @@ export class SelectionCompiler {
     const dummyField = opDef.selectionSet.selections[0];
     if (dummyField.kind !== Kind.FIELD || !dummyField.selectionSet) return [];
 
-    const ctx: ParseContext = { strict: this.strictMode.strict, warnings: [] };
+    const ctx: ParseContext = {
+      strict: this.strictMode.strict,
+      warnings: [],
+      possibleTypes: (typeName) => this.possibleTypes(typeName),
+    };
     const result = this.convertSelectionSet(
       dummyField.selectionSet,
       undefined,
@@ -968,6 +1071,17 @@ export class SelectionCompiler {
     this.parseCache.set(selectionSet, result);
 
     return result;
+  }
+
+  /**
+   * v2.6.0 — the concrete types a fragment on `typeName` can apply to (see
+   * `ParseContext.possibleTypes`). Unknown names stand for themselves.
+   */
+  private possibleTypes(typeName: string): readonly string[] {
+    if (this.schema.nodes.has(typeName)) return [typeName];
+    const iface = this.schema.interfaces?.get(typeName);
+    if (iface) return iface.implementedBy;
+    return this.schema.unions?.get(typeName) ?? [typeName];
   }
 
   /**
@@ -1197,12 +1311,77 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
+    const { branches, singular } = this.fragmentRelationshipBranches(
+      node,
+      node.typeConditions ?? [],
+      nodeVar,
+      maxDepth,
+      currentDepth,
+      params,
+      paramCounter,
+      policyContext,
+    );
+    if (branches.length === 0) return null;
+    return `CASE ${branches.join(' ')} ELSE ${singular ? 'null' : '[]'} END`;
+  }
+
+  /**
+   * v2.6.0 — strict: a relationship / connection key with per-type
+   * variants (`SelectionNode.typeVariants`): one `CASE` whose branches
+   * compile each variant, with its own arguments and the target's read
+   * policy, against the concrete types its fragments apply to.
+   */
+  private compileTypeVariants(
+    node: SelectionNode,
+    nodeVar: string,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string | null {
+    const branches: string[] = [];
+    let singular = false;
+    for (const variant of [node, ...(node.typeVariants ?? [])]) {
+      const types = [
+        ...new Set(
+          (variant.typeConditions ?? []).flatMap((t) => this.possibleTypes(t)),
+        ),
+      ];
+      const part = this.fragmentRelationshipBranches(
+        variant,
+        types,
+        nodeVar,
+        maxDepth,
+        currentDepth,
+        params,
+        paramCounter,
+        policyContext,
+      );
+      branches.push(...part.branches);
+      singular ||= part.singular;
+    }
+    if (branches.length === 0) return null;
+    return `CASE ${branches.join(' ')} ELSE ${singular ? 'null' : '[]'} END`;
+  }
+
+  /** `WHEN n:T THEN <projection>` per type of `typeNames` declaring the field. */
+  private fragmentRelationshipBranches(
+    node: SelectionNode,
+    typeNames: readonly string[],
+    nodeVar: string,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): { branches: string[]; singular: boolean } {
     const relField = node.isConnection
       ? node.fieldName.replace(/Connection$/, '')
       : node.fieldName;
     const branches: string[] = [];
     let singular = node.isConnection;
-    for (const typeName of node.typeConditions ?? []) {
+    for (const typeName of typeNames) {
       const def = this.schema.nodes.get(typeName);
       const relDef = def?.relationships.get(relField);
       if (!def || !relDef) continue;
@@ -1233,8 +1412,7 @@ export class SelectionCompiler {
           `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`,
         );
     }
-    if (branches.length === 0) return null;
-    return `CASE ${branches.join(' ')} ELSE ${singular ? 'null' : '[]'} END`;
+    return { branches, singular };
   }
 
   /**

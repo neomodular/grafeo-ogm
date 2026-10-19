@@ -629,3 +629,92 @@ describe('item 10 — extra edge sets keep the target read policy (v2.6.0)', () 
     for (const list of lists) expect(list).toContain('n0.`stars` > $param');
   });
 });
+
+describe('item 9 — fragments on disjoint vs overlapping types (v2.6.0)', () => {
+  const petDefs = /* GraphQL */ `
+    interface Pet {
+      name: String
+    }
+    type Toy @node {
+      id: ID! @id
+      kind: String
+    }
+    type Dog implements Pet @node {
+      name: String
+      pals: [Toy!]! @relationship(type: "PAL", direction: OUT)
+    }
+    type Cat implements Pet @node {
+      name: String
+      pals: [Toy!]! @relationship(type: "PAL", direction: OUT)
+    }
+  `;
+  const DISJOINT =
+    '{ ... on Dog { pals(where: { kind: "a" }) { id } } ... on Cat { pals(where: { kind: "b" }) { id } } }';
+  const OVERLAPPING =
+    '{ ... on Dog { pals(where: { kind: "a" }) { id } } ... on Pet { ... on Dog { pals(where: { kind: "b" }) { id } } } }';
+
+  async function run(strict: boolean | undefined, selectionSet: string) {
+    Model.clearSelectionCache();
+    const records: Recorded[] = [];
+    const logger = { debug: jest.fn(), warn: jest.fn() };
+    const ogm = new OGM({
+      typeDefs: petDefs,
+      driver: mockDriver(records),
+      logger,
+      ...(strict === undefined ? {} : { strict }),
+    });
+    await ogm.interfaceModel('Pet').find({ selectionSet });
+    return { cypher: records[0]?.cypher, params: records[0]?.params, logger };
+  }
+
+  /** v2.5.4 Cypher for DISJOINT: the first selection's filter for both types. */
+  const DISJOINT_V254 =
+    'MATCH (n:(`Dog`|`Cat`))\n' +
+    "WITH n, CASE WHEN n:`Dog` THEN 'Dog' WHEN n:`Cat` THEN 'Cat' END AS __typename\n" +
+    "RETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Dog', 'Cat']]), pals: CASE " +
+    'WHEN n:`Dog` THEN [(n)-[:`PAL`]->(n0:`Toy`) WHERE n0.`kind` = $param0 | n0 { .`id` }] ' +
+    'WHEN n:`Cat` THEN [(n)-[:`PAL`]->(n0:`Toy`) WHERE n0.`kind` = $param1 | n0 { .`id` }] ' +
+    'ELSE [] END , __typename: __typename }';
+
+  it('default: disjoint fragments keep the first selection and do NOT warn', async () => {
+    const unset = await run(undefined, DISJOINT);
+    const off = await run(false, DISJOINT);
+    expect(off.cypher).toBe(unset.cypher);
+    expect(unset.cypher).toBe(DISJOINT_V254);
+    expect(unset.params).toEqual({ param0: 'a', param1: 'a' });
+    expect(unset.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('strict: disjoint fragments do not throw; each type gets its own arguments', async () => {
+    const { cypher, params, logger } = await run(true, DISJOINT);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(params).toEqual({ param0: 'a', param1: 'b' });
+    expect(cypher).toContain(
+      'pals: CASE ' +
+        'WHEN n:`Dog` THEN [(n)-[:`PAL`]->(n0:`Toy`) WHERE n0.`kind` = $param0 | n0 { .`id` }] ' +
+        'WHEN n:`Cat` THEN [(n)-[:`PAL`]->(n0:`Toy`) WHERE n0.`kind` = $param1 | n0 { .`id` }] ' +
+        'ELSE [] END',
+    );
+  });
+
+  it('default: fragments that can hit the same object warn once', async () => {
+    const { logger } = await run(undefined, OVERLAPPING);
+    expectOneWarning(
+      logger,
+      'The selectionSet selects "pals" twice with different arguments',
+    );
+  });
+
+  it('strict: fragments that can hit the same object throw', async () => {
+    await expect(run(true, OVERLAPPING)).rejects.toThrow(
+      'Fields "pals" conflict because they have differing arguments.',
+    );
+    // An interface fragment overlaps each of its implementers.
+    await expect(
+      run(
+        true,
+        '{ ... on Pet { ... on Cat { pals(where: { kind: "a" }) { id } } } ... on Cat { pals { id } } }',
+      ),
+    ).rejects.toThrow('Fields "pals" conflict');
+  });
+});

@@ -392,4 +392,77 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       );
     });
   });
+
+  describe('item 9 — fragments on disjoint types are not a conflict', () => {
+    const petDefs = /* GraphQL */ `
+      interface ItSmPet {
+        runId: String
+      }
+      type ItSmToy @node {
+        id: ID! @unique
+        runId: String
+        kind: String
+      }
+      type ItSmDog implements ItSmPet @node {
+        id: ID! @unique
+        runId: String
+        pals: [ItSmToy!]! @relationship(type: "IT_SM_PAL", direction: OUT)
+      }
+      type ItSmCat implements ItSmPet @node {
+        id: ID! @unique
+        runId: String
+        pals: [ItSmToy!]! @relationship(type: "IT_SM_PAL", direction: OUT)
+      }
+    `;
+    const selectionSet =
+      '{ __typename ... on ItSmDog { pals(where: { kind: "ball" }) { id } } ' +
+      '... on ItSmCat { pals(where: { kind: "yarn" }) { id } } }';
+
+    beforeAll(async () => {
+      await run(
+        `CREATE (d:ItSmDog {id: $d, runId: $runId}), (c:ItSmCat {id: $c, runId: $runId})
+         CREATE (b:ItSmToy {id: $b, runId: $runId, kind: 'ball'})
+         CREATE (y:ItSmToy {id: $y, runId: $runId, kind: 'yarn'})
+         CREATE (d)-[:IT_SM_PAL]->(b), (d)-[:IT_SM_PAL]->(y)
+         CREATE (c)-[:IT_SM_PAL]->(b), (c)-[:IT_SM_PAL]->(y)`,
+        { d: id('dog'), c: id('cat'), b: id('ball'), y: id('yarn') },
+      );
+    });
+
+    async function pals(strict?: boolean) {
+      const logger = { debug: jest.fn(), warn: jest.fn() };
+      const ogm = new OGM({
+        typeDefs: petDefs,
+        driver,
+        logger,
+        ...(strict === undefined ? {} : { strict }),
+      });
+      const rows = (await ogm.interfaceModel('ItSmPet').find({
+        where: { runId },
+        selectionSet,
+      })) as Row[];
+      const byType = Object.fromEntries(
+        rows.map((r) => [r.__typename, ids(r.pals)]),
+      );
+      return { byType, logger };
+    }
+
+    it('default: both types use the first selection, no warning', async () => {
+      const { byType, logger } = await pals();
+      expect(byType).toEqual({
+        ItSmDog: [id('ball')],
+        ItSmCat: [id('ball')],
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('strict: no throw; each type applies its own arguments', async () => {
+      const { byType, logger } = await pals(true);
+      expect(byType).toEqual({
+        ItSmDog: [id('ball')],
+        ItSmCat: [id('yarn')],
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
 });
