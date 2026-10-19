@@ -369,4 +369,61 @@ describeLive('Strict mode, write paths — live Neo4j', () => {
       expect(warnings).toEqual([]);
     });
   });
+
+  describe('item 5 — labels on upsert / createMany relabel matched nodes', () => {
+    const labelsOf = async (u: string) =>
+      (
+        (
+          await run('MATCH (n:ItSmUser {id: $u}) RETURN labels(n) AS l', { u })
+        )[0].l as string[]
+      ).sort();
+
+    it('default: an upsert that matches an existing node relabels it, warning once', async () => {
+      const u = id('l-def');
+      await run('CREATE (:ItSmUser {id: $u, runId: $runId})', { u });
+      const { ogm, callWarnings } = makeOgm();
+      await ogm.model('ItSmUser').upsert({
+        where: { id: u },
+        create: { runId },
+        update: { name: 'x' },
+        labels: ['ItSmVip'],
+      });
+      expect(await labelsOf(u)).toEqual(['ItSmUser', 'ItSmVip']);
+      expect(callWarnings()).toHaveLength(1);
+      expect(callWarnings()[0]).toContain('"labels" on upsert (ItSmUser)');
+    });
+
+    it('strict: upsert and createMany label only the nodes they create', async () => {
+      const [existing, fresh, many] = [
+        id('l-str-a'),
+        id('l-str-b'),
+        id('l-str-c'),
+      ];
+      await run('CREATE (:ItSmUser {id: $u, runId: $runId})', { u: existing });
+      const { ogm, callWarnings } = makeOgm(true);
+      const users = ogm.model('ItSmUser');
+      for (const u of [existing, fresh])
+        await users.upsert({
+          where: { id: u },
+          create: { runId },
+          update: { name: 'x' },
+          labels: ['ItSmVip'],
+        });
+      expect(await labelsOf(existing)).toEqual(['ItSmUser']);
+      expect(await labelsOf(fresh)).toEqual(['ItSmUser', 'ItSmVip']);
+
+      const res = await users.createMany({
+        data: [
+          { id: existing, runId },
+          { id: many, runId },
+        ],
+        skipDuplicates: true,
+        labels: ['ItSmVip'],
+      });
+      expect(res).toEqual({ count: 1 });
+      expect(await labelsOf(existing)).toEqual(['ItSmUser']);
+      expect(await labelsOf(many)).toEqual(['ItSmUser', 'ItSmVip']);
+      expect(callWarnings()).toEqual([]);
+    });
+  });
 });

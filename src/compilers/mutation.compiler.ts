@@ -449,6 +449,26 @@ export class MutationCompiler {
   }
 
   /**
+   * v2.6.0 — `labels` on a MERGE path (upsert, createMany with
+   * skipDuplicates) are SET after the MERGE, so they are also added to an
+   * EXISTING node it matched. Default: unchanged, one warning; strict: the
+   * labels go in `ON CREATE SET`, onto newly created nodes only.
+   */
+  private labelsOnMatchedNodes(
+    nodeDef: NodeDefinition,
+    op: 'upsert' | 'createMany',
+  ): void {
+    const call = op === 'upsert' ? 'upsert' : 'createMany with skipDuplicates';
+    this.strictMode.warn(
+      'labels-on-matched-nodes',
+      `${nodeDef.typeName}\u0000${op}`,
+      `"labels" on ${call} (${nodeDef.typeName}) are added to every node the MERGE returns, so an existing node ` +
+        `it matched is relabelled too.`,
+      'apply "labels" only to the nodes it creates',
+    );
+  }
+
+  /**
    * v2.6.0 — `edge` keys that are not properties of the relationship's
    * `@relationshipProperties` type. Pre-2.6.0 (and still by default) each
    * is written to the relationship as a stray property. Default: one
@@ -975,6 +995,12 @@ export class MutationCompiler {
       if (mergeKeyNames.includes(propDef.name)) continue;
       createSets.push(`n.${escapeIdentifier(propDef.name)} = randomUUID()`);
     }
+    // v2.6.0 — strict: runtime labels go on the node only when MERGE creates
+    // it (see `labelsOnMatchedNodes`).
+    const labelsOnCreate =
+      this.strictMode.strict && labels && labels.length > 0;
+    if (labelsOnCreate)
+      createSets.push(`n:${labels.map((l) => assertSafeLabel(l)).join(':')}`);
     if (createSets.length > 0)
       lines.push(`ON CREATE SET ${createSets.join(', ')}`);
 
@@ -998,9 +1024,10 @@ export class MutationCompiler {
       lines.push(`ON MATCH SET ${updateSets.join(', ')}`);
 
     // Extra labels
-    if (labels && labels.length > 0) {
+    if (labels && labels.length > 0 && !labelsOnCreate) {
       const validatedLabels = labels.map((l) => assertSafeLabel(l)).join(':');
       lines.push(`SET n:${validatedLabels}`);
+      this.labelsOnMatchedNodes(nodeDef, 'upsert');
     }
 
     lines.push('RETURN n');
@@ -1216,6 +1243,12 @@ export class MutationCompiler {
         params[paramName] = bound;
       }
 
+      // v2.6.0 — strict: labels only on the nodes MERGE creates.
+      if (this.strictMode.strict && labels && labels.length > 0)
+        onCreateSets.push(
+          `n:${labels.map((l) => assertSafeLabel(l)).join(':')}`,
+        );
+
       if (onCreateSets.length > 0)
         lines.push(`ON CREATE SET ${onCreateSets.join(', ')}`);
     } else {
@@ -1243,9 +1276,14 @@ export class MutationCompiler {
     }
 
     // Extra labels
-    if (labels && labels.length > 0) {
+    if (
+      labels &&
+      labels.length > 0 &&
+      !(skipDuplicates && this.strictMode.strict)
+    ) {
       const validatedLabels = labels.map((l) => assertSafeLabel(l)).join(':');
       lines.push(`SET n:${validatedLabels}`);
+      if (skipDuplicates) this.labelsOnMatchedNodes(nodeDef, 'createMany');
     }
 
     lines.push('RETURN count(n) AS count');

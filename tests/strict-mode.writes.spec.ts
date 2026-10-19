@@ -240,3 +240,52 @@ describe('item 4 — blanket disconnect on a shared relationship type', () => {
     );
   });
 });
+
+describe('item 5 — labels on upsert / createMany relabel matched nodes', () => {
+  it('default warns once: upsert', () =>
+    warnsOnce(
+      badWriteShapes['labels: upsert'],
+      '"labels" on upsert (User) are added to every node the MERGE returns, so an existing node it matched is relabelled too.',
+    ));
+  it('default warns once: createMany with skipDuplicates', () =>
+    warnsOnce(
+      badWriteShapes['labels: createMany skipDuplicates'],
+      '"labels" on createMany with skipDuplicates (User) are added to every node the MERGE returns',
+    ));
+
+  it('strict puts the labels in ON CREATE SET', async () => {
+    const up = setup(true);
+    await badWriteShapes['labels: upsert'](up.ogm);
+    expect(up.records[0].cypher).toBe(
+      [
+        'MERGE (n:`User` { `email`: $merge_email })',
+        'ON CREATE SET n.`name` = $onCreate_name, n.`id` = randomUUID(), n:`Vip`',
+        'ON MATCH SET n.`name` = $onMatch_name',
+        "RETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+      ].join('\n'),
+    );
+    const many = setup(true);
+    await badWriteShapes['labels: createMany skipDuplicates'](many.ogm);
+    expect(many.records[0].cypher).toBe(
+      [
+        'UNWIND $items AS item',
+        'MERGE (n:`User` { `email`: item.`email` })',
+        'ON CREATE SET n.`id` = randomUUID(), n:`Vip`',
+        'RETURN count(n) AS count',
+      ].join('\n'),
+    );
+    expect(up.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('strict still rejects an unsafe label', async () => {
+    const { ogm } = setup(true);
+    await expect(
+      ogm.model('User').upsert({
+        where: { email: 'a@x' },
+        create: {},
+        update: {},
+        labels: ['bad label`'],
+      }),
+    ).rejects.toThrow(OGMError);
+  });
+});
