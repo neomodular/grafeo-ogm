@@ -2381,11 +2381,6 @@ export class MutationCompiler {
     return lines;
   }
 
-  /** The concrete node types a value of `typeName` can be. */
-  private concreteTypes(typeName: string): string[] {
-    return abstractTarget(typeName, this.schema)?.members ?? [typeName];
-  }
-
   /**
    * Relationships narrowed from an abstract target to one member by the
    * per-member dispatch. A BLANKET disconnect on one adds the member's
@@ -2461,7 +2456,6 @@ export class MutationCompiler {
     ancestorVars: string[],
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
-    deleted?: Set<string>,
   ): string[] {
     const lines: string[] = [];
 
@@ -2487,7 +2481,6 @@ export class MutationCompiler {
           ancestorVars,
           policyContext,
           paramCounter,
-          deleted,
         ),
       );
     }
@@ -2509,11 +2502,6 @@ export class MutationCompiler {
     ancestorVars: string[] = [],
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
-    /**
-     * v2.6.2 — collects the concrete types any nested `delete` below this
-     * level may delete, for the enclosing level's guard (see `aliveGuard`).
-     */
-    deleted?: Set<string>,
   ): string[] {
     if (depth > 5)
       throw new OGMError(
@@ -2526,24 +2514,6 @@ export class MutationCompiler {
     // All WITH clauses must carry forward ancestor vars + current source
     const allVars = [...new Set([...ancestorVars, sourceVar])];
     const withClause = `WITH ${allVars.join(', ')}`;
-
-    // v2.6.2 — a nested delete reached through a cycle (chart -> tags ->
-    // charts) can delete `sourceVar` itself. Every later clause that reads
-    // or writes it then failed with `EntityNotFound` (the root's response
-    // projection, a SET, a CREATE from it). After any op block that may
-    // delete a type `sourceVar` can be, drop the row if `sourceVar` is gone:
-    // the rest of its nested writes are skipped (it no longer exists) and a
-    // deleted ROOT is omitted from the response, like any deleted node.
-    // Emitted only for such cycles, so all other Cypher is unchanged.
-    const sourceTypes = this.concreteTypes(nodeDef.typeName);
-    const guardAfter = (types: Iterable<string>): void => {
-      let hit = false;
-      for (const t of types) {
-        deleted?.add(t);
-        if (sourceTypes.includes(t)) hit = true;
-      }
-      if (hit) lines.push(withClause, `WHERE ${aliveGuard(sourceVar)}`);
-    };
 
     for (const [key, value] of Object.entries(update)) {
       const relDef = nodeDef.relationships.get(key);
@@ -2571,7 +2541,6 @@ export class MutationCompiler {
             ancestorVars,
             policyContext,
             paramCounter,
-            deleted,
           ),
         );
         continue;
@@ -2595,23 +2564,21 @@ export class MutationCompiler {
         // --- delete (detach delete target nodes) ---
         // Shared with `compileDelete`'s cascade: where + target `delete`
         // policy, one CALL subquery per spec item (v2.3.0).
-        if (item.delete) {
-          const deleteLines = this.buildNestedDelete({
-            spec: item.delete,
-            relDef,
-            sourceVar,
-            withClause,
-            targetNodeDef,
-            nextVar: () => `${sourceVar}_del${varCounter++}`,
-            tag: `${key}_${i}`,
-            params,
-            policyContext,
-            paramCounter,
-          });
-          lines.push(...deleteLines);
-          if (deleteLines.length > 0)
-            guardAfter(this.concreteTypes(targetNodeDef.typeName));
-        }
+        if (item.delete)
+          lines.push(
+            ...this.buildNestedDelete({
+              spec: item.delete,
+              relDef,
+              sourceVar,
+              withClause,
+              targetNodeDef,
+              nextVar: () => `${sourceVar}_del${varCounter++}`,
+              tag: `${key}_${i}`,
+              params,
+              policyContext,
+              paramCounter,
+            }),
+          );
 
         // --- disconnect (runs before connect so "disconnect all + connect new" works) ---
         if (item.disconnect) {
@@ -2943,7 +2910,6 @@ export class MutationCompiler {
                 ancestorVars,
                 policyContext,
                 paramCounter,
-                deleted,
               ),
             );
             continue;
@@ -2995,7 +2961,6 @@ export class MutationCompiler {
 
           // Pre-compute nested relationship operations
           const nestedParams: Record<string, unknown> = {};
-          const nestedDeleted = new Set<string>();
           const nestedRelLines = this.buildUpdateRelationships(
             nodeUpdate,
             targetNodeDef,
@@ -3006,7 +2971,6 @@ export class MutationCompiler {
             allVars,
             policyContext,
             paramCounter,
-            nestedDeleted,
           );
 
           // Only emit the MATCH block if there's actual work to do
@@ -3084,7 +3048,6 @@ export class MutationCompiler {
 
             lines.push(`RETURN count(*) AS _uc_${key}_${i}`);
             lines.push(`}`);
-            guardAfter(nestedDeleted);
           }
         }
       }
@@ -3554,16 +3517,6 @@ function isBlanketSpec(spec: unknown): boolean {
   return (
     isPlainObject(spec) && Object.keys(spec).every((k) => spec[k] === undefined)
   );
-}
-
-/**
- * v2.6.2 — true while `nodeVar` still exists in this transaction. A node
- * DETACH DELETEd earlier in the statement is no longer found by its
- * element id (an index seek), while touching its properties throws
- * `EntityNotFound`.
- */
-function aliveGuard(nodeVar: string): string {
-  return `exists { MATCH (_alive) WHERE elementId(_alive) = elementId(${nodeVar}) }`;
 }
 
 /** A nested delete item's own `delete` asks for a deeper cascade. */

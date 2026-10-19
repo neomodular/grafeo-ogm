@@ -8,9 +8,7 @@
  * independently: the root `where` is evaluated in JS against a snapshot,
  * and under a policy context the mirrored `update` policy filters them
  * (and, for the rows `update` returns, the mirrored `read` policy on the
- * post-write state — v2.6.1). A root the write itself deleted (a nested
- * delete reaching it through a cycle, v2.6.2) is no longer a node, so it
- * is expected in neither.
+ * post-write state — v2.6.1).
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
  * in afterAll; every case runs in a rolled-back transaction.
@@ -109,23 +107,23 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
               throw new Error(`server rejected the write: ${outcome.summary}`);
             return;
           }
-          const after = await snapshot(tx, runId);
-          const surviving = expected.filter((k) => after.nodes.has(k));
           stats.add(
-            `ok ${op.kind} (${surviving.length === 0 ? 'zero' : surviving.length === 1 ? 'one' : 'many'} roots${surviving.length < expected.length ? ', some deleted' : ''})`,
+            `ok ${op.kind} (${expected.length === 0 ? 'zero' : expected.length === 1 ? 'one' : 'many'} roots)`,
           );
           // v2.6.1 (finding F6): `update` RETURNS only the updated roots the
           // context can read after the write; `updateMany` still counts all.
-          let returned = surviving;
-          if (ctx >= 0 && op.kind === 'update')
-            returned = surviving.filter((k) => {
-              const n = after.nodes.get(k)!;
-              return POLICY_MIRROR.readable(n.type, n.props);
+          let returned = expected;
+          if (ctx >= 0 && op.kind === 'update') {
+            const after = await snapshot(tx, runId);
+            returned = expected.filter((k) => {
+              const n = after.nodes.get(k);
+              return n === undefined || POLICY_MIRROR.readable(n.type, n.props);
             });
+          }
           checkRows(
             op,
             outcome.result as Rec,
-            op.kind === 'update' ? returned : surviving,
+            op.kind === 'update' ? returned : expected,
           );
         });
       },
