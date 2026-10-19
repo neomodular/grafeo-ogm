@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.3 (2026-10-19) — generated types fix and selection field checks
+
+> **Patch release.** Fixes #22 (a 2.4.8 regression) and adds the field-name check from #23 as a strict-mode item. No behaviour changes without `strict`: inputs that work today return the same results and compile to the same Cypher.
+
+### Generated types
+
+- **Generated types compile again when an interface's `@declareRelationship` resolves to a relationship with `properties`** (#22). Since 2.4.8 the interface's connection selection referenced `<Interface><Field>EdgeSelectFields` without emitting it (TS2552). It is now emitted, also for union targets, single relationships and interfaces that implement interfaces. Schemas without that shape generate byte-identical output.
+
+### Strict mode
+
+- **Selected field names are checked against the schema** (#23). An unknown field in a `selectionSet` used to be projected as a raw node property (a typo came back `null`), or silently left out when it had a sub-selection (e.g. a legacy `ownersAggregate { count }`), even with `strict: true`. The typed `select` API had the same gap. The check covers root, nested and connection `node` selections, edge `properties`, inline fragments (per type condition; interface-level fields must be on the interface), `InterfaceModel`, and create / update / upsert responses (`info { … }` is allowed). In default mode the results and Cypher are unchanged, and the OGM warns once per type and field. With `strict: true` it throws `OGMError: Unknown field "<field>" in selectionSet on type "<Type>".` A `<rel>Aggregate` field adds a pointer to `<rel>Connection { totalCount }` and `Model.aggregate()`.
+
+### Deprecations
+
+- **Selecting a field the type doesn't declare** (in `selectionSet` or `select`) becomes an error in 3.0, as `strict: true` does today. 2.x keeps the 2.6.2 result and Cypher and logs one warning per OGM, type and field. `<rel>Aggregate` selections are not supported in 2.6.x; use `<rel>Connection { totalCount }` or `Model.aggregate()` on the related type.
+
 ## 2.6.2 (2026-10-19) — fixes from the property suites
 
 > **Patch release.** Fixes found by the new property-based live suites. No behaviour changes without `strict`: inputs that work today return the same results and compile to the same Cypher. Only inputs that used to be rejected now work, and one new strict-mode correction is added.
