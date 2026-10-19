@@ -1,8 +1,13 @@
 <p align="center">
-  <img src="./assets/logo.jpg" alt="grafeo-ogm — Type-safe OGM for Neo4j" width="640" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/brand/grafeo-mark-on-dark.svg" />
+    <img src="./assets/brand/grafeo-mark-on-light.svg" alt="grafeo-ogm" width="96" height="96" />
+  </picture>
 </p>
 
-<p align="center"><strong>A type-safe Object-Graph Mapper for Neo4j, driven by GraphQL SDL.</strong></p>
+<h1 align="center">grafeo-ogm</h1>
+
+<p align="center"><strong>Type-safe Neo4j queries, without the boilerplate.</strong><br />A type-safe object-graph mapper for Neo4j, driven by GraphQL SDL.</p>
 
 [![npm version](https://img.shields.io/npm/v/grafeo-ogm.svg)](https://www.npmjs.com/package/grafeo-ogm)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -216,8 +221,8 @@ await Book.delete({ where: { isbn: '978-1491930892' } });
 
 ```typescript
 await ogm.$transaction(async (ctx) => {
-  await Book.create({ input: [{ title: 'Book A' }] }, { context: ctx });
-  await Book.create({ input: [{ title: 'Book B' }] }, { context: ctx });
+  await Book.create({ input: [{ title: 'Book A' }], context: ctx });
+  await Book.create({ input: [{ title: 'Book B' }], context: ctx });
   // Both committed atomically, or both rolled back on error
 });
 ```
@@ -695,6 +700,21 @@ const books = await Book.find({
 Book.selectionSet = `{ id title }`;
 ```
 
+Since v2.5.0, `selectionSet` field **arguments and aliases** take effect, as in the original `@neo4j/graphql-ogm`:
+
+```typescript
+const books = await Book.find({
+  selectionSet: `{
+    id
+    t: title                                        # alias → key "t"
+    recent: categories(where: { name_STARTS_WITH: "Tech" }, options: { limit: 3 }) { name }
+    categoriesConnection(where: { node: { name: "Science" } }) { totalCount edges { node { name } } }
+  }`,
+});
+```
+
+Relationship fields accept `where` and `options` (`sort` needs APOC; `limit` / `offset`), connection fields accept `where`, and any other argument throws `OGMError` rather than being ignored. Under [Node-Level Security](#node-level-security) the target type's `read` policy applies, exactly as for a typed `select` with `where`. Connection `totalCount` is filtered by the same `where` and policy as `edges`.
+
 **Default (no selection):** Returns all scalar fields of the matched node.
 
 ### Nested Sorting
@@ -840,6 +860,10 @@ const { count } = await Book.createMany({
 });
 ```
 
+- Items may have different keys: each item gets every field it supplies. A field an item omits gets what `create()` would give it — a generated `@id`, its `@default`, or nothing — and an explicit `null` stays `null`.
+- With `skipDuplicates`, the `MERGE` key is the `@id` / `@unique` fields that **every** item supplies, and `count` is the number of nodes actually **created** (skipped duplicates aren't counted).
+- Relationship fields are rejected in any item; use `create()` for nested writes.
+
 ### Update
 
 ```typescript
@@ -854,6 +878,11 @@ const result = await Book.update({
   },
 });
 ```
+
+- **Connect** links every target matching its `where`. A `where` that matches nothing is a no-op: the update still applies and the node is still returned (as in `@neo4j/graphql`).
+- **Disconnect** with `{}` / `null` removes every relationship of that type — under [Node-Level Security](#node-level-security), only to targets the context can **read**.
+- Every connect and disconnect returns the updated node exactly once, however many relationships it touched.
+- A key that is neither a property nor a relationship of the type throws `OGMError` (`Unknown field …`) instead of being written as a stray property — at every depth.
 
 ### Update Many
 
@@ -909,6 +938,10 @@ const book = await Book.upsert({
 });
 ```
 
+- `where` must contain at least one `@id` / `@unique` field, and **only** such fields — it becomes the `MERGE` key. Any other key (a plain field, an operator like `name_CONTAINS`, `AND` / `OR`) or a `null` value throws. For a non-unique match, use `findFirst()` followed by `create()` / `update()`.
+- On the create branch, `@id` fields are generated (unless supplied) and `@default` values applied, exactly as `create()` does.
+- `upsert` writes scalars only: relationship fields in `create` / `update` throw.
+
 ### Label Management
 
 ```typescript
@@ -949,6 +982,27 @@ await Book.create({
   }],
 });
 ```
+
+Nested writes inside `update` take one item per operation group:
+
+```typescript
+await Book.update({
+  where: { id: 'book-1' },
+  update: {
+    categories: [
+      {
+        disconnect: [{}],                                         // drop all current categories…
+        create: [{ node: { name: 'New' }, edge: { isPrimary: true } }], // …and link a new one
+      },
+    ],
+  },
+});
+```
+
+- **Order within an item** (as in `@neo4j/graphql`): `delete`, `disconnect`, `connect`, `create`, `update`. So `disconnect: [{}]` + `create` replaces the relationship set.
+- **Nested connect / disconnect** recurse: `connect: { posts: [{ where, connect: { tags: [...] } }] }` links the post *and* its tags (max 5 levels).
+- **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
+- With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
 
 ---
 
@@ -1137,7 +1191,7 @@ type Book @node {
 
 Before v2.4.0, top-level fields dropped nodes whose statement returned no rows and duplicated nodes whose statement returned several. See the [2.4.0 changelog](CHANGELOG.md).
 
-> **⚠️ Security — `@cypher` SDL is trusted code, not data.** The `statement` argument is interpolated **verbatim** into the compiled Cypher (no parameterisation, no escaping). Treat `@cypher` directives the same way you treat `eval()` in your application code: the string MUST be a constant authored at development time, never built from runtime input. If your `typeDefs` are ever assembled from user input, environment variables, database records, or remote configuration, you have a Cypher-injection vector equivalent to RCE on the database (`MATCH (n) DETACH DELETE n RETURN '' AS x` in a `statement` will wipe the graph). The grafeo-ogm runtime cannot distinguish between developer-authored and user-derived SDL — that boundary is the application's responsibility.
+> **Security — `@cypher` SDL is trusted code, not data.** The `statement` argument is interpolated **verbatim** into the compiled Cypher (no parameterisation, no escaping). Treat `@cypher` directives the same way you treat `eval()` in your application code: the string MUST be a constant authored at development time, never built from runtime input. If your `typeDefs` are ever assembled from user input, environment variables, database records, or remote configuration, you have a Cypher-injection vector equivalent to RCE on the database (`MATCH (n) DETACH DELETE n RETURN '' AS x` in a `statement` will wipe the graph). The grafeo-ogm runtime cannot distinguish between developer-authored and user-derived SDL — that boundary is the application's responsibility.
 
 #### Using @cypher in SELECT
 
@@ -1197,13 +1251,12 @@ await Book.find({
 
 #### Limitations
 
-The following positions throw `OGMError` at compile time with a clear hint, rather than silently misbehaving:
+`@cypher` fields work at the top level and through relationships — nested selections (`select: { author: { select: { upper: true } } }`) and connection filters (`authorsConnection_SOME: { node: { upper: 'ANN' } }`) included. Two positions throw `OGMError` at compile time with a clear hint, rather than silently misbehaving:
 
-- **Connection `where` and `select.where`**: Prisma-style relationship filtering with `@cypher` is unsupported. Workaround: filter on the parent type, or query the related node directly via its own model.
-- **`_SINGLE` / `Connection_SINGLE` quantifiers**: unsupported. Workaround: combine `_SOME` and `_NONE` to express "exactly one match."
-- **Nested-relationship SELECT projection**: `select: { rel: { select: { cypherField: true } } }` is unsupported. Workaround: query the related node directly via its own model and join in application code.
+- **An aggregating statement selected through a relationship** — e.g. `postCount: … RETURN count(p) AS postCount` in `{ author { postCount } }`. Nested fields are projected inline (`head(COLLECT { … })`), and Neo4j 5 rejects aggregation there. Select it at the top level (`Author.find({ select: { postCount: true } })`), where it is computed in a `CALL` subquery and works.
+- **`_SINGLE` / `Connection_SINGLE` on a `@cypher` field.** Workaround: combine `_SOME` and `_NONE` to express "exactly one match."
 
-These are not OGM bugs — they are Cypher-language constraints. Pattern comprehensions (`[(n)-[:R]->(m) | m { ... }]`) cannot host `CALL` subqueries, so resolving an `@cypher` field inside a projection or relationship-scoped predicate is impossible at the language level.
+These are Cypher-language constraints, not OGM bugs: a pattern comprehension cannot host a `CALL` subquery, and aggregation is not allowed inside one.
 
 #### Performance
 
@@ -1465,18 +1518,19 @@ const { recordsAffected } = await ogm.$executeRaw(
 ```typescript
 // Callback style — interactive transaction
 await ogm.$transaction(async (ctx) => {
-  await Book.create({ input: [{ title: 'Book A' }] }, { context: ctx });
-  await Book.update(
-    { where: { id: 'book-1' }, update: { title: 'Updated' } },
-    { context: ctx },
-  );
+  await Book.create({ input: [{ title: 'Book A' }], context: ctx });
+  await Book.update({
+    where: { id: 'book-1' },
+    update: { title: 'Updated' },
+    context: ctx,
+  });
   // Committed on success, rolled back on error
 });
 
 // Sequential style — array of operations
 const [books, authors] = await ogm.$transaction([
-  (ctx) => Book.find({ select: { id: true } }, { context: ctx }),
-  (ctx) => Author.find({ select: { id: true } }, { context: ctx }),
+  (ctx) => Book.find({ select: { id: true }, context: ctx }),
+  (ctx) => Author.find({ select: { id: true }, context: ctx }),
 ]);
 
 // Transaction metadata (v2.4.8) — sent to the server when the tx begins,
@@ -1515,6 +1569,8 @@ const agg = await Entity.aggregate({
 ```
 
 Interface models are **read-only**. Use `ogm.model('User')` or `ogm.model('Organization')` for mutations.
+
+Since v2.5.0 they match nodes by their implementors' labels (`MATCH (n:(User|Organization))`), so nodes written with `ogm.model('User').create(...)` are found without carrying an `Entity` label. Each implementor's own read policy applies to its rows.
 
 ### Aggregation
 
@@ -1930,7 +1986,7 @@ These are incremental improvements you can adopt at your own pace:
 - All identifiers are **validated and escaped** -- injection-safe by default
 - Type generation is **modular and driver-free** -- smaller output, faster builds
 
-### ⚠️ Deliberate divergence: `OR: []` matches nothing
+### Deliberate divergence: `OR: []` matches nothing
 
 This is the **one intentional behavioral difference** from `@neo4j/graphql-ogm`. The deprecated OGM silently dropped empty `OR` arrays from the WHERE clause, so `delete({ where: { OR: [] } })` compiled to an *unfiltered* `MATCH ... DETACH DELETE` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list.
 
@@ -1968,11 +2024,20 @@ Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragme
 
 ### Is grafeo-ogm production-ready?
 
-Yes. The library has over 1,400 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, the CLI, and edge cases. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
+Yes. The library has over 2,100 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, the CLI, and edge cases, plus opt-in **live suites** (`tests/integration/`, run with `NEO4J_URI` set) that execute every fix against a real Neo4j 5.26 and assert on database outcomes. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Does grafeo-ogm work with Neo4j Aura?
 
-Yes. grafeo-ogm uses the standard `neo4j-driver` package — anywhere the official driver works, grafeo-ogm works. Aura, self-hosted Neo4j 5.x, Docker images, embedded — all supported. The only optional dependency is the **APOC plugin**, used for nested `orderBy` (via `apoc.coll.sortMulti`) and subgraph operations (via `apoc.refactor.cloneSubgraph`).
+Yes. grafeo-ogm uses the standard `neo4j-driver` package (`^5` or `^6`) — anywhere the official driver works, grafeo-ogm works. Aura, self-hosted Neo4j 5.x, Docker images, embedded — all supported. The generated Cypher is kept valid on **Neo4j 5.x**, including 5.26 LTS and Aura 5.27, which are stricter than 2025.x+ (for example, a `CALL` subquery may not directly follow a write clause); the live suites run against 5.26.
+
+Optional server features:
+
+| Feature | Needs |
+|---|---|
+| Nested `orderBy`, `selectionSet` `options.sort` | APOC (`apoc.coll.sortMulti`) |
+| `cloneSubgraph` / `deleteSubgraph` | APOC |
+| `searchByVector` | Neo4j 5.11+ (vector indexes) |
+| `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
 
 ### Do I need to know Cypher?
 
@@ -1988,7 +2053,7 @@ Yes — grafeo-ogm is GraphQL-SDL-driven, so the same `typeDefs` you pass to `ne
 
 ### Does it support transactions?
 
-Yes — `ogm.$transaction(async (ctx) => { ... })` runs multiple operations atomically. Pass the `ctx` object to any model method via `{ context: ctx }` to opt into the active transaction. See [Advanced Features → Transactions](#transactions).
+Yes — `ogm.$transaction(async (ctx) => { ... })` runs multiple operations atomically. Pass the `ctx` object as the `context` field of any model method's params — `Book.create({ input, context: ctx })` — to run it in the active transaction. It must go *inside* the params object: a second argument is ignored, and the call then runs outside the transaction and is not rolled back. See [Advanced Features → Transactions](#transactions).
 
 ### Does it support multi-database / multi-tenant Neo4j setups?
 
