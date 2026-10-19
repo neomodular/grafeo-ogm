@@ -60,6 +60,7 @@ type Row = Record<string, unknown>;
 type Model = ReturnType<OGM['model']>;
 
 const OVERWRITE_WARNING = '"overwrite: false" on a connect item of';
+const DEFAULT_WARNING = '"ItEwRole.role" declares @default';
 
 describeLive('Edge write inputs — live Neo4j (v2.7.1)', () => {
   const runId = `it-${randomUUID()}`;
@@ -359,6 +360,213 @@ describeLive('Edge write inputs — live Neo4j (v2.7.1)', () => {
         { role: 'old', since: null },
       ]);
       expect(of(OVERWRITE_WARNING)).toEqual([]);
+    });
+  });
+
+  describe('edge-property @default', () => {
+    /** One edge-creating site each, none naming `role` in its edge input. */
+    type Site = {
+      name: string;
+      go: (u: Model) => Promise<{ from: string; type: string; to: string }>;
+    };
+    const SITES: Site[] = [
+      {
+        name: 'nested create in create, no edge input',
+        go: async (u) => {
+          const [a, t] = [id('u'), id('t')];
+          await u.create({
+            input: [
+              {
+                id: a,
+                runId,
+                teams: { create: [{ node: { id: t, runId } }] },
+              },
+            ],
+          });
+          return { from: a, type: 'IT_EW_IN', to: t };
+        },
+      },
+      {
+        name: 'nested create in create, edge without the field',
+        go: async (u) => {
+          const [a, b] = [id('u'), id('b')];
+          await u.create({
+            input: [
+              {
+                id: a,
+                runId,
+                media: {
+                  ItEwBook: {
+                    create: [{ node: { id: b, runId }, edge: { since: 3 } }],
+                  },
+                },
+              },
+            ],
+          });
+          return { from: a, type: 'IT_EW_HAS', to: b };
+        },
+      },
+      {
+        name: 'nested create in update',
+        go: async (u) => {
+          const [a, t] = [id('u'), id('t')];
+          await nodes('ItEwUser', a);
+          await u.update({
+            where: { id: a },
+            update: {
+              teams: [
+                { create: [{ node: { id: t, runId }, edge: { since: 3 } }] },
+              ],
+            },
+          });
+          return { from: a, type: 'IT_EW_IN', to: t };
+        },
+      },
+      {
+        name: 'single connect',
+        go: async (u) => {
+          const [a, t] = [id('u'), id('t')];
+          await nodes('ItEwUser', a);
+          await nodes('ItEwTeam', t);
+          await u.update({
+            where: { id: a },
+            connect: { teams: { where: { node: { id: t } } } },
+          });
+          return { from: a, type: 'IT_EW_IN', to: t };
+        },
+      },
+      {
+        name: 'array connect (UNWIND fast path)',
+        go: async (u) => {
+          const [a, t] = [id('u'), id('t')];
+          await nodes('ItEwUser', a);
+          await nodes('ItEwTeam', t);
+          await u.update({
+            where: { id: a },
+            connect: {
+              teams: [{ where: { node: { id: t } }, edge: { since: 3 } }],
+            },
+          });
+          return { from: a, type: 'IT_EW_IN', to: t };
+        },
+      },
+      {
+        name: 'connect nested in create',
+        go: async (u) => {
+          const [a, t] = [id('u'), id('t')];
+          await nodes('ItEwTeam', t);
+          await u.create({
+            input: [
+              {
+                id: a,
+                runId,
+                teams: { connect: [{ where: { node: { id: t } } }] },
+              },
+            ],
+          });
+          return { from: a, type: 'IT_EW_IN', to: t };
+        },
+      },
+      {
+        name: 'connect-in-connect',
+        go: async (u) => {
+          const [a, t, g] = [id('u'), id('t'), id('g')];
+          await nodes('ItEwUser', a);
+          await nodes('ItEwTeam', t);
+          await nodes('ItEwTag', g);
+          await u.update({
+            where: { id: a },
+            connect: {
+              teams: [
+                {
+                  where: { node: { id: t } },
+                  edge: { role: 'lead' },
+                  connect: [{ tags: [{ where: { node: { id: g } } }] }],
+                },
+              ],
+            },
+          });
+          return { from: t, type: 'IT_EW_TAGGED', to: g };
+        },
+      },
+    ];
+
+    it.each(SITES.map((s) => [s.name, s] as const))(
+      'default, %s: the property is left unset, with one warning',
+      async (_n, site) => {
+        const { user, of } = makeOgm();
+        const { from, type, to } = await site.go(user);
+        const [edge] = await edges(from, type, to);
+        expect(edge.role).toBeNull();
+        expect(of(DEFAULT_WARNING)).toHaveLength(1);
+        expect(of(DEFAULT_WARNING)[0]).toMatch(
+          /^\[OGM\] "ItEwRole\.role" declares @default, but a relationship created without it \(edge input of "\w+"\) is stored with no "role" property\. Enable `strict: true` \(default in 3\.0\) to apply @default values of relationship properties when the relationship is created\.$/,
+        );
+      },
+    );
+
+    it.each(SITES.map((s) => [s.name, s] as const))(
+      'strict, %s: the default is stored',
+      async (_n, site) => {
+        const { user, warnings } = makeOgm(true);
+        const { from, type, to } = await site.go(user);
+        const [edge] = await edges(from, type, to);
+        expect(edge.role).toBe('member');
+        expect(warnings).toEqual([]);
+      },
+    );
+
+    it('default: warns once per type and field across calls and sites', async () => {
+      const { user, of } = makeOgm();
+      for (const site of SITES.slice(0, 3)) await site.go(user);
+      expect(of(DEFAULT_WARNING)).toHaveLength(1);
+    });
+
+    it('strict: a connect to an EXISTING relationship keeps its value', async () => {
+      const { user } = makeOgm(true);
+      const [a, t] = [id('u'), id('t')];
+      await nodes('ItEwUser', a);
+      await nodes('ItEwTeam', t);
+      await link(a, 'IT_EW_IN', t, null);
+      await user.update({
+        where: { id: a },
+        connect: { teams: { where: { node: { id: t } }, edge: { since: 9 } } },
+      });
+      expect(await edges(a, 'IT_EW_IN', t)).toEqual([{ role: null, since: 9 }]);
+    });
+
+    it('strict: an explicit null is kept', async () => {
+      const { user } = makeOgm(true);
+      const [a, t] = [id('u'), id('t')];
+      await nodes('ItEwUser', a);
+      await nodes('ItEwTeam', t);
+      await user.update({
+        where: { id: a },
+        connect: {
+          teams: { where: { node: { id: t } }, edge: { role: null } },
+        },
+      });
+      expect(await edges(a, 'IT_EW_IN', t)).toEqual([
+        { role: null, since: null },
+      ]);
+    });
+
+    it('strict: an edge update never applies the default', async () => {
+      const { user, warnings } = makeOgm(true);
+      const [a, t] = [id('u'), id('t')];
+      await nodes('ItEwUser', a);
+      await nodes('ItEwTeam', t);
+      await link(a, 'IT_EW_IN', t, null);
+      await user.update({
+        where: { id: a },
+        update: {
+          teams: [
+            { where: { node: { id: t } }, update: { edge: { since: 5 } } },
+          ],
+        },
+      });
+      expect(await edges(a, 'IT_EW_IN', t)).toEqual([{ role: null, since: 5 }]);
+      expect(warnings).toEqual([]);
     });
   });
 });

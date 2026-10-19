@@ -569,6 +569,60 @@ export class MutationCompiler {
   }
 
   /**
+   * v2.7.1 — `@default` values of the relationship properties that an
+   * edge input leaves undefined, for an edge the write CREATES (nested
+   * create, or the create branch of a connect's MERGE). Through v2.7.0
+   * (and still by default) edge defaults were never applied, so the
+   * relationship was stored without the property. Default: one warning per
+   * properties type and field, and no SET items; strict: one
+   * `<relVar>.<prop> = <default>` item per property, bound as
+   * `<paramPrefix>_edge_<prop>` (the naming of the explicit edge values,
+   * which never name a defaulted property, so the two cannot collide).
+   * As for nodes, an explicit `null` is kept and `@id` / `@cypher` fields
+   * take no default.
+   */
+  private edgeDefaultSetItems(
+    relDef: RelationshipDefinition,
+    edgeInput: unknown,
+    relVar: string,
+    paramPrefix: string,
+    params: Record<string, unknown>,
+  ): string[] {
+    if (!relDef.properties) return [];
+    const propsDef = this.schema.relationshipProperties.get(relDef.properties);
+    if (!propsDef) return [];
+    const edge = isPlainObject(edgeInput) ? edgeInput : {};
+    const items: string[] = [];
+    for (const [, propDef] of propsDef.properties) {
+      if (propDef.defaultValue === undefined) continue;
+      if (propDef.isGenerated || propDef.isCypher) continue;
+      if (edge[propDef.name] !== undefined) continue;
+      if (!this.strictMode.strict) {
+        this.strictMode.warn(
+          'edge-default-not-applied',
+          `${relDef.properties}\u0000${propDef.name}`,
+          `"${relDef.properties}.${propDef.name}" declares @default, but a relationship created without it ` +
+            `(edge input of "${relDef.fieldName}") is stored with no "${propDef.name}" property.`,
+          'apply @default values of relationship properties when the relationship is created',
+        );
+        continue;
+      }
+      assertSafePropertyName(propDef.name, 'edge property');
+      const paramName = `${paramPrefix}_edge_${propDef.name}`;
+      const bound = resolveDefaultWriteValue(propDef);
+      params[paramName] = bound;
+      items.push(
+        `${relVar}.${escapeIdentifier(propDef.name)} = ${wrapWriteExpr(
+          `$${paramName}`,
+          bound,
+          propDef,
+        )}`,
+      );
+    }
+    return items;
+  }
+
+  /**
    * Generate CREATE Cypher for one or more nodes.
    * Handles scalar properties, nested relationship creates, and connects.
    */
@@ -1722,8 +1776,18 @@ export class MutationCompiler {
 
         // Set edge properties if present
         this.checkEdgeKeys(relDef, edgeInput, 'nested create');
-        if (edgeInput && Object.keys(edgeInput).length > 0) {
-          const relVar = `r_edge_${startCounter + counter - 1}`;
+        const relVar = `r_edge_${startCounter + counter - 1}`;
+        const defaultItems = this.edgeDefaultSetItems(
+          relDef,
+          edgeInput,
+          relVar,
+          `${prefix}_create${ci}`,
+          params,
+        );
+        if (
+          (edgeInput && Object.keys(edgeInput).length > 0) ||
+          defaultItems.length > 0
+        ) {
           // Re-match the relationship to set edge props
           const relArrow = buildRelPattern({
             sourceVar: nodeVar,
@@ -1738,7 +1802,7 @@ export class MutationCompiler {
           lines.push(`WITH ${[...allVars, createVar].join(', ')}`);
           lines.push(`MATCH ${relArrow}`);
           const setItems: string[] = [];
-          for (const [prop, val] of Object.entries(edgeInput)) {
+          for (const [prop, val] of Object.entries(edgeInput ?? {})) {
             if (val === undefined) continue;
             assertSafePropertyName(prop, 'edge property');
             const edgePropDef = this.getEdgePropDef(relDef, prop);
@@ -1752,6 +1816,7 @@ export class MutationCompiler {
             );
             params[paramName] = coerceWriteValue(val, edgePropDef);
           }
+          setItems.push(...defaultItems);
           if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
         }
 
@@ -2022,7 +2087,16 @@ export class MutationCompiler {
 
         // Handle edge properties from first item structure
         const edgeProps = this.extractEdgeProperties(firstItem);
-        if (edgeProps.length > 0) {
+        // Every item shares the first item's edge key set (checked above),
+        // so the `@default`s it leaves out are the same for every row.
+        const defaultItems = this.edgeDefaultSetItems(
+          relDef,
+          firstItem.edge,
+          relVar,
+          paramName,
+          params,
+        );
+        if (edgeProps.length > 0 || defaultItems.length > 0) {
           // Use bare target var (no label) since target is already bound by MATCH
           assertSafeIdentifier(relDef.type, 'relationship type');
           const escapedRelType = escapeIdentifier(relDef.type);
@@ -2043,7 +2117,7 @@ export class MutationCompiler {
                 this.getEdgePropDef(relDef, p),
               )}`,
           );
-          lines.push(`SET ${setItems.join(', ')}`);
+          lines.push(...edgeMergeSets(setItems, defaultItems, false));
         }
 
         lines.push(`RETURN count(*) AS _conn_${varPrefix}${tag}`);
@@ -2148,7 +2222,17 @@ export class MutationCompiler {
     if (conditions.length > 0) lines.push(`WHERE ${conditions.join(' AND ')}`);
 
     const keepExisting = this.connectKeepsExistingEdge(connectSpec, relDef);
-    if (edgeInput && Object.keys(edgeInput).length > 0) {
+    const defaultItems = this.edgeDefaultSetItems(
+      relDef,
+      edgeInput,
+      a.relVar,
+      a.edgeParamPrefix,
+      a.params,
+    );
+    if (
+      (edgeInput && Object.keys(edgeInput).length > 0) ||
+      defaultItems.length > 0
+    ) {
       // Use bare target var (no label) since connectVar is already bound by MATCH.
       // Including labels on a bound variable in MERGE causes Neo4j to reject it.
       assertSafeIdentifier(relDef.type, 'relationship type');
@@ -2159,7 +2243,7 @@ export class MutationCompiler {
           : `(${sourceVar})<-[${a.relVar}:${escapedRelType}]-(${connectVar})`;
       lines.push(`MERGE ${mergePattern}`);
       const setItems: string[] = [];
-      for (const [prop, val] of Object.entries(edgeInput)) {
+      for (const [prop, val] of Object.entries(edgeInput ?? {})) {
         if (val === undefined) continue;
         assertSafePropertyName(prop, 'edge property');
         const edgePropDef = this.getEdgePropDef(relDef, prop);
@@ -2173,7 +2257,7 @@ export class MutationCompiler {
         );
         a.params[paramName] = coerceWriteValue(val, edgePropDef);
       }
-      lines.push(...edgeMergeSets(setItems, keepExisting));
+      lines.push(...edgeMergeSets(setItems, defaultItems, keepExisting));
     } else {
       const relPattern = buildRelPattern({
         sourceVar,
@@ -2988,7 +3072,17 @@ export class MutationCompiler {
             const edgeEntries = Object.entries(edgeInput ?? {}).filter(
               ([, v]) => v !== undefined,
             );
-            const edgeVar = edgeEntries.length ? `${createVar}_e` : undefined;
+            const defaultItems = this.edgeDefaultSetItems(
+              relDef,
+              edgeInput,
+              `${createVar}_e`,
+              `${itemPrefix}_create${ci}`,
+              params,
+            );
+            const edgeVar =
+              edgeEntries.length || defaultItems.length
+                ? `${createVar}_e`
+                : undefined;
 
             const relPattern = buildRelPattern({
               sourceVar,
@@ -3021,6 +3115,7 @@ export class MutationCompiler {
                   edgePropDef,
                 )}`;
               });
+              setItems.push(...defaultItems);
               lines.push(`SET ${setItems.join(', ')}`);
             }
 
@@ -3331,13 +3426,25 @@ export class MutationCompiler {
 }
 
 /**
- * v2.7.1 — the SET clause after a connect's `MERGE` of the relationship:
- * its edge values on every match (the pre-2.7.1 `SET …`), or only when the
- * MERGE creates it when `keepExisting` (`overwrite: false`, strict mode).
+ * v2.7.1 — the SET clauses after a connect's `MERGE` of the relationship.
+ * `defaults` (strict-mode edge `@default`s) apply only when the MERGE
+ * creates it; `explicit` edge values too when `keepExisting`
+ * (`overwrite: false` in strict mode), otherwise on every match. With no
+ * defaults and `keepExisting` false this is the pre-2.7.1 `SET …`.
  */
-function edgeMergeSets(explicit: string[], keepExisting: boolean): string[] {
-  if (explicit.length === 0) return [];
-  return [`${keepExisting ? 'ON CREATE SET' : 'SET'} ${explicit.join(', ')}`];
+function edgeMergeSets(
+  explicit: string[],
+  defaults: string[],
+  keepExisting: boolean,
+): string[] {
+  if (keepExisting) {
+    const all = [...explicit, ...defaults];
+    return all.length > 0 ? [`ON CREATE SET ${all.join(', ')}`] : [];
+  }
+  const out: string[] = [];
+  if (defaults.length > 0) out.push(`ON CREATE SET ${defaults.join(', ')}`);
+  if (explicit.length > 0) out.push(`SET ${explicit.join(', ')}`);
+  return out;
 }
 
 /**

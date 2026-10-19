@@ -1197,6 +1197,22 @@ await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: te
 
 Applies to every connect: top-level, nested in `create` / `update`, per union or interface member, and inside another connect. Without `edge` values the flag changes nothing, so it does not warn. In `@neo4j/graphql`, `overwrite: false` instead made the mutation fail (through APOC) when the relationship already existed.
 
+#### 14. `@default` on relationship properties (since 2.7.1)
+
+```graphql
+type Membership @relationshipProperties {
+  role: String! @default(value: "member")
+}
+```
+
+```typescript
+await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: teamId } } }] } });
+// default: the new relationship has no `role` (and warns, once per properties type and field)
+// strict:  the new relationship gets role: "member"
+```
+
+Strict applies the default whenever a relationship is created without the property: nested `create` (in `create` and `update`) and the create branch of every connect. As with node `@default`, an explicit `null` is kept, a connect to a relationship that already exists leaves it as it is, and an edge `update` never applies defaults. The generated `<Props>CreateInput` keeps the field required, because by default an omitted value is still not written.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
