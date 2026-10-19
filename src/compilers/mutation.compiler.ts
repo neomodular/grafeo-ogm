@@ -202,6 +202,35 @@ export class MutationCompiler {
     return clause.cypher;
   }
 
+  /**
+   * v2.5.2 — a connect / disconnect nested in a connect / disconnect item
+   * writes the INTERMEDIATE node's own relationships, which the direct
+   * equivalent (`Intermediate.update({ connect | disconnect })`) only allows
+   * under its `update` policy. Pre-2.5.2 the intermediate was gated by
+   * `read` alone, so a context that could merely see a node could link and
+   * unlink its relationships. Inside the item's CALL this filters the row
+   * before the nested ops; the outer link / unlink still needs `read` only,
+   * and `count(*)` keeps one row per node. No policies → no lines.
+   */
+  private gateOnUpdate(
+    withClause: string,
+    targetNodeDef: NodeDefinition,
+    targetVar: string,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+    paramCounter: { count: number } | undefined,
+  ): string[] {
+    const predicate = this.buildTargetPolicyPredicate(
+      targetNodeDef,
+      targetVar,
+      params,
+      policyContext,
+      paramCounter,
+      'update',
+    );
+    return predicate ? [withClause, `WHERE ${predicate}`] : [];
+  }
+
   private getPolicyWhereCompiler(): WhereCompiler {
     // Inherit the logger: since v2.3.0 this compiler also compiles every
     // nested-write `where`, and its empty-AND/OR warnings must surface.
@@ -1814,6 +1843,16 @@ export class MutationCompiler {
         a.scope.depth,
         a.edgeParamPrefix,
       );
+      lines.push(
+        ...this.gateOnUpdate(
+          inner.withClause,
+          targetNodeDef,
+          connectVar,
+          a.params,
+          a.policyContext,
+          a.paramCounter,
+        ),
+      );
       for (const nestedConnect of Array.isArray(nested) ? nested : [nested]) {
         if (!isPlainObject(nestedConnect))
           throw new OGMError(
@@ -1923,7 +1962,14 @@ export class MutationCompiler {
           `must be keyed by the implementing type, e.g. { ${relDef.fieldName}: { Member: [{ where, disconnect }] } }.`,
       );
     const inner = nestedScope(carryVars, targetVar, depth, uniqueToken);
-    const lines: string[] = [];
+    const lines = this.gateOnUpdate(
+      inner.withClause,
+      targetNodeDef,
+      targetVar,
+      params,
+      policyContext,
+      paramCounter,
+    );
     for (const nestedDisconnect of Array.isArray(nested) ? nested : [nested]) {
       if (!isPlainObject(nestedDisconnect))
         throw new OGMError(

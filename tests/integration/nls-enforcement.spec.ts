@@ -203,12 +203,10 @@ describeLive('NLS enforcement — live Neo4j', () => {
 
     it('without policies, a blanket disconnect still unlinks everything', async () => {
       await seedTag('bd-nopol');
-      await new OGM({ typeDefs, driver })
-        .model('ItTag')
-        .update({
-          where: { id: id('bd-nopol-tag') },
-          disconnect: { charts: [{}] },
-        });
+      await new OGM({ typeDefs, driver }).model('ItTag').update({
+        where: { id: id('bd-nopol-tag') },
+        disconnect: { charts: [{}] },
+      });
       expect(
         await linked(id('bd-nopol-tag'), 'IT_TAGS', id('bd-nopol-pub')),
       ).toBe(false);
@@ -521,6 +519,222 @@ describeLive('NLS enforcement — live Neo4j', () => {
       expect(await linked(id('tc-tag2'), 'IT_TAGS_RES', id('tc-sec'))).toBe(
         false,
       );
+    });
+  });
+
+  // --- v2.5.2: nested link through a read-only intermediate -----------------
+  // A connect nested in a connect item (and a disconnect nested in a
+  // disconnect item) writes the INTERMEDIATE chart's own relationships.
+  // Pre-2.5.2 the chart was gated by `read` only, so a context that could
+  // merely see it linked / unlinked its categories — which the direct
+  // `ItChart.update({ connect | disconnect })` correctly refuses.
+
+  describe('nested connect/disconnect through a read-only intermediate links/unlinks nothing', () => {
+    const p = (s: string) => id(`rl-${s}`);
+    // `theirs` is readable but owned by u2 (CTX is u1): read yes, update no.
+    beforeEach(async () => {
+      await run(
+        `MATCH (n) WHERE n.runId = $runId AND n.id STARTS WITH $prefix DETACH DELETE n`,
+        { prefix: p('') },
+      );
+      await run(
+        `CREATE (:ItTag {id: $tag, runId: $runId})
+         CREATE (theirs:ItResource:ItChart {id: $theirs, runId: $runId, ownerId: 'u2', secret: false, tenantId: 't1'})
+         CREATE (mine:ItResource:ItChart {id: $mine, runId: $runId, ownerId: 'u1', secret: false, tenantId: 't1'})
+         CREATE (:ItCategory {id: $k, runId: $runId, name: 'K', protected: false})
+         CREATE (linked:ItCategory {id: $kl, runId: $runId, name: 'KL', protected: false})
+         CREATE (theirs)-[:IT_IN_CATEGORY]->(linked), (mine)-[:IT_IN_CATEGORY]->(linked)`,
+        {
+          tag: p('tag'),
+          theirs: p('theirs'),
+          mine: p('mine'),
+          k: p('k'),
+          kl: p('kl'),
+        },
+      );
+    });
+
+    const charts = (chartId: string, nested: Record<string, unknown>) => [
+      { where: { node: { id: chartId } }, ...nested },
+    ];
+    const connectK = {
+      connect: { categories: [{ where: { node: { id: p('k') } } }] },
+    };
+    const disconnectKL = {
+      disconnect: { categories: [{ where: { node: { id: p('kl') } } }] },
+    };
+
+    it('the direct update of the read-only chart links nothing (baseline)', async () => {
+      await bound()
+        .model('ItChart')
+        .update({
+          where: { id: p('theirs') },
+          connect: { categories: [{ where: { node: { id: p('k') } } }] },
+        });
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('update: connect nested in a connect item', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          connect: { charts: charts(p('theirs'), connectK) },
+        });
+      // The outer link only needs read …
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(true);
+      // … the chart's own relationship needs update.
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('the owner (who has update) CAN do the nested connect', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          connect: { charts: charts(p('mine'), connectK) },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('mine'))).toBe(true);
+      expect(await linked(p('mine'), 'IT_IN_CATEGORY', p('k'))).toBe(true);
+    });
+
+    it('create: connect nested in a connect item', async () => {
+      await bound()
+        .model('ItTag')
+        .create({
+          input: [
+            {
+              id: p('tag2'),
+              runId,
+              charts: { connect: charts(p('theirs'), connectK) },
+            },
+          ],
+        });
+      expect(await linked(p('tag2'), 'IT_TAGS', p('theirs'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('update body: item connect with a nested connect', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          update: { charts: [{ connect: charts(p('theirs'), connectK) }] },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('per-member abstract connect with a nested connect', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          connect: { items: { ItChart: charts(p('theirs'), connectK) } },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS_ITEM', p('theirs'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('updateMany: item connect with a nested connect', async () => {
+      await bound()
+        .model('ItTag')
+        .updateMany({
+          where: { id: p('tag') },
+          data: { charts: [{ connect: charts(p('theirs'), connectK) }] },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('depth 3: the read-only chart deeper in the chain is gated too', async () => {
+      // tag → mine (update ok) → kl (update ok) → theirs (read only) → k
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          connect: {
+            charts: charts(p('mine'), {
+              connect: {
+                categories: [
+                  {
+                    where: { node: { id: p('kl') } },
+                    connect: {
+                      charts: [
+                        {
+                          where: { node: { id: p('theirs') } },
+                          ...connectK,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            }),
+          },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('mine'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('kl'))).toBe(true);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('k'))).toBe(false);
+    });
+
+    it('update: disconnect nested in a disconnect item', async () => {
+      await run(
+        `MATCH (t:ItTag {id: $t}), (c:ItChart) WHERE c.id IN [$theirs, $mine]
+         CREATE (t)-[:IT_TAGS]->(c)`,
+        { t: p('tag'), theirs: p('theirs'), mine: p('mine') },
+      );
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          disconnect: { charts: charts(p('theirs'), disconnectKL) },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(false);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('kl'))).toBe(true);
+
+      // The owner can.
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          disconnect: { charts: charts(p('mine'), disconnectKL) },
+        });
+      expect(await linked(p('mine'), 'IT_IN_CATEGORY', p('kl'))).toBe(false);
+    });
+
+    it('update: blanket nested disconnect', async () => {
+      await run(
+        `MATCH (t:ItTag {id: $t}), (c:ItChart {id: $theirs}) CREATE (t)-[:IT_TAGS]->(c)`,
+        { t: p('tag'), theirs: p('theirs') },
+      );
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          disconnect: {
+            charts: charts(p('theirs'), { disconnect: { categories: null } }),
+          },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(false);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('kl'))).toBe(true);
+    });
+
+    it('update body: item disconnect with a nested disconnect', async () => {
+      await run(
+        `MATCH (t:ItTag {id: $t}), (c:ItChart {id: $theirs}) CREATE (t)-[:IT_TAGS]->(c)`,
+        { t: p('tag'), theirs: p('theirs') },
+      );
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: p('tag') },
+          update: {
+            charts: [{ disconnect: charts(p('theirs'), disconnectKL) }],
+          },
+        });
+      expect(await linked(p('tag'), 'IT_TAGS', p('theirs'))).toBe(false);
+      expect(await linked(p('theirs'), 'IT_IN_CATEGORY', p('kl'))).toBe(true);
     });
   });
 
