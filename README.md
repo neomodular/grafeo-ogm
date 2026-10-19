@@ -716,7 +716,7 @@ const books = await Book.find({
 });
 ```
 
-Relationship fields accept `where` and `options` (`sort` needs APOC; `limit` / `offset`), connection fields accept `where`, and any other argument throws `OGMError` rather than being ignored. Under [Node-Level Security](#node-level-security) the target type's `read` policy applies, exactly as for a typed `select` with `where`. Connection `totalCount` is filtered by the same `where` and policy as `edges`.
+Relationship fields accept `where` and `options` (`sort` needs APOC; `limit` / `offset`), connection fields accept `where` and, since v2.7.0, `sort` (needs APOC, see [Nested Sorting](#nested-sorting)), `<relationship>Aggregate` fields accept `where` and `directed` (see [Relationship aggregate selections](#relationship-aggregate-selections)), and any other argument throws `OGMError` rather than being ignored. Under [Node-Level Security](#node-level-security) the target type's `read` policy applies, exactly as for a typed `select` with `where`. Connection `totalCount` is filtered by the same `where` and policy as `edges`.
 
 **Default (no selection):** Returns all scalar fields of the matched node.
 
@@ -765,6 +765,25 @@ Validation rules:
 - `edge` is only accepted when the relationship is declared with `@relationshipProperties`
 - Fields must be scalars on the target node (for `node`) or on the relationship properties type (for `edge`)
 - Direction must be `'ASC'` or `'DESC'`
+
+**Connection `sort` in a `selectionSet`** (v2.7.0) — a connection field takes the `@neo4j/graphql`-style `sort` argument, with the same `{ node: { … } }` / `{ edge: { … } }` entries as the typed `orderBy`. It compiles to exactly the same Cypher (`apoc.coll.sortMulti`, so it needs APOC too), follows the same validation rules (an invalid entry throws `OGMError`), and combines with `where` and `totalCount`:
+
+```typescript
+await Author.find({
+  selectionSet: `{
+    id
+    booksConnection(
+      where: { node: { published: true } }
+      sort: [{ edge: { since: DESC } }, { node: { title: ASC } }]
+    ) {
+      totalCount
+      edges { properties { since } node { id title } }
+    }
+  }`,
+});
+```
+
+`totalCount` counts the filtered edges; the sort orders `edges` only. Other connection arguments (`first`, `after`, …) are not supported and throw.
 
 ### Automatic `__typename` for Abstract Targets
 
@@ -2204,6 +2223,12 @@ These are incremental improvements you can adopt at your own pace:
 - All identifiers are **validated and escaped** -- injection-safe by default
 - Type generation is **modular and driver-free** -- smaller output, faster builds
 
+### Upgrading to 2.5.0 or later: `selectionSet` arguments
+
+Before v2.5.0, `selectionSet` field arguments were parsed and **ignored**. Since v2.5.0 they take effect, and an argument the OGM cannot honour throws `OGMError` instead of being dropped. On connection fields, 2.5.0 to 2.6.x accepted only `where`: a carried-over `xConnection(sort: …)` (or `first`, `after`, …), which had never applied, now threw. The `model.selectionSet = …` setter parses its value at once, so a default selection set assigned in a constructor throws at **assignment** (often application startup), not on the first query, and unit tests that mock the model don't parse it.
+
+Since v2.7.0 a connection `sort` is honoured (see [Nested Sorting](#nested-sorting)): it now sorts the edges, which it never did before 2.5.0. Remove it to keep the old, unsorted result. Any other unsupported connection argument still throws; the message names the typed `select` alternative.
+
 ### Deliberate divergence: `OR: []` matches nothing
 
 This is the **one intentional behavioral difference** from `@neo4j/graphql-ogm`. The deprecated OGM silently dropped empty `OR` arrays from the WHERE clause, so `delete({ where: { OR: [] } })` compiled to an *unfiltered* `MATCH ... DETACH DELETE` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list.
@@ -2252,7 +2277,7 @@ Optional server features:
 
 | Feature | Needs |
 |---|---|
-| Nested `orderBy`, `selectionSet` `options.sort` | APOC (`apoc.coll.sortMulti`) |
+| Nested `orderBy`, `selectionSet` `options.sort` and connection `sort` | APOC (`apoc.coll.sortMulti`) |
 | `cloneSubgraph` / `deleteSubgraph` | APOC |
 | `searchByVector` | Neo4j 5.11+ (vector indexes) |
 | `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
