@@ -1676,6 +1676,7 @@ export class SelectionCompiler {
           const caseCypher = this.compileUnionRelationshipField(
             node,
             nodeVar,
+            nodeDef.typeName,
             unionMembers,
             maxDepth,
             currentDepth,
@@ -2793,6 +2794,7 @@ export class SelectionCompiler {
   private compileUnionRelationshipField(
     node: SelectionNode,
     nodeVar: string,
+    unionName: string,
     unionMembers: string[],
     maxDepth: number,
     currentDepth: number,
@@ -2808,6 +2810,35 @@ export class SelectionCompiler {
       throw new OGMError(
         `selectionSet arguments on "${node.fieldName}" are not supported when selected through a union type.`,
       );
+
+    // v2.7.1 — the typed select `where` / `orderBy` of a relationship under
+    // a union parent. Pre-2.7.1 (and in 2.x default mode) neither reached
+    // the per-member branches: every related node came back, unsorted.
+    // Honouring them changes rows, so 2.x warns; strict applies them per
+    // member (the `where` AND the target's `read` policy).
+    const strict = this.strictMode.strict;
+    const hasWhere =
+      !!node.relationshipWhere &&
+      Object.keys(node.relationshipWhere).length > 0;
+    const hasOrderBy = !!node.orderBy && node.orderBy.length > 0;
+    if (!strict) {
+      if (hasWhere)
+        this.strictMode.warn(
+          'select-union-where',
+          `${unionName}.${node.fieldName}`,
+          `The select \`where\` on "${node.fieldName}", selected under the union "${unionName}", ` +
+            `is ignored in 2.x: every related node is returned.`,
+          "apply it to each member (with the target type's read policy)",
+        );
+      if (hasOrderBy)
+        this.strictMode.warn(
+          'select-union-orderBy',
+          `${unionName}.${node.fieldName}`,
+          `The select \`orderBy\` on "${node.fieldName}", selected under the union "${unionName}", ` +
+            `is ignored in 2.x: the related nodes are not sorted.`,
+          "sort each member's related nodes",
+        );
+    }
 
     const branches: string[] = [];
     let isSingular = false;
@@ -2856,10 +2887,29 @@ export class SelectionCompiler {
         paramCounter,
         policyContext,
         contextLabel: `union member "${memberName}" of "${node.fieldName}"`,
-        // Union branches don't have a user select.where in the
-        // SelectionNode model — only policies contribute here.
-        userWhere: undefined,
+        // v2.7.1 — strict: the typed select `where`, compiled against
+        // this member's target. 2.x: the policy alone (unchanged).
+        userWhere: strict && hasWhere ? node.relationshipWhere : undefined,
       });
+
+      // v2.7.1 — strict: the typed select `orderBy`, per member.
+      if (strict && hasOrderBy && relDef.isArray) {
+        branches.push(
+          `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN ${this.compileSortedComprehension(
+            `${pattern}${memberPolicyWhere}`,
+            innerProjection,
+            childVar,
+            targetDef,
+            node.orderBy!,
+          )}`,
+        );
+        continue;
+      }
+      if (strict && hasOrderBy)
+        throw new OGMError(
+          `orderBy is not supported on singular relationship "${node.fieldName}" of union member "${memberName}". ` +
+            `Sorting is only valid for array relationships.`,
+        );
 
       // Wrap singular relationships with head() to return object instead of array
       const comprehension = isSingular

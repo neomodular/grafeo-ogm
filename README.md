@@ -1258,6 +1258,19 @@ await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } 
 
 Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) selects all scalar fields of the target, as `true` does, in both modes; before 2.7.1 it was left out of the result.
 
+#### 15. Typed `select` `where` / `orderBy` under a union (since 2.7.1)
+
+```typescript
+// union Media = Post | Video, both with `tags`
+await feeds.find({
+  select: { items: { select: { tags: { select: { name: true }, where: { name_STARTS_WITH: 'a' }, orderBy: [{ name: 'ASC' }] } } } },
+});
+// default: every tag of every item, unsorted — `where` and `orderBy` are ignored (and warns)
+// strict:  each member's tags filtered (AND the Tag read policy) and sorted
+```
+
+A relationship selected on a union type compiles to one branch per member, and before 2.7.1 the branches never read the typed `where` or `orderBy`. In strict mode each member applies them to its own relationship. The `selectionSet` form (`items { ... on Post { tags(where: …) { … } } }`) is not affected: it throws `OGMError` (since 2.5.0) rather than ignoring the arguments.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
