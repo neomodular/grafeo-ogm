@@ -33,6 +33,7 @@ import {
   mergeParams,
 } from '../utils/validation';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
+import { normalizeConnectionOrderBy } from './connection-order-by';
 import {
   AGGREGATE_SUFFIX,
   aggregateKind,
@@ -72,6 +73,13 @@ export interface SelectionNode {
     direction: 'ASC' | 'DESC';
     scope: 'node' | 'edge';
   }>;
+  /**
+   * Connection only: the selectionSet `sort` argument as parsed (v2.7.0 —
+   * pre-2.7.0 it threw). Its shape is checked when parsed; it is checked
+   * against the schema and normalized into `connectionOrderBy` entries
+   * when compiled, then sorted exactly as the typed `select` `orderBy`.
+   */
+  connectionSort?: unknown;
   /**
    * Connection only: `totalCount` was selected (v2.4.8). Pre-2.4.8 it was
    * silently dropped although the generated connection type declares it.
@@ -581,7 +589,8 @@ function mergeSelectionLists(
 
 /** selectionSet field arguments the OGM honours, by field kind (v2.5.0). */
 const RELATIONSHIP_ARGUMENTS = new Set(['where', 'options']);
-const CONNECTION_ARGUMENTS = new Set(['where']);
+// v2.7.0 — `sort` on connection fields (#25); pre-2.7.0 it threw.
+const CONNECTION_ARGUMENTS = new Set(['where', 'sort']);
 const RELATIONSHIP_OPTIONS = new Set(['sort', 'limit', 'offset']);
 
 /** Reject `$variables` anywhere in an argument value (v2.5.0). */
@@ -650,8 +659,8 @@ function assertNoArguments(field: FieldNode, where: string): void {
   if (field.arguments && field.arguments.length > 0)
     throw new OGMError(
       `Unsupported argument "${field.arguments[0].name.value}" on "${where}". ` +
-        `selectionSet arguments are supported only on relationship fields (where, options) ` +
-        `and connection fields (where).`,
+        `selectionSet arguments are supported only on relationship fields (where, options), ` +
+        `relationship aggregates (where, directed) and connection fields (where, sort).`,
     );
 }
 
@@ -670,6 +679,21 @@ function outputKey(node: SelectionNode): string {
 /** First letter uppercased, as the generated type names spell fields. */
 function pascal(fieldName: string): string {
   return fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
+}
+
+/**
+ * v2.7.0 — what an unsupported connection argument can be replaced with
+ * (#25): the typed `select` equivalent, a relationship field to page, and
+ * the pre-2.5.0 behaviour (the argument was ignored).
+ */
+function unsupportedConnectionArgumentHint(label: string): string {
+  const rel = label.replace(/Connection$/, '');
+  return (
+    ` The typed select API takes the same connection arguments: ` +
+    `select: { ${label}: { where: {...}, orderBy: [...], select: {...} } }. ` +
+    `To page, select the relationship field instead: ${rel}(options: { offset, limit }). ` +
+    `Before 2.5.0 the argument was ignored; remove it to keep that result.`
+  );
 }
 
 function nonNegativeInt(value: unknown, what: string): number {
@@ -716,10 +740,20 @@ function applyFieldArguments(field: FieldNode, node: SelectionNode): void {
     if (!allowed || !allowed.has(name))
       throw new OGMError(
         `Unsupported argument "${name}" on selectionSet field "${label}". ` +
-          `Supported: where and options (sort, limit, offset) on relationship fields, where on connection fields.`,
+          `Supported: where and options (sort, limit, offset) on relationship fields, ` +
+          `where and directed on relationship aggregates (<field>Aggregate), where and sort on connection fields.` +
+          (node.isConnection ? unsupportedConnectionArgumentHint(label) : ''),
       );
     assertNoVariables(arg.value, `${label}(${name})`);
     const value = valueFromASTUntyped(arg.value);
+    if (name === 'sort') {
+      // v2.7.0 — the typed connection `orderBy` entries (#25). The shape
+      // is checked now (so the `selectionSet` setter throws on a bad one);
+      // fields are checked against the schema when compiled.
+      normalizeConnectionOrderBy(value, label, 'sort');
+      node.connectionSort = value;
+      continue;
+    }
     if (!isPlainObject(value))
       throw new OGMError(
         `Argument "${name}" on selectionSet field "${label}" must be an object.`,
@@ -2564,8 +2598,34 @@ export class SelectionCompiler {
     // apoc.coll.sortMulti (which only accepts top-level keys) can order the
     // collection. The outer list comprehension strips them on the way out.
     const sortKeyTokens: string[] = [];
-    if (node.connectionOrderBy && node.connectionOrderBy.length > 0)
-      node.connectionOrderBy.forEach(({ field, direction, scope }, i) => {
+    // v2.7.0 — a selectionSet `sort` is checked against this connection's
+    // target and relationship, then takes the typed `orderBy` path below.
+    const connectionOrderBy =
+      node.connectionSort !== undefined
+        ? normalizeConnectionOrderBy(
+            node.connectionSort,
+            node.fieldName,
+            'sort',
+            {
+              targetDef,
+              relDef,
+              schema: this.schema,
+            },
+          )
+        : node.connectionOrderBy;
+    if (
+      node.connectionSort !== undefined &&
+      connectionOrderBy &&
+      connectionOrderBy.length > 0 &&
+      node.extraEdges &&
+      node.extraEdges.length > 0
+    )
+      throw new OGMError(
+        `sort on "${node.fieldName}" is not supported with \`edges\` selected under several response keys. ` +
+          `Select the connection once per alias instead (a: ${node.fieldName}(sort: ...) { edges { ... } }).`,
+      );
+    if (connectionOrderBy && connectionOrderBy.length > 0)
+      connectionOrderBy.forEach(({ field, direction, scope }, i) => {
         assertSafeIdentifier(field, 'connection orderBy field');
         const sourceVar = scope === 'edge' ? edgeVar : childVar;
         const syntheticKey = `__sk${i}`;
