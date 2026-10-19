@@ -976,9 +976,16 @@ export class SelectionCompiler {
       params[name] = neo4jInt(value);
       return `$${name}`;
     };
-    const start = node.offset ?? 0;
+    // v2.5.3 — a list slice bound must fit in 32 bits (and a JS number
+    // past 2^63 overflows the driver's Integer). No list is that long, so
+    // clamping keeps the result; pre-2.5.3 the query failed.
+    const INT32_MAX = 2_147_483_647;
+    const start = Math.min(node.offset ?? 0, INT32_MAX);
     const startRef = node.offset !== undefined ? bind(start) : '';
-    const endRef = node.limit !== undefined ? bind(start + node.limit) : '';
+    const endRef =
+      node.limit !== undefined
+        ? bind(Math.min(start + node.limit, INT32_MAX))
+        : '';
     return `[${startRef}..${endRef}]`;
   }
 

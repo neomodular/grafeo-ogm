@@ -82,6 +82,20 @@ describeLive('selectionSet arguments and aliases — live Neo4j', () => {
     expect(head.posts).toHaveLength(1);
   });
 
+  // v2.5.3 — a huge limit / offset reached the driver ("long overflow") or
+  // the server (a list slice bound must fit in 32 bits).
+  it('a limit or offset past the 32-bit range pages like a large one', async () => {
+    const all = await findU('{ posts { id } }');
+    const huge = await findU(
+      '{ posts(options: { offset: 1, limit: 99999999999999999999 }) { id } }',
+    );
+    expect(huge.posts).toEqual((all.posts as Row[]).slice(1));
+    const wide = await findU(
+      '{ posts(options: { offset: 2147483000, limit: 2147483000 }) { id } }',
+    );
+    expect(wide.posts).toEqual([]);
+  });
+
   it('aliases name the output keys', async () => {
     const u = await findU(
       '{ ident: id label: name a: posts(where: { title: "a" }) { pid: id } b: posts(where: { title: "b" }) { id r: rank } }',
