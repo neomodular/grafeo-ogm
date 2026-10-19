@@ -1,5 +1,57 @@
 # Changelog
 
+## 2.8.0 (2026-10-19) — connection pageInfo, nested-write and read-input fixes
+
+> **Minor release.** Connections now return `pageInfo` and edge `cursor`. A nested `delete` that reaches the node being updated through a cycle no longer fails the call when the OGM owns the transaction. Five inputs that were accepted but ignored (`overwrite: false`, relationship-property `@default`, fields selected in the wrong shape, unknown `pageInfo` fields, typed `where` / `orderBy` under a union) warn by default and are honoured under `strict: true`. Without `strict`, every input that worked in 2.7.0 compiles to byte-identical Cypher.
+
+### Added
+
+- **Connection `pageInfo` and edge `cursor`**, in a `selectionSet` and in the typed `select` (`pageInfo: true | { select: { hasNextPage?, hasPreviousPage?, startCursor?, endCursor? } }`, `edges: { cursor: true }`). They follow `@neo4j/graphql` 5.x for a connection read without `first` / `after`:
+  - **`cursor`:** `offsetToCursor(<offset>)`, base64 of `arrayconnection:<offset>` within the filtered, sorted list.
+  - **`pageInfo`:** `hasNextPage` / `hasPreviousPage` are `false`; `startCursor` / `endCursor` are the first / last edge's cursors, `null` with no edge.
+  - **Policies:** both count the same list as `edges` and `totalCount`, so the connection `where` and the target's `read` policy apply.
+  - **Where it works:** root, nested and fragment connections, aliases, `__typename` and sorted connections.
+- **Generated types:** the connection `SelectFields` gain the optional `pageInfo` and edge `cursor` members. Nothing is removed or made required.
+
+### Fixed
+
+- **A nested `delete` that removes a node the update still holds no longer fails the call** when the OGM owns the transaction (auto-commit, or a caller `session`). With a cycle such as chart → tags → charts, a later clause that read or wrote the deleted node (the `update` response, a nested `create` or `connect` from it) made the server reject the statement with `Neo.ClientError.Statement.EntityNotFound`. The OGM now re-runs that statement once with the deleted node's remaining writes skipped, so `update` returns the surviving roots. The first attempt still compiles to the 2.7.0 Cypher. In a caller `transaction` the server has already rolled back, so the error is still thrown, with a one-time warning.
+
+### Behavior changes
+
+- **`pageInfo` and edge `cursor` now return data.** They were left out of the result before.
+- **A call that failed with `EntityNotFound`** (see Fixed) now succeeds when the OGM owns the transaction.
+
+### Strict mode
+
+- **`overwrite: false` on a connect item leaves an existing relationship unchanged.** The item's edge values go in `ON CREATE SET`, so a missing relationship is still created with them. It applies to every connect: top-level, nested in `create` / `update`, per union or interface member, and inside another connect. Before, `MERGE … SET` overwrote the edge properties.
+- **Relationship-property `@default` is applied** whenever a relationship is created without the property: nested `create` (in `create` and `update`) and the create branch of every connect (`ON CREATE SET`). An explicit `null` is kept, an existing relationship reached by a connect is left as it is, and an edge `update` never applies defaults. The generated `<Props>CreateInput` keeps the field required.
+- **A nested `delete` reached through a cycle is guarded at compile time** in every transaction, caller transactions included: after it, the row continues only while the held node exists. A deleted root leaves the response and `updateMany`'s count, and its remaining nested writes are skipped.
+- **Known fields selected in the wrong shape throw `OGMError`:** a scalar with a sub-selection (`name { x }`, typed `name: { select }`), a relationship or connection without one (`posts`, typed `posts: 1`), and a typed relationship object with only unknown keys. The error names the type, the field and the expected shape. Nested selections, connection `node`, edge `properties` and inline fragments are checked.
+- **A typed relationship selected as `{}`** (allowed by the generated types) selects every scalar field of the target, as `true` does. Before, it was left out of the result.
+- **`pageInfo` fields are checked** against `PageInfo`; `pageInfo` without a sub-selection and `cursor` with one throw.
+- **Typed `select` `where` / `orderBy` on a relationship under a union are applied** per member: the `where` is compiled against the member's target and AND-ed with its `read` policy, and `orderBy` sorts as for any relationship. Before, every related node came back, unsorted.
+
+### Deprecations
+
+Each of these logs one warning per OGM and shape in 2.x and becomes the default in 3.0, as `strict: true` does today:
+
+- **`overwrite: false` with `edge` values** is ignored: an existing relationship's edge properties are overwritten.
+- **A relationship-property `@default`** is not applied when the relationship is created without the property.
+- **`updateMany` with a nested `delete` that can reach the root through a cycle** counts a deleted root; **the same statement in a caller transaction** fails with `EntityNotFound`.
+- **A known field selected in the wrong shape** (`selectionSet` or `select`) is left out of the result, or returned as `null`.
+- **A typed relationship selected as `{}`** is left out of the result.
+- **An unknown `pageInfo` field, `pageInfo` without a sub-selection, or `cursor` with one** is left out of the result.
+- **A typed `select` `where` / `orderBy` on a relationship under a union** is ignored.
+
+### Known limitation
+
+- **A nested `connect` / `create` on a field an enclosing nested `update` iterates** (chart → categories → charts → categories): each row of that nested update also sees the links and nodes the earlier rows added, so the work can grow geometrically with the matched rows, and the result depends on row order. This is the per-row semantics `@neo4j/graphql` also has, and `strict` does not change it. The OGM logs one notice per shape; split the write into separate calls or narrow the nested `where`.
+
+### Tooling
+
+- **The allow-all-equivalence property suite** compares nodes created with a duplicate input id as a multiset, so it no longer fails intermittently on plan order (not an OGM bug).
+
 ## 2.7.0 (2026-10-19) — relationship aggregate selections and connection sort
 
 > **Minor release.** Two compatibility features for code carried over from `@neo4j/graphql`. First, `<rel>Aggregate` selections, as `@neo4j/graphql` 5.x generated them, now work at runtime. This closes the compatibility gap behind #23: a legacy `selectionSet` such as `{ id textFieldsAggregate { count } }` used to compile with the aggregate silently left out, so code reading `.textFieldsAggregate.count` got `undefined` (a pagination total stuck at 0). Second, connection fields in a `selectionSet` accept `sort` (#25). Selections that compiled before compile to byte-identical Cypher.
