@@ -61,15 +61,10 @@ async function main() {
       }
     }
 
-    // --- OGMError: mutation on interface model ---
-    try {
-      const Entity = ogm.interfaceModel('Entity');
-      await Entity.create();
-    } catch (err) {
-      if (err instanceof OGMError) {
-        console.log('\nInterface mutation error:', err.message);
-      }
-    }
+    // --- Interface models are read-only ---
+    // ogm.interfaceModel('Entity') has no create / update / delete, so a
+    // mutation on it is a compile error rather than a runtime OGMError.
+    // Use the concrete model, e.g. ogm.model('Author').
 
     // --- All OGM errors extend Error ---
     try {

@@ -59,14 +59,24 @@ async function main() {
     });
     console.log('Aggregate:', agg);
 
-    // --- Mutations throw on interface models ---
+    // --- Interface models are read-only ---
+    // An InterfaceModel has no create / update / delete methods, so a
+    // mutation on it is a compile error. Mutate through the concrete model
+    // of the row's __typename instead.
+    const austen = await Entity.findFirstOrThrow({
+      where: { name: 'Jane Austen' },
+    });
+    if (austen.__typename === 'Author')
+      await Author.update({
+        where: { name: 'Jane Austen' },
+        update: { bio: 'Author of Pride and Prejudice' },
+      });
+
+    // --- Missing rows still raise OGM errors ---
     try {
-      await Entity.create();
+      await Entity.findFirstOrThrow({ where: { name: 'Nobody' } });
     } catch (err) {
-      if (err instanceof OGMError) {
-        console.log('Expected error:', err.message);
-        // => Cannot create on interface type "Entity". Use ogm.model('ConcreteType') for mutations.
-      }
+      if (err instanceof OGMError) console.log('Expected error:', err.message);
     }
 
     // --- Cleanup ---
