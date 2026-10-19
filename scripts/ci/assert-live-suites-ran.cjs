@@ -35,10 +35,21 @@ try {
 
 const root = path.resolve(__dirname, '..', '..');
 const liveDir = path.join(root, 'tests', 'integration');
-const expected = fs
-  .readdirSync(liveDir)
-  .filter((f) => f.endsWith('.spec.ts'))
-  .map((f) => path.join(liveDir, f));
+// Recursive: suites in subdirectories (tests/integration/properties/) must
+// be present in the report too, not only the top-level ones.
+function specFiles(dir) {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) =>
+      e.isDirectory()
+        ? specFiles(path.join(dir, e.name))
+        : e.name.endsWith('.spec.ts')
+          ? [path.join(dir, e.name)]
+          : [],
+    )
+    .sort();
+}
+const expected = specFiles(liveDir);
 
 const problems = [];
 const seen = new Set();
@@ -77,3 +88,4 @@ if (problems.length > 0) {
 console.log(
   `All ${expected.length} live suites ran: ${report.numPassedTests}/${report.numTotalTests} tests passed, 0 skipped.`,
 );
+for (const file of expected) console.log(`  ${path.relative(root, file)}`);
