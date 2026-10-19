@@ -15,7 +15,6 @@
  *
  * Excluded because of an OPEN FINDING (each marked at its generator, with
  * the finding id; remove the exclusion with the fix):
- * - F1 `updateItem`: nested `delete` whose target type is an ancestor.
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
  *   update item is iterating.
  * - F5 `disconnectItem`: blanket disconnect on a shared relationship type.
@@ -732,14 +731,11 @@ function updateItem(
     ops.connect = connectItems(connectItem(def, member, depth));
     ops.create = items(createItem(def, member, depth));
   }
-  // EXCLUDED (finding F1): a nested `delete` whose target type is an
-  // ANCESTOR of this update item (a cycle such as chart -> tags -> charts)
-  // can delete the root or an intermediate node, and the rest of the
-  // statement then fails on the server with
-  // `Neo.ClientError.Statement.EntityNotFound`. Not generated until fixed.
-  const targets = member ? [member] : def.members;
-  if (!targets.some((t) => path.types.includes(t)))
-    ops.delete = items(deleteItem(def, member, depth));
+  // A nested `delete` whose target type is an ANCESTOR of this update item
+  // (a cycle such as chart -> tags -> charts) may delete the root or an
+  // intermediate node; since v2.6.2 (finding F1) the deleted node's
+  // remaining writes are skipped and a deleted root leaves the response.
+  ops.delete = items(deleteItem(def, member, depth));
   return fc
     .tuple(
       fc.option(connectionWhere(def, member, 1), { nil: undefined }),
