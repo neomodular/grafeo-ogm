@@ -34,6 +34,14 @@ import {
 } from '../utils/validation';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import {
+  AGGREGATE_SUFFIX,
+  aggregateKind,
+  aggregateSelectionTypeName,
+  assertAggregateOp,
+  fieldAggregateMap,
+  propertyRef,
+} from './relationship-aggregate';
+import {
   stitchUserAndPolicy,
   traversalBundle,
   type WhereCompiler,
@@ -133,6 +141,12 @@ export interface SelectionNode {
    */
   extraNodes?: EdgeKeySelection[];
   extraProperties?: EdgeKeySelection[];
+  /**
+   * v2.7.0 — `<rel>Aggregate(directed: false)`: aggregate over the
+   * relationship in either direction (upstream's `directed` argument,
+   * default `true`). Only relationship aggregates accept it.
+   */
+  directed?: boolean;
 }
 
 /** One extra `node` / `properties` key of an edge set (v2.6.0, strict). */
@@ -641,6 +655,23 @@ function assertNoArguments(field: FieldNode, where: string): void {
     );
 }
 
+/**
+ * v2.7.0 — the escaped output key of a selection inside a relationship
+ * aggregate (its alias, validated, or its field name).
+ */
+function outputKey(node: SelectionNode): string {
+  if (node.alias !== undefined && node.alias !== node.fieldName) {
+    assertSafeIdentifier(node.alias, 'selection alias');
+    return escapeIdentifier(node.alias);
+  }
+  return escapeIdentifier(node.fieldName);
+}
+
+/** First letter uppercased, as the generated type names spell fields. */
+function pascal(fieldName: string): string {
+  return fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
+}
+
 function nonNegativeInt(value: unknown, what: string): number {
   const n = typeof value === 'number' ? value : Number.NaN;
   if (!Number.isInteger(n) || n < 0)
@@ -666,6 +697,22 @@ function applyFieldArguments(field: FieldNode, node: SelectionNode): void {
   node.hasArguments = true;
   for (const arg of field.arguments ?? []) {
     const name = arg.name.value;
+    // v2.7.0 — `directed` on a relationship aggregate (`postsAggregate`).
+    // Whether the field IS an aggregate is known only when compiled
+    // against its type; a real relationship rejects it there.
+    if (
+      name === 'directed' &&
+      node.isRelationship &&
+      label.endsWith(AGGREGATE_SUFFIX)
+    ) {
+      assertNoVariables(arg.value, `${label}(${name})`);
+      if (arg.value.kind !== Kind.BOOLEAN)
+        throw new OGMError(
+          `Argument "directed" on selectionSet field "${label}" must be true or false.`,
+        );
+      node.directed = arg.value.value;
+      continue;
+    }
     if (!allowed || !allowed.has(name))
       throw new OGMError(
         `Unsupported argument "${name}" on selectionSet field "${label}". ` +
@@ -746,9 +793,9 @@ function pushUnknown(
 }
 
 /**
- * v2.6.3 — the hint for a `<rel>Aggregate` field. The OGM never compiled
- * these (upstream `@neo4j/graphql` generated them; 2.4.8 stopped
- * generating the misleading type), so point to what works.
+ * v2.6.3 — the hint for a `<rel>Aggregate` field reported unknown. Since
+ * v2.7.0 a `<rel>Aggregate { … }` selection is supported (and known), so
+ * only the scalar-shaped one — selected without aggregates — gets here.
  */
 export function aggregateFieldHint(
   field: string,
@@ -758,8 +805,8 @@ export function aggregateFieldHint(
   const rel = field.slice(0, -'Aggregate'.length);
   if (!relationships.has(rel)) return undefined;
   return (
-    `"${field}" fields are not supported: select "${rel}Connection { totalCount }" for a count, ` +
-    `or use Model.aggregate() on the related type.`
+    `"${field}" needs a selection of aggregates, ` +
+    `e.g. "${field} { count }" (the aggregate of relationship "${rel}").`
   );
 }
 
@@ -974,6 +1021,11 @@ export class SelectionCompiler {
         owner.def.relationships.has(field.replace(/Connection$/, ''))
       )
         continue;
+      // v2.7.0 — `<rel>Aggregate { … }` of a relationship is a known field
+      // (compiled by `compileAggregate`, which validates its own
+      // sub-selection). Only the scalar-shaped one, which has no meaning,
+      // stays unknown.
+      if (hasChildren && this.isAggregateField(owner.def, field)) continue;
       pushUnknown(out, {
         owner: `type "${owner.def.typeName}"`,
         field,
@@ -1227,6 +1279,38 @@ export class SelectionCompiler {
           parts.push(`${key}: ${fragmentCypher}`);
           continue;
         }
+      }
+
+      // v2.7.0 — `<rel>Aggregate { count node { … } edge { … } }`. Pre-2.7.0
+      // it matched no relationship and was silently dropped (issue #23).
+      if (
+        node.isRelationship &&
+        this.isAggregateField(nodeDef, node.fieldName)
+      ) {
+        const aggregateCypher =
+          unionMembers && unionMembers.length > 0
+            ? this.compileUnionAggregate(
+                node,
+                nodeVar,
+                unionMembers,
+                maxDepth,
+                currentDepth,
+                params,
+                paramCounter,
+                policyContext,
+              )
+            : this.compileAggregate(
+                node,
+                nodeVar,
+                nodeDef,
+                maxDepth,
+                currentDepth,
+                params,
+                paramCounter,
+                policyContext,
+              );
+        if (aggregateCypher) parts.push(`${key}: ${aggregateCypher}`);
+        continue;
       }
 
       if (node.isConnection) {
@@ -1823,6 +1907,29 @@ export class SelectionCompiler {
     let singular = node.isConnection;
     for (const typeName of typeNames) {
       const def = this.schema.nodes.get(typeName);
+      // v2.7.0 — a relationship aggregate selected through a fragment.
+      if (
+        def &&
+        node.isRelationship &&
+        this.isAggregateField(def, node.fieldName)
+      ) {
+        singular = true;
+        const expr = this.compileAggregate(
+          node,
+          nodeVar,
+          def,
+          maxDepth,
+          currentDepth,
+          params,
+          paramCounter,
+          policyContext,
+        );
+        if (expr)
+          branches.push(
+            `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`,
+          );
+        continue;
+      }
       const relDef = def?.relationships.get(relField);
       if (!def || !relDef) continue;
       if (!relDef.isArray) singular = true;
@@ -1872,6 +1979,11 @@ export class SelectionCompiler {
 
     const relDef = parentDef.relationships.get(node.fieldName);
     if (!relDef) return null;
+    if (node.directed !== undefined)
+      throw new OGMError(
+        `Unsupported argument "directed" on selectionSet field "${node.fieldName}": ` +
+          `only relationship aggregates (<field>Aggregate) accept it.`,
+      );
 
     const targetDef = resolveTargetDef(relDef.target, this.schema);
     if (!targetDef) return null;
@@ -1939,6 +2051,244 @@ export class SelectionCompiler {
     return paged
       ? `${sorted}${this.compileSlice(node, params, paramCounter)}`
       : sorted;
+  }
+
+  /**
+   * v2.7.0 — whether `fieldName` is a relationship aggregate of `def`
+   * (`postsAggregate` for a relationship `posts`). A field or relationship
+   * actually NAMED `postsAggregate` keeps its own meaning.
+   */
+  private isAggregateField(def: NodeDefinition, fieldName: string): boolean {
+    if (!fieldName.endsWith(AGGREGATE_SUFFIX)) return false;
+    if (def.relationships.has(fieldName) || def.properties.has(fieldName))
+      return false;
+    return def.relationships.has(fieldName.slice(0, -AGGREGATE_SUFFIX.length));
+  }
+
+  /**
+   * v2.7.0 — a relationship aggregate selected on a UNION type (not
+   * through a fragment): one `CASE` branch per member that declares the
+   * relationship (members selected by fragments when there are any),
+   * `null` for the others.
+   */
+  private compileUnionAggregate(
+    node: SelectionNode,
+    nodeVar: string,
+    unionMembers: string[],
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string | null {
+    const members = node.typeConditions
+      ? [
+          ...new Set(node.typeConditions.flatMap((t) => this.possibleTypes(t))),
+        ].filter((m) => unionMembers.includes(m))
+      : unionMembers;
+    const { branches } = this.fragmentRelationshipBranches(
+      node,
+      members,
+      nodeVar,
+      maxDepth,
+      currentDepth,
+      params,
+      paramCounter,
+      policyContext,
+    );
+    if (branches.length === 0) return null;
+    return `CASE ${branches.join(' ')} ELSE null END`;
+  }
+
+  /**
+   * v2.7.0 — compile a relationship aggregate selection,
+   * `postsAggregate(where: …, directed: …) { count node { title { longest } }
+   * edge { weight { sum } } }`, with upstream `@neo4j/graphql` 5.x shape and
+   * semantics (see `relationship-aggregate.ts`).
+   *
+   * Every aggregate reads the same filtered pattern a nested selection of
+   * the relationship would: `where` through the `WhereCompiler` against the
+   * target type, AND the target type's `read` policy (a per-member clause
+   * for an interface / union target) and, under strict mode, the member
+   * restriction of an abstract target — so a node the context cannot read
+   * never changes `count`, `min`, `max` or any other aggregate, and an edge
+   * aggregate only measures edges to readable targets. Everything is an
+   * expression (`COUNT { }`, `reduce` over a pattern comprehension), valid
+   * at any depth on Neo4j 5.x: no aggregating function, no `CALL`.
+   */
+  private compileAggregate(
+    node: SelectionNode,
+    parentVar: string,
+    parentDef: NodeDefinition,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string | null {
+    if (currentDepth >= maxDepth) return null;
+    const label = node.fieldName;
+    const relDef = parentDef.relationships.get(
+      label.slice(0, -AGGREGATE_SUFFIX.length),
+    );
+    if (!relDef) return null;
+    const targetDef = resolveTargetDef(relDef.target, this.schema);
+    if (!targetDef) return null;
+    if (node.limit !== undefined || node.offset !== undefined || node.orderBy)
+      throw new OGMError(
+        `options (sort, limit, offset) are not supported on relationship aggregate "${label}"; ` +
+          `it takes where and directed.`,
+      );
+
+    const childVar = `n${currentDepth}`;
+    const edgeVar = `e${currentDepth}`;
+    const pattern = buildRelPattern({
+      sourceVar: parentVar,
+      relDef,
+      targetVar: childVar,
+      edgeVar,
+      targetLabel: 'auto',
+      schema: this.schema,
+      undirected: node.directed === false,
+    });
+    const where = this.compileNestedWhere({
+      node,
+      childVar,
+      targetDef,
+      params,
+      paramCounter,
+      policyContext,
+      contextLabel: `relationship aggregate "${label}"`,
+      userWhere: node.relationshipWhere,
+    });
+    const filtered = `${pattern}${where}`;
+    const typeName = `${parentDef.typeName}${relDef.target}${pascal(relDef.fieldName)}`;
+    const isUnionTarget = !!this.schema.unions?.get(relDef.target)?.length;
+
+    const parts: string[] = [];
+    for (const child of node.children ?? []) {
+      const key = outputKey(child);
+      const field = child.fieldName;
+      if (child.isScalar && field === 'count') {
+        parts.push(`${key}: COUNT { ${filtered} }`);
+        continue;
+      }
+      if (child.isScalar && field === '__typename') {
+        parts.push(`${key}: '${typeName}AggregationSelection'`);
+        continue;
+      }
+      if (field === 'node' || field === 'edge') {
+        if (child.isScalar)
+          throw new OGMError(
+            `"${field}" on relationship aggregate "${label}" needs a selection of fields.`,
+          );
+        let props: Map<string, PropertyDefinition>;
+        if (field === 'node') {
+          if (isUnionTarget)
+            throw new OGMError(
+              `Relationship aggregate "${label}" targets the union ${relDef.target}, which has no node aggregates; ` +
+                `select count or edge.`,
+            );
+          props = targetDef.properties;
+        } else {
+          const propsDef = relDef.properties
+            ? this.schema.relationshipProperties.get(relDef.properties)
+            : undefined;
+          if (!propsDef)
+            throw new OGMError(
+              `Relationship aggregate "${label}" has no edge aggregates: ` +
+                `"${relDef.fieldName}" has no @relationshipProperties.`,
+            );
+          props = propsDef.properties;
+        }
+        parts.push(
+          `${key}: ${this.compileAggregateFields(
+            child,
+            props,
+            field === 'node' ? childVar : edgeVar,
+            filtered,
+            `${typeName}${field === 'node' ? 'Node' : 'Edge'}AggregateSelection`,
+            `${label}.${field}`,
+            currentDepth,
+          )}`,
+        );
+        continue;
+      }
+      throw new OGMError(
+        `Unknown field "${field}" on relationship aggregate "${label}" of ${parentDef.typeName}. ` +
+          `Select count, node { … }${relDef.properties ? ' or edge { … }' : ''}.`,
+      );
+    }
+    if (parts.length === 0)
+      throw new OGMError(
+        `Relationship aggregate "${label}" selects nothing; select count, node { … } or edge { … }.`,
+      );
+    return `{ ${parts.join(', ')} }`;
+  }
+
+  /**
+   * v2.7.0 — the `node { … }` / `edge { … }` map of a relationship
+   * aggregate: one `{ shortest, longest, min, max, average, sum }` map per
+   * selected field, over the non-null values of `<var>.<field>` along the
+   * filtered pattern.
+   */
+  private compileAggregateFields(
+    selection: SelectionNode,
+    props: Map<string, PropertyDefinition>,
+    varName: string,
+    filtered: string,
+    typeName: string,
+    where: string,
+    depth: number,
+  ): string {
+    const parts: string[] = [];
+    for (const field of selection.children ?? []) {
+      const key = outputKey(field);
+      if (field.isScalar && field.fieldName === '__typename') {
+        parts.push(`${key}: '${typeName}'`);
+        continue;
+      }
+      const prop = props.get(field.fieldName);
+      const kind = prop ? aggregateKind(prop) : null;
+      if (!prop || !kind)
+        throw new OGMError(
+          prop
+            ? `Field "${field.fieldName}" (${prop.isArray ? `[${prop.type}]` : prop.type}${prop.isCypher ? ', @cypher' : ''}) on ${where} has no aggregates` +
+                (prop.isArray
+                  ? ': list fields are not aggregated. (Its generated aggregate member is deprecated and goes in 3.0.)'
+                  : '.')
+            : `Unknown field "${field.fieldName}" on ${where}.`,
+        );
+      if (field.isScalar || !field.children || field.children.length === 0)
+        throw new OGMError(
+          `"${field.fieldName}" on ${where} needs a selection of aggregates.`,
+        );
+      const typenameKeys: string[] = [];
+      const entries: [string, string][] = [];
+      for (const op of field.children) {
+        if (!op.isScalar)
+          throw new OGMError(
+            `Aggregate "${op.fieldName}" on ${where}.${field.fieldName} takes no selection.`,
+          );
+        if (op.fieldName === '__typename') {
+          typenameKeys.push(outputKey(op));
+          continue;
+        }
+        assertAggregateOp(kind, op.fieldName, `${where}.${field.fieldName}`);
+        entries.push([outputKey(op), op.fieldName]);
+      }
+      parts.push(
+        `${key}: ${fieldAggregateMap(
+          kind,
+          `[${filtered} | ${propertyRef(varName, prop)}]`,
+          entries,
+          aggregateSelectionTypeName(prop),
+          typenameKeys,
+          depth,
+        )}`,
+      );
+    }
+    return `{ ${parts.join(', ')} }`;
   }
 
   /**

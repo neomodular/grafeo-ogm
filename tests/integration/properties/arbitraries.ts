@@ -1050,6 +1050,151 @@ export function gqlLiteral(v: unknown): string {
 
 const ALIASES = ['x', 'y', 'z'];
 
+/**
+ * v2.7.0 — the aggregates of a field in a `<rel>Aggregate` selection
+ * (upstream's matrix), or none (Booleans).
+ */
+const AGG_OPS: Record<string, readonly string[]> = {
+  string: ['shortest', 'longest', 'min', 'max'],
+  int: ['min', 'max', 'average', 'sum'],
+};
+export function aggregateOps(field: string): readonly string[] {
+  if (field === 'id' || field === 'note') return AGG_OPS.string;
+  if (field === 'weight') return AGG_OPS.int;
+  return AGG_OPS[FIELD_KIND[field]] ?? [];
+}
+
+/** The node / edge fields a `<rel>Aggregate` of `def` can aggregate. */
+export function aggregateFields(def: RelDef): {
+  node: string[];
+  edge: string[];
+} {
+  const target = def.kind === 'interface' ? 'ItPResource' : def.members[0];
+  return {
+    // A union target has no node aggregates.
+    node:
+      def.kind === 'union'
+        ? []
+        : ['id', ...SCALAR_FIELDS[target]].filter(
+            (f) => aggregateOps(f).length > 0,
+          ),
+    edge: def.edge ? ['weight', 'note'] : [],
+  };
+}
+
+/** `{ f { op … } … }` for 1–2 of `fields`, each with 1+ aggregates. */
+function aggregateFieldsSel(fields: string[]): fc.Arbitrary<string> {
+  return fc
+    .uniqueArray(fc.constantFrom(...fields), { minLength: 1, maxLength: 2 })
+    .chain((fs) =>
+      fc.tuple(
+        ...fs.map((f) =>
+          fc
+            .subarray([...aggregateOps(f)], { minLength: 1 })
+            .map((ops) => `${f} { ${ops.join(' ')} }`),
+        ),
+      ),
+    )
+    .map((parts) => `{ ${parts.join(' ')} }`);
+}
+
+/**
+ * v2.7.0 — a `<rel>Aggregate` selectionSet field for `def`:
+ * `[alias:] <field>Aggregate[(where, directed)] { [count] [node { … }] [edge { … }] }`.
+ */
+export function aggregateSelection(def: RelDef): fc.Arbitrary<string> {
+  const { node, edge } = aggregateFields(def);
+  const targetType = def.kind === 'interface' ? 'ItPResource' : def.members[0];
+  return fc
+    .tuple(
+      fc.option(fc.constantFrom(...ALIASES), { freq: 4, nil: undefined }),
+      def.kind === 'union'
+        ? fc.constant(undefined)
+        : fc.option(scalarWhere(targetType, 1), { nil: undefined }),
+      fc.option(fc.boolean(), { freq: 3, nil: undefined }),
+      fc.boolean(),
+      node.length
+        ? fc.option(aggregateFieldsSel(node), { nil: undefined })
+        : fc.constant(undefined),
+      edge.length
+        ? fc.option(aggregateFieldsSel(edge), { nil: undefined })
+        : fc.constant(undefined),
+    )
+    .map(([alias, w, directed, count, n, e]) => {
+      const args = [
+        w ? `where: ${gqlLiteral(w)}` : '',
+        directed === undefined ? '' : `directed: ${directed}`,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      const body = [
+        count || (!n && !e) ? 'count' : '',
+        n ? `node ${n}` : '',
+        e ? `edge ${e}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return `${alias ? `${alias}: ` : ''}${def.field}Aggregate${args ? `(${args})` : ''} { ${body} }`;
+    });
+}
+
+/** v2.7.0 — the typed-select form of a `<rel>Aggregate` for `def`. */
+export function aggregateSelect(def: RelDef): fc.Arbitrary<unknown> {
+  const { node, edge } = aggregateFields(def);
+  const targetType = def.kind === 'interface' ? 'ItPResource' : def.members[0];
+  const fieldsSel = (fields: string[]) =>
+    fc.oneof(
+      fc.constant(true as unknown),
+      fc
+        .uniqueArray(fc.constantFrom(...fields), { minLength: 1, maxLength: 2 })
+        .chain((fs) =>
+          fc
+            .tuple(
+              ...fs.map((f) =>
+                fc.oneof(
+                  fc.constant(true as unknown),
+                  fc
+                    .subarray([...aggregateOps(f)], { minLength: 1 })
+                    .map((ops) => ({
+                      select: Object.fromEntries(ops.map((o) => [o, true])),
+                    })),
+                ),
+              ),
+            )
+            .map((vs) => ({
+              select: Object.fromEntries(fs.map((f, i) => [f, vs[i]])),
+            })),
+        ),
+    );
+  return fc.oneof(
+    fc.constant(true as unknown),
+    fc
+      .tuple(
+        def.kind === 'union'
+          ? fc.constant(undefined)
+          : fc.option(scalarWhere(targetType, 1), { nil: undefined }),
+        fc.option(fc.boolean(), { freq: 3, nil: undefined }),
+        fc.boolean(),
+        node.length
+          ? fc.option(fieldsSel(node), { nil: undefined })
+          : fc.constant(undefined),
+        edge.length
+          ? fc.option(fieldsSel(edge), { nil: undefined })
+          : fc.constant(undefined),
+      )
+      .map(([w, directed, count, n, e]) => {
+        const sel: Rec = {};
+        if (count || (!n && !e)) sel.count = true;
+        if (n) sel.node = n;
+        if (e) sel.edge = e;
+        const out: Rec = { select: sel };
+        if (w) out.where = w;
+        if (directed !== undefined) out.directed = directed;
+        return out;
+      }),
+  );
+}
+
 function scalarSel(type: string): fc.Arbitrary<string[]> {
   const fields = [
     'id',
@@ -1164,6 +1309,8 @@ export function selectionSet(
     return fc.oneof(
       { weight: 3, arbitrary: plain },
       { weight: 2, arbitrary: connection },
+      // v2.7.0 — `<rel>Aggregate` selections.
+      { weight: 1, arbitrary: aggregateSelection(def) },
     );
   };
   return fc
@@ -1243,6 +1390,8 @@ export function select(type: string, depth: number): fc.Arbitrary<Rec> {
     return fc.oneof(
       plain.map((v) => ({ [def.field]: v })),
       connection.map((v) => ({ [`${def.field}Connection`]: v })),
+      // v2.7.0 — `<rel>Aggregate` in the typed select.
+      aggregateSelect(def).map((v) => ({ [`${def.field}Aggregate`]: v })),
     );
   };
   return fc

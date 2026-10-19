@@ -104,7 +104,8 @@ describe('known selected fields', () => {
   )('%s (strict: %s): no warning, no error', async (_name, strict, c) => {
     const { ogm, records, logger } = makeOgm(strict);
     await c.run(ogm);
-    expect(records).toHaveLength(1);
+    expect(records.length).toBeGreaterThanOrEqual(1);
+    if (c.contains) expect(records.join('\n;;\n')).toContain(c.contains);
     expect(unknownWarnings(logger)).toEqual([]);
     if (strict === undefined) expect(logger.warn).not.toHaveBeenCalled();
   });

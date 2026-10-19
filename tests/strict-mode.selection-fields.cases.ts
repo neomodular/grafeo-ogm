@@ -52,8 +52,11 @@ export interface UnknownCase {
   expected: string;
 }
 
+// v2.7.0 — `ownersAggregate { … }` is supported (a known field, see
+// KNOWN_CASES); only the scalar-shaped one, with no aggregates selected,
+// stays unknown, with this hint.
 const AGGREGATE_HINT =
-  '"ownersAggregate" fields are not supported: select "ownersConnection { totalCount }" for a count, or use Model.aggregate() on the related type.';
+  '"ownersAggregate" needs a selection of aggregates, e.g. "ownersAggregate { count }" (the aggregate of relationship "owners").';
 
 export const UNKNOWN_CASES: UnknownCase[] = [
   {
@@ -63,13 +66,20 @@ export const UNKNOWN_CASES: UnknownCase[] = [
     expected: 'MATCH (n:`Plan`)\nRETURN n { .`id`, .`nmae` }',
   },
   {
-    label: 'root <rel>Aggregate',
+    label: 'root <rel>Aggregate without aggregates',
+    run: (ogm) =>
+      ogm.model('Plan').find({ selectionSet: '{ id ownersAggregate }' }),
+    names: 'Unknown field "ownersAggregate" in selectionSet on type "Plan".',
+    hint: AGGREGATE_HINT,
+    expected: 'MATCH (n:`Plan`)\nRETURN n { .`id`, .`ownersAggregate` }',
+  },
+  {
+    label: 'root <notARelationship>Aggregate',
     run: (ogm) =>
       ogm
         .model('Plan')
-        .find({ selectionSet: '{ id ownersAggregate { count } }' }),
-    names: 'Unknown field "ownersAggregate" in selectionSet on type "Plan".',
-    hint: AGGREGATE_HINT,
+        .find({ selectionSet: '{ id ownerzAggregate { count } }' }),
+    names: 'Unknown field "ownerzAggregate" in selectionSet on type "Plan".',
     expected: 'MATCH (n:`Plan`)\nRETURN n { .`id` }',
   },
   {
@@ -199,10 +209,9 @@ export const UNKNOWN_CASES: UnknownCase[] = [
         where: { id: 'x' },
         update: { name: 'q' },
         selectionSet:
-          '{ info { nodesCreated } plans { id ownersAggregate { count } } }',
+          '{ info { nodesCreated } plans { id tagzAggregate { count } } }',
       }),
-    names: 'Unknown field "ownersAggregate" in selectionSet on type "Plan".',
-    hint: AGGREGATE_HINT,
+    names: 'Unknown field "tagzAggregate" in selectionSet on type "Plan".',
     expected:
       'MATCH (n:`Plan`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { .`id` }',
   },
@@ -226,13 +235,12 @@ export const UNKNOWN_CASES: UnknownCase[] = [
     expected: 'MATCH (n:`Plan`)\nRETURN n { .`id`, .`nmae` }',
   },
   {
-    label: 'typed select: <rel>Aggregate',
+    label: 'typed select: <notARelationship>Aggregate',
     run: (ogm) =>
-      ogm
-        .model('Plan')
-        .find({ select: { id: true, ownersAggregate: { count: true } } }),
-    names: 'Unknown field "ownersAggregate" in select on type "Plan".',
-    hint: AGGREGATE_HINT,
+      ogm.model('Plan').find({
+        select: { id: true, ownerzAggregate: { select: { count: true } } },
+      }),
+    names: 'Unknown field "ownerzAggregate" in select on type "Plan".',
     expected: 'MATCH (n:`Plan`)\nRETURN n { .`id` }',
   },
   {
@@ -267,7 +275,12 @@ export const UNKNOWN_CASES: UnknownCase[] = [
 export interface KnownCase {
   label: string;
   run: (ogm: OGM) => Promise<unknown>;
+  /** The statement must contain this (v2.7.0: the compiled aggregate). */
+  contains?: string;
 }
+
+/** v2.7.0 — the compiled `ownersAggregate { count }` of a `Plan` `n`. */
+const OWNERS_COUNT = 'COUNT { (n)<-[e0:`OWNS`]-(n0:`User`) }';
 
 export const KNOWN_CASES: KnownCase[] = [
   {
@@ -383,6 +396,51 @@ export const KNOWN_CASES: KnownCase[] = [
         update: { name: 'q' },
         selectionSet: '{ id name owners { id } }',
       }),
+  },
+  // v2.7.0 — `<rel>Aggregate` selections are known fields (#23: 2.6.3
+  // reported them unknown) and compile to the aggregate.
+  {
+    label: '<rel>Aggregate: root, with node and edge aggregates',
+    run: (ogm) =>
+      ogm.model('Plan').find({
+        selectionSet:
+          '{ id ownersAggregate { count node { name { longest } } edge { since { shortest } } } }',
+      }),
+    contains: `ownersAggregate: { \`count\`: ${OWNERS_COUNT}`,
+  },
+  {
+    label: '<rel>Aggregate: nested, union fragment and InterfaceModel fragment',
+    run: async (ogm) => {
+      await ogm.model('User').find({
+        selectionSet: '{ id plans { id ownersAggregate { count } } }',
+      });
+      await ogm.model('Box').find({
+        selectionSet: '{ items { ... on Plan { tagsAggregate { count } } } }',
+      });
+      return ogm.interfaceModel('Named').find({
+        selectionSet: '{ name ... on Plan { ownersAggregate { count } } }',
+      });
+    },
+    contains: `ownersAggregate: CASE WHEN n:\`Plan\` THEN { \`count\`: ${OWNERS_COUNT} } ELSE null END`,
+  },
+  {
+    label: '<rel>Aggregate: update response with info',
+    run: (ogm) =>
+      ogm.model('Plan').update({
+        where: { id: 'x' },
+        update: { name: 'q' },
+        selectionSet:
+          '{ info { nodesCreated } plans { id ownersAggregate { count } } }',
+      }),
+    contains: `ownersAggregate: { \`count\`: ${OWNERS_COUNT} }`,
+  },
+  {
+    label: '<rel>Aggregate: typed select',
+    run: (ogm) =>
+      ogm.model('Plan').find({
+        select: { id: true, ownersAggregate: { select: { count: true } } },
+      }),
+    contains: `ownersAggregate: { \`count\`: ${OWNERS_COUNT} }`,
   },
   {
     label: 'typed select: every kind',

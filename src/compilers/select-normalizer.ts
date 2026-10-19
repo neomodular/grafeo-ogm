@@ -1,9 +1,15 @@
 import { OGMError } from '../errors';
 import type {
   NodeDefinition,
+  PropertyDefinition,
   RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
+import {
+  AGGREGATE_SUFFIX,
+  AGGREGATES_BY_KIND,
+  aggregateKind,
+} from './relationship-aggregate';
 import { resolveTargetDef } from '../schema/utils';
 import {
   assertSafeIdentifier,
@@ -89,6 +95,22 @@ export class SelectNormalizer {
       }
 
       const relDef = nodeDef.relationships.get(fieldName);
+
+      // v2.7.0 — `postsAggregate: true | { where?, directed?, select? }`.
+      // Pre-2.7.0 the key was not a relationship and dropped.
+      if (
+        !relDef &&
+        fieldName.endsWith(AGGREGATE_SUFFIX) &&
+        !nodeDef.properties.has(fieldName)
+      ) {
+        const aggregated = nodeDef.relationships.get(
+          fieldName.slice(0, -AGGREGATE_SUFFIX.length),
+        );
+        if (aggregated) {
+          nodes.push(this.normalizeAggregate(fieldName, value, aggregated));
+          continue;
+        }
+      }
 
       if (relDef) {
         // It's a relationship field
@@ -232,6 +254,158 @@ export class SelectNormalizer {
     }
 
     return null;
+  }
+
+  /**
+   * v2.7.0 — a typed `<rel>Aggregate` select into the selection the
+   * selectionSet `postsAggregate(where, directed) { count node { … } edge
+   * { … } }` parses to. `true` (at any level) selects everything below:
+   * `count`, and every aggregate of every aggregatable node / edge field.
+   * Unknown keys throw: the compiler validates the rest.
+   */
+  private normalizeAggregate(
+    fieldName: string,
+    value: unknown,
+    relDef: RelationshipDefinition,
+  ): SelectionNode {
+    const node: SelectionNode = {
+      fieldName,
+      isScalar: false,
+      isRelationship: true,
+      isConnection: false,
+    };
+    const scalar = (name: string): SelectionNode => ({
+      fieldName: name,
+      isScalar: true,
+      isRelationship: false,
+      isConnection: false,
+    });
+    const targetProps = this.schema.unions?.get(relDef.target)?.length
+      ? undefined
+      : resolveTargetDef(relDef.target, this.schema)?.properties;
+    const edgeProps = relDef.properties
+      ? this.schema.relationshipProperties.get(relDef.properties)?.properties
+      : undefined;
+    /** `node` / `edge`: `true` → every aggregatable field, all aggregates. */
+    const fieldsOf = (
+      which: 'node' | 'edge',
+      props: Map<string, PropertyDefinition> | undefined,
+      v: unknown,
+    ): SelectionNode => {
+      const out: SelectionNode = {
+        fieldName: which,
+        isScalar: false,
+        isRelationship: true,
+        isConnection: false,
+        children: [],
+      };
+      const where = `${fieldName}.${which}`;
+      if (v === true) {
+        for (const prop of props?.values() ?? []) {
+          const kind = aggregateKind(prop);
+          if (kind)
+            out.children!.push({
+              fieldName: prop.name,
+              isScalar: false,
+              isRelationship: true,
+              isConnection: false,
+              children: AGGREGATES_BY_KIND[kind].map(scalar),
+            });
+        }
+        return out;
+      }
+      const sel = selectOf(v, where);
+      for (const [field, fv] of Object.entries(sel)) {
+        if (fv == null || fv === false) continue;
+        assertSafeKey(field, 'select input');
+        const prop = props?.get(field);
+        const kind = prop ? aggregateKind(prop) : null;
+        if (!kind)
+          throw new OGMError(
+            prop?.isArray
+              ? `Field "${field}" on ${where} has no aggregates: list fields are not aggregated.`
+              : `Field "${field}" on ${where} has no aggregates (unknown, or not aggregatable).`,
+          );
+        const ops =
+          fv === true
+            ? [...AGGREGATES_BY_KIND[kind]]
+            : Object.entries(selectOf(fv, `${where}.${field}`))
+                .filter(([, on]) => on === true)
+                .map(([op]) => {
+                  assertSafeKey(op, 'select input');
+                  return op;
+                });
+        out.children!.push({
+          fieldName: field,
+          isScalar: false,
+          isRelationship: true,
+          isConnection: false,
+          children: ops.map(scalar),
+        });
+      }
+      return out;
+    };
+    /** The `select` object of `{ select: { … } }`, validated. */
+    const selectOf = (v: unknown, where: string): Record<string, unknown> => {
+      if (!isPlainObject(v) || !isPlainObject(v.select))
+        throw new OGMError(
+          `select for ${where} must be true or { select: { … } }.`,
+        );
+      for (const k of Object.keys(v))
+        if (k !== 'select')
+          throw new OGMError(`Unknown key "${k}" in select for ${where}.`);
+      return v.select;
+    };
+
+    let select: Record<string, unknown>;
+    if (value === true)
+      select = {
+        count: true,
+        ...(targetProps ? { node: true } : {}),
+        ...(edgeProps ? { edge: true } : {}),
+      };
+    else if (isPlainObject(value)) {
+      for (const k of Object.keys(value))
+        if (!['where', 'directed', 'select'].includes(k))
+          throw new OGMError(
+            `Unknown key "${k}" in select for relationship aggregate "${fieldName}". ` +
+              `Supported: where, directed, select.`,
+          );
+      if (value.where !== undefined) {
+        if (!isPlainObject(value.where))
+          throw new OGMError(
+            `where on relationship aggregate "${fieldName}" must be an object.`,
+          );
+        node.relationshipWhere = value.where;
+      }
+      if (value.directed !== undefined) {
+        if (typeof value.directed !== 'boolean')
+          throw new OGMError(
+            `directed on relationship aggregate "${fieldName}" must be true or false.`,
+          );
+        node.directed = value.directed;
+      }
+      select = isPlainObject(value.select) ? value.select : { count: true };
+    } else
+      throw new OGMError(
+        `select for relationship aggregate "${fieldName}" must be true or an object.`,
+      );
+
+    node.children = [];
+    for (const [key, v] of Object.entries(select)) {
+      if (v == null || v === false) continue;
+      if (key === 'count' && v === true) node.children.push(scalar('count'));
+      else if (key === 'node')
+        node.children.push(fieldsOf('node', targetProps, v));
+      else if (key === 'edge')
+        node.children.push(fieldsOf('edge', edgeProps, v));
+      else
+        throw new OGMError(
+          `Unknown key "${key}" in select for relationship aggregate "${fieldName}". ` +
+            `Supported: count, node, edge.`,
+        );
+    }
+    return node;
   }
 
   /**

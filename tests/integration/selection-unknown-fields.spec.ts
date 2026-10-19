@@ -5,10 +5,10 @@
  * NEO4J_USERNAME and NEO4J_PASSWORD). Every node it creates carries this
  * run's `runId` and is removed in `afterAll`.
  *
- * Default mode keeps the v2.6.2 result (a typo comes back null, a
- * `<rel>Aggregate` field is left out) and warns once; `strict: true`
- * throws before anything runs. The alternatives the `<rel>Aggregate`
- * message names return the count.
+ * Default mode keeps the v2.6.2 result (a typo comes back null, an unknown
+ * field with a sub-selection is left out) and warns once; `strict: true`
+ * throws before anything runs. Since v2.7.0 `<rel>Aggregate { … }` of a
+ * relationship is a known field and returns the aggregate.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -113,16 +113,16 @@ describeLive('unknown selected fields — live Neo4j', () => {
       expect(message).toContain('Enable `strict: true` (default in 3.0)');
     });
 
-    it('a <rel>Aggregate field is left out', async () => {
+    it('a <notARelationship>Aggregate field is left out', async () => {
       const { plan, logger } = make(false);
       const rows = (await plan.find({
         where: where(),
-        selectionSet: '{ id ownersAggregate { count } }',
+        selectionSet: '{ id ownerzAggregate { count } }',
       })) as Row[];
       expect(rows).toEqual([{ id: planId }]);
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(String(logger.warn.mock.calls[0][0])).toContain(
-        'select "ownersConnection { totalCount }" for a count, or use Model.aggregate() on the related type.',
+        'selects "ownerzAggregate", which is not a field of type "ItUfPlan"',
       );
     });
 
@@ -150,22 +150,44 @@ describeLive('unknown selected fields — live Neo4j', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it('a <rel>Aggregate field', async () => {
+    it('a <rel>Aggregate field without aggregates', async () => {
       const { plan } = make(true);
       await expect(
         plan.find({
           where: where(),
-          selectionSet: '{ id ownersAggregate { count } }',
+          selectionSet: '{ id ownersAggregate }',
         }),
       ).rejects.toThrow(
         'Unknown field "ownersAggregate" in selectionSet on type "ItUfPlan". ' +
-          '"ownersAggregate" fields are not supported: select "ownersConnection { totalCount }" for a count, ' +
-          'or use Model.aggregate() on the related type.',
+          '"ownersAggregate" needs a selection of aggregates, e.g. "ownersAggregate { count }" ' +
+          '(the aggregate of relationship "owners").',
       );
     });
   });
 
-  describe('the alternatives the message names', () => {
+  describe('<rel>Aggregate is a known field (v2.7.0)', () => {
+    // 2.6.3 reported it unknown (warned, or threw under strict) because the
+    // OGM did not compile it; it now returns the aggregate in both modes.
+    it.each([undefined, true])(
+      'ownersAggregate { count } returns the count (strict: %s)',
+      async (strict) => {
+        const { plan, logger } = make(strict);
+        const rows = (await plan.find({
+          where: where(),
+          selectionSet: '{ id ownersAggregate { count } }',
+        })) as Row[];
+        expect(rows).toEqual([{ id: planId, ownersAggregate: { count: 2 } }]);
+        const typed = (await plan.find({
+          where: where(),
+          select: { id: true, ownersAggregate: { select: { count: true } } },
+        })) as Row[];
+        expect(typed).toEqual([{ id: planId, ownersAggregate: { count: 2 } }]);
+        expect(logger.warn).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  describe('the other ways to count', () => {
     it.each([undefined, true])(
       'ownersConnection { totalCount } (strict: %s)',
       async (strict) => {
