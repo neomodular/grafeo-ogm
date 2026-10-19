@@ -167,8 +167,12 @@ export class FulltextCompiler {
     // alongside OR / AND / NOT would be dropped without a word.
     assertSingleFulltextOperator(Object.keys(input));
 
-    if (isFulltextLeaf(input))
-      return this.compileLeaf(input, nodeDef, nodeVar, paramCounter);
+    if (isFulltextLeaf(input)) {
+      const leaf = this.compileLeaf(input, nodeDef, nodeVar, paramCounter);
+      if (depth > 0 && leaf.scoreThreshold !== undefined)
+        return this.branchScore(leaf, nodeDef, nodeVar);
+      return leaf;
+    }
 
     if ('OR' in input)
       return this.compileOr(
@@ -198,6 +202,42 @@ export class FulltextCompiler {
     throw new OGMError(
       'Invalid fulltext input: must be a leaf, OR, AND, or NOT',
     );
+  }
+
+  /**
+   * v2.6.0 — a leaf with a `score` inside `OR` / `AND` / `NOT`. Only a
+   * top-level leaf's threshold reaches the caller's `WHERE score >= …`;
+   * inside an operator the bound `ft_score_<n>` was never referenced, so
+   * the threshold was ignored (and a single-branch operator, which hands
+   * the leaf's threshold up un-renamed, referenced a missing `$ft_score`).
+   * Default: unchanged, with a warning. Strict: the branch filters its
+   * own rows (`… WHERE score >= $ft_score_<n>`) and the threshold
+   * is consumed here.
+   */
+  private branchScore(
+    leaf: FulltextResult,
+    nodeDef: NodeDefinition,
+    nodeVar: string,
+  ): FulltextResult {
+    if (!this.strictMode.strict) {
+      this.strictMode.warn(
+        'fulltext-branch-score',
+        nodeDef.typeName,
+        `A fulltext \`score\` inside OR / AND / NOT (on ${nodeDef.typeName}) is ignored in 2.x: ` +
+          `only a top-level fulltext entry's score filters results.`,
+        'apply the score threshold to its own branch',
+      );
+      return leaf;
+    }
+    const scoreParam = Object.keys(leaf.params).find((k) =>
+      k.startsWith('ft_score_'),
+    )!;
+    return {
+      // The trailing WITH lets any clause follow — a single-branch operator
+      // hands this leaf straight to the caller, which appends its WHERE.
+      cypher: `${leaf.cypher}\nWHERE score >= $${scoreParam}\nWITH ${nodeVar}, score`,
+      params: leaf.params,
+    };
   }
 
   /**
