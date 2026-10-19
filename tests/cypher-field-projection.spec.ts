@@ -64,6 +64,37 @@ describe('buildCypherFieldCall', () => {
     );
     expect(call).toContain('  RETURN head(collect(`b`)) AS `b`\n}');
   });
+
+  // v2.5.3 — a column named like the node variable redeclared it.
+  it('rebinds the node when the statement returns a column named like it', () => {
+    const call = buildCypherFieldCall(
+      'RETURN this.rank AS n',
+      'n',
+      'n',
+      'Doc',
+      '__sel_n_nn',
+    );
+    expect(call).toBe(
+      [
+        'CALL {',
+        '  WITH n',
+        '  WITH n AS n__cf_this',
+        '  WITH n__cf_this WHERE n__cf_this:`Doc`',
+        '  CALL {',
+        '    WITH n__cf_this',
+        '    WITH n__cf_this AS this',
+        '    RETURN this.rank AS n',
+        '  }',
+        '  RETURN head(collect(`n`)) AS __sel_n_nn',
+        '}',
+      ].join('\n'),
+    );
+  });
+
+  it('does not rebind for a property access or a param of the same name', () => {
+    const call = buildCypherFieldCall('RETURN this.n + $n AS x', 'n', 'x');
+    expect(call).not.toContain('n__cf_this');
+  });
 });
 
 describe('CypherFieldScope', () => {
@@ -80,8 +111,8 @@ describe('CypherFieldScope', () => {
     expect(alias).toBe('__sel_n_insensitiveDrugName');
     expect(scope.hasAny()).toBe(true);
     expect(scope.emit()).toEqual([
-      'CALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN toLower(this.drugName) AS insensitiveDrugName\n  }\n  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`\n}',
-      'WITH n, `insensitiveDrugName` AS __sel_n_insensitiveDrugName',
+      'CALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN toLower(this.drugName) AS insensitiveDrugName\n  }\n  RETURN head(collect(`insensitiveDrugName`)) AS __sel_n_insensitiveDrugName\n}',
+      'WITH n, __sel_n_insensitiveDrugName',
     ]);
     expect(scope.carried()).toEqual(['__sel_n_insensitiveDrugName']);
   });
@@ -103,10 +134,10 @@ describe('CypherFieldScope', () => {
     scope.register('a', cypherProp('a', 'RETURN this.a AS a', 'a'));
     scope.register('b', cypherProp('b', 'RETURN this.b AS b', 'b'));
     const lines = scope.emit();
-    // First WITH carries: WITH n, `a` AS __sel_n_a
-    // Second WITH carries: WITH n, __sel_n_a, `b` AS __sel_n_b
-    expect(lines[1]).toBe('WITH n, `a` AS __sel_n_a');
-    expect(lines[3]).toBe('WITH n, __sel_n_a, `b` AS __sel_n_b');
+    // First WITH carries: WITH n, __sel_n_a
+    // Second WITH carries: WITH n, __sel_n_a, __sel_n_b
+    expect(lines[1]).toBe('WITH n, __sel_n_a');
+    expect(lines[3]).toBe('WITH n, __sel_n_a, __sel_n_b');
     expect(scope.carried()).toEqual(['__sel_n_a', '__sel_n_b']);
   });
 
@@ -115,10 +146,8 @@ describe('CypherFieldScope', () => {
     scope.register('a', cypherProp('a', 'RETURN this.a AS a', 'a'));
     scope.register('b', cypherProp('b', 'RETURN this.b AS b', 'b'));
     const lines = scope.emit();
-    expect(lines[1]).toBe('WITH n, __typename, score, `a` AS __sel_n_a');
-    expect(lines[3]).toBe(
-      'WITH n, __typename, score, __sel_n_a, `b` AS __sel_n_b',
-    );
+    expect(lines[1]).toBe('WITH n, __typename, score, __sel_n_a');
+    expect(lines[3]).toBe('WITH n, __typename, score, __sel_n_a, __sel_n_b');
   });
 
   it('defaults columnName to the GraphQL field name when omitted', () => {
@@ -127,7 +156,7 @@ describe('CypherFieldScope', () => {
       'upper',
       cypherProp('upper', 'RETURN toUpper(this.x) AS upper'),
     );
-    expect(scope.emit()[1]).toBe('WITH n, `upper` AS __where_n_upper');
+    expect(scope.emit()[1]).toBe('WITH n, __where_n_upper');
   });
 
   it('throws when register() is called for a property without cypherStatement', () => {

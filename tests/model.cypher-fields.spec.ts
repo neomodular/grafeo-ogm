@@ -161,9 +161,7 @@ describe('Model — @cypher fields end-to-end', () => {
       expect(whereIdx).toBeGreaterThan(callIdx);
       expect(returnIdx).toBeGreaterThan(whereIdx);
 
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __where_n_insensitiveDrugName');
       expect(cypher).toContain(
         'WHERE __where_n_insensitiveDrugName CONTAINS $param0',
       );
@@ -214,9 +212,7 @@ describe('Model — @cypher fields end-to-end', () => {
       expect(whereIdx).toBeGreaterThan(callIdx);
 
       // The WITH that follows the user's CALL { ... } must carry `score`.
-      expect(cypher).toMatch(
-        /WITH n, score, `insensitiveDrugName` AS __where_n_insensitiveDrugName/,
-      );
+      expect(cypher).toMatch(/WITH n, score, __where_n_insensitiveDrugName/);
       expect(cypher).toContain(
         'score >= $ft_score AND __where_n_insensitiveDrugName CONTAINS',
       );
@@ -261,9 +257,7 @@ describe('Model — @cypher fields end-to-end', () => {
       expect(callIdx).toBeGreaterThan(-1);
       expect(returnIdx).toBeGreaterThan(callIdx);
 
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __sel_n_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __sel_n_insensitiveDrugName');
       expect(cypher).toContain(
         '`insensitiveDrugName`: __sel_n_insensitiveDrugName',
       );
@@ -274,9 +268,7 @@ describe('Model — @cypher fields end-to-end', () => {
         selectionSet: '{ id drugName insensitiveDrugName }',
       });
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __sel_n_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __sel_n_insensitiveDrugName');
       expect(cypher).toContain(
         '`insensitiveDrugName`: __sel_n_insensitiveDrugName',
       );
@@ -319,15 +311,11 @@ describe('Model — @cypher fields end-to-end', () => {
       //   RETURN ... ORDER BY ...
       const matchIdx = cypher.indexOf('MATCH (n:`Drug`)');
       const wherePreludeIdx = cypher.indexOf(
-        '`insensitiveDrugName` AS __where_n_insensitiveDrugName',
+        'AS __where_n_insensitiveDrugName',
       );
       const whereIdx = cypher.indexOf('WHERE __where_');
-      const selPreludeIdx = cypher.indexOf(
-        '`upperDrugName` AS __sel_n_upperDrugName',
-      );
-      const sortPreludeIdx = cypher.indexOf(
-        '`insensitiveDrugName` AS __sort_insensitiveDrugName',
-      );
+      const selPreludeIdx = cypher.indexOf('AS __sel_n_upperDrugName');
+      const sortPreludeIdx = cypher.indexOf('AS __sort_insensitiveDrugName');
       const returnIdx = cypher.indexOf('RETURN n {');
       const orderByIdx = cypher.indexOf('ORDER BY __sort_');
 
@@ -343,7 +331,7 @@ describe('Model — @cypher fields end-to-end', () => {
       // The sort prelude's WITH MUST carry forward `__sel_n_upperDrugName`
       // so the trailing RETURN can still reference it.
       expect(cypher).toMatch(
-        /WITH n, __sel_n_upperDrugName, `insensitiveDrugName` AS __sort_insensitiveDrugName/,
+        /WITH n, __sel_n_upperDrugName, __sort_insensitiveDrugName/,
       );
 
       // Each namespace stays distinct — alias prefixes don't collide.
@@ -375,7 +363,7 @@ describe('Model — @cypher fields end-to-end', () => {
       // The sort prelude's WITH carries `__sel_n_insensitiveDrugName`
       // forward so the projected RETURN can still reference it.
       expect(cypher).toMatch(
-        /WITH n, __sel_n_insensitiveDrugName, `insensitiveDrugName` AS __sort_insensitiveDrugName/,
+        /WITH n, __sel_n_insensitiveDrugName, __sort_insensitiveDrugName/,
       );
       expect(cypher).toContain(
         '`insensitiveDrugName`: __sel_n_insensitiveDrugName',
@@ -405,9 +393,7 @@ describe('Model — @cypher fields end-to-end', () => {
         data: { drugName: 'New' },
       });
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __where_n_insensitiveDrugName');
       expect(cypher).toContain(
         'WHERE __where_n_insensitiveDrugName CONTAINS $param0',
       );
@@ -419,9 +405,7 @@ describe('Model — @cypher fields end-to-end', () => {
       });
       const cypher = getCypher(mockSession);
       expect(cypher).toContain('CALL {');
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __where_n_insensitiveDrugName');
       expect(cypher).toContain(
         'WHERE __where_n_insensitiveDrugName CONTAINS $param0',
       );

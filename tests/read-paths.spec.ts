@@ -96,7 +96,7 @@ describe('inline-fragment @cypher fields on abstract types (v2.4.8)', () => {
       .find({ selectionSet: '{ id ... on LbDoc { dcount } }' });
     const cypher = h.cypher();
     expect(cypher).toContain('  WITH n WHERE n:`LbDoc`\n  CALL {');
-    expect(cypher).toContain('`dcount` AS __sel_n_LbDoc_dcount');
+    expect(cypher).toContain('AS __sel_n_LbDoc_dcount');
     expect(cypher).toContain(
       '`dcount`: CASE WHEN n:`LbDoc` THEN __sel_n_LbDoc_dcount END',
     );

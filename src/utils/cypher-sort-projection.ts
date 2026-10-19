@@ -15,16 +15,24 @@ import {
  * no rows sorts with `null` instead of vanishing, and one returning
  * several rows sorts once.
  *
- * The caller is expected to follow this CALL with its own `WITH` clause
- * to rename the projected column (`<columnName>`) to a unique alias
- * (e.g. `__sort_<fieldName>`) and carry forward any prior sort aliases.
+ * With `outputAlias` (v2.5.3) the column comes out under that unique
+ * alias (e.g. `__sort_<fieldName>`); the caller follows the CALL with its
+ * own `WITH` to carry it forward with any prior sort aliases.
  */
 export function buildCypherSortProjection(
   statement: string,
   nodeVar: string,
   columnName: string,
+  /** v2.5.3 — see `buildCypherFieldCall`'s `outputAlias`. */
+  outputAlias?: string,
 ): string {
-  return buildCypherFieldCall(statement, nodeVar, columnName);
+  return buildCypherFieldCall(
+    statement,
+    nodeVar,
+    columnName,
+    undefined,
+    outputAlias,
+  );
 }
 
 /**
@@ -79,14 +87,17 @@ export function compileSortClause(args: {
       assertSafeIdentifier(columnName, '@cypher columnName');
 
       preLines.push(
-        buildCypherSortProjection(propDef.cypherStatement, nodeVar, columnName),
+        buildCypherSortProjection(
+          propDef.cypherStatement,
+          nodeVar,
+          columnName,
+          alias,
+        ),
       );
 
       const carry = [...preserveVars, ...carriedAliases];
       const carryStr = carry.length ? `, ${carry.join(', ')}` : '';
-      preLines.push(
-        `WITH ${nodeVar}${carryStr}, ${escapeIdentifier(columnName)} AS ${alias}`,
-      );
+      preLines.push(`WITH ${nodeVar}${carryStr}, ${alias}`);
       carriedAliases.push(alias);
       sortItems.push(`${alias} ${validDirection}`);
     } else

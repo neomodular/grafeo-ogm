@@ -559,7 +559,7 @@ const GOLDEN: Record<string, Recorded[]> = {
   '@cypher field referenced in a policy partial with user where': [
     {
       cypher:
-        "MATCH (n:`Chart`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN size(this.id) AS riskScore\n  }\n  RETURN head(collect(`riskScore`)) AS `riskScore`\n}\nWITH n, `riskScore` AS __where_n_riskScore\nWHERE (n.`id` = $param0) AND (true AND (__where_n_riskScore < $param1))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
+        "MATCH (n:`Chart`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN size(this.id) AS riskScore\n  }\n  RETURN head(collect(`riskScore`)) AS __where_n_riskScore\n}\nWITH n, __where_n_riskScore\nWHERE (n.`id` = $param0) AND (true AND (__where_n_riskScore < $param1))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
       params: {
         param0: 'c1',
         param1: 10,

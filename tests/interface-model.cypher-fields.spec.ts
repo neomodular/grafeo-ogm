@@ -140,7 +140,7 @@ describe('InterfaceModel — @cypher fields', () => {
     expect(callIdx).toBeGreaterThan(matchIdx);
     expect(whereIdx).toBeGreaterThan(callIdx);
 
-    expect(cypher).toContain('WITH n, `lowerName` AS __where_n_lowerName');
+    expect(cypher).toContain('WITH n, __where_n_lowerName');
     expect(cypher).toContain('WHERE __where_n_lowerName CONTAINS $param0');
   });
 
@@ -152,7 +152,7 @@ describe('InterfaceModel — @cypher fields', () => {
 
     // Order: WITH __typename → SELECT prelude → RETURN.
     const typenameIdx = cypher.indexOf('END AS __typename');
-    const selPreludeIdx = cypher.indexOf('`lowerName` AS __sel_n_lowerName');
+    const selPreludeIdx = cypher.indexOf('AS __sel_n_lowerName');
     const returnIdx = cypher.indexOf('RETURN n {');
 
     expect(typenameIdx).toBeGreaterThan(-1);
@@ -160,9 +160,7 @@ describe('InterfaceModel — @cypher fields', () => {
     expect(returnIdx).toBeGreaterThan(selPreludeIdx);
 
     // The select prelude's WITH MUST carry forward `__typename`.
-    expect(cypher).toMatch(
-      /WITH n, __typename, `lowerName` AS __sel_n_lowerName/,
-    );
+    expect(cypher).toMatch(/WITH n, __typename, __sel_n_lowerName/);
 
     // The projection references both the alias and the typename.
     expect(cypher).toContain('`lowerName`: __sel_n_lowerName');
@@ -186,7 +184,7 @@ describe('InterfaceModel — @cypher fields', () => {
 
     // The sort prelude must carry both __typename AND the select alias.
     expect(cypher).toMatch(
-      /WITH n, __typename, __sel_n_lowerName, `lowerName` AS __sort_lowerName/,
+      /WITH n, __typename, __sel_n_lowerName, __sort_lowerName/,
     );
   });
 

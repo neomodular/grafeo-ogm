@@ -189,9 +189,9 @@ describe('WhereCompiler — @cypher field resolution', () => {
           '    WITH n AS this',
           '    RETURN toLower(this.drugName) AS insensitiveDrugName',
           '  }',
-          '  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+          '  RETURN head(collect(`insensitiveDrugName`)) AS __where_n_insensitiveDrugName',
           '}',
-          'WITH n, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
+          'WITH n, __where_n_insensitiveDrugName',
         ].join('\n'),
       );
       expect(result.cypher).toBe('__where_n_insensitiveDrugName = $param0');
@@ -282,9 +282,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
 
     it('defaults the columnName to the GraphQL field name when @cypher omits it', () => {
       const result = compiler.compile({ defaultColumn: 'x' }, 'n', drugNode);
-      expect(result.preludes![1]).toBe(
-        'WITH n, `defaultColumn` AS __where_n_defaultColumn',
-      );
+      expect(result.preludes![1]).toBe('WITH n, __where_n_defaultColumn');
       expect(result.cypher).toBe('__where_n_defaultColumn = $param0');
     });
 
@@ -298,12 +296,12 @@ describe('WhereCompiler — @cypher field resolution', () => {
       );
       expect(result.preludes).toBeDefined();
       const flat = result.preludes!.join('\n');
-      expect(flat).toContain('`shared` AS __where_n_upperName');
-      expect(flat).toContain('`shared` AS __where_n_lowerName');
+      expect(flat).toContain('AS __where_n_upperName');
+      expect(flat).toContain('AS __where_n_lowerName');
       // Each WITH carries forward the previously-projected alias so the
       // final scope contains both `n` and both `__where_*` aliases.
       expect(flat).toContain(
-        'WITH n, __where_n_upperName, `shared` AS __where_n_lowerName',
+        'WITH n, __where_n_upperName, __where_n_lowerName',
       );
       expect(result.cypher).toBe(
         '__where_n_upperName = $param0 AND __where_n_lowerName = $param1',
@@ -326,7 +324,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
       // Only ONE prelude pair (CALL + WITH) should be emitted.
       expect(result.preludes!.length).toBe(2);
       expect(result.preludes![0]).toContain('CALL {');
-      expect(result.preludes![1]).toContain('AS __where_n_insensitiveDrugName');
+      expect(result.preludes![1]).toBe('WITH n, __where_n_insensitiveDrugName');
       expect(result.cypher).toBe(
         '(__where_n_insensitiveDrugName CONTAINS $param0 OR __where_n_insensitiveDrugName > $param1)',
       );
@@ -369,9 +367,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
       expect(result.cypher).toContain('CALL {');
       expect(result.cypher).toContain('  WITH r0');
       expect(result.cypher).toContain('  WITH r0 AS this');
-      expect(result.cypher).toContain(
-        'WITH r0, `statusLowerName` AS __where_r0_statusLowerName',
-      );
+      expect(result.cypher).toContain('WITH r0, __where_r0_statusLowerName');
       expect(result.cypher).toContain(
         'WHERE __where_r0_statusLowerName CONTAINS $param1',
       );
@@ -384,9 +380,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
         drugNode,
       );
       expect(result.cypher.startsWith('NOT EXISTS {')).toBe(true);
-      expect(result.cypher).toContain(
-        'WITH r0, `statusLowerName` AS __where_r0_statusLowerName',
-      );
+      expect(result.cypher).toContain('WITH r0, __where_r0_statusLowerName');
     });
 
     it('emits inner CALL prelude inside _ALL double-negation', () => {
@@ -396,9 +390,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
         drugNode,
       );
       expect(result.cypher).toContain('NOT EXISTS');
-      expect(result.cypher).toContain(
-        'WITH r0, `statusLowerName` AS __where_r0_statusLowerName',
-      );
+      expect(result.cypher).toContain('WITH r0, __where_r0_statusLowerName');
       expect(result.cypher).toContain(
         'WHERE NOT (__where_r0_statusLowerName CONTAINS $param1)',
       );
@@ -436,7 +428,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
       // scalar condition allocated a $paramN, and the relVar counter ran
       // alongside it).
       expect(result.preludes!.join('\n')).toContain(
-        'WITH n, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
+        'WITH n, __where_n_insensitiveDrugName',
       );
       expect(result.cypher).toContain(
         '__where_n_insensitiveDrugName CONTAINS $param0',
@@ -444,9 +436,7 @@ describe('WhereCompiler — @cypher field resolution', () => {
       expect(result.cypher).toMatch(
         /EXISTS \{ MATCH \(n\)-\[:`HAS_STATUS`\]->\(r\d+:`Status`\)/,
       );
-      expect(result.cypher).toMatch(
-        /WITH r\d+, `statusLowerName` AS __where_r\d+_statusLowerName/,
-      );
+      expect(result.cypher).toMatch(/WITH r\d+, __where_r\d+_statusLowerName/);
       expect(result.cypher).toMatch(
         /__where_r\d+_statusLowerName CONTAINS \$param2/,
       );
@@ -464,12 +454,10 @@ describe('WhereCompiler — @cypher field resolution', () => {
       );
       const flat = result.preludes!.join('\n');
       // First WITH: WITH n, score, ... AS first_alias
-      expect(flat).toContain(
-        'WITH n, score, `insensitiveDrugName` AS __where_n_insensitiveDrugName',
-      );
+      expect(flat).toContain('WITH n, score, __where_n_insensitiveDrugName');
       // Second WITH: must keep `score` AND the prior alias.
       expect(flat).toContain(
-        'WITH n, score, __where_n_insensitiveDrugName, `shared` AS __where_n_upperName',
+        'WITH n, score, __where_n_insensitiveDrugName, __where_n_upperName',
       );
     });
   });

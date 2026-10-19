@@ -81,9 +81,9 @@ describe('compileSortClause', () => {
         '    WITH n AS this',
         '    RETURN toLower(this.drugName) AS insensitiveDrugName',
         '  }',
-        '  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+        '  RETURN head(collect(`insensitiveDrugName`)) AS __sort_insensitiveDrugName',
         '}',
-        'WITH n, `insensitiveDrugName` AS __sort_insensitiveDrugName',
+        'WITH n, __sort_insensitiveDrugName',
       ].join('\n'),
     );
     expect(result.orderBy).toBe('ORDER BY __sort_insensitiveDrugName ASC');
@@ -100,7 +100,7 @@ describe('compileSortClause', () => {
       propertyLookup: lookupFromMap(props),
     });
 
-    expect(result.pre).toContain('WITH n, `upper` AS __sort_upper');
+    expect(result.pre).toContain('WITH n, __sort_upper');
     expect(result.orderBy).toBe('ORDER BY __sort_upper DESC');
   });
 
@@ -138,9 +138,9 @@ describe('compileSortClause', () => {
         '    WITH n AS this',
         '    RETURN toLower(this.drugName) AS insensitiveDrugName',
         '  }',
-        '  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+        '  RETURN head(collect(`insensitiveDrugName`)) AS __sort_insensitiveDrugName',
         '}',
-        'WITH n, `insensitiveDrugName` AS __sort_insensitiveDrugName',
+        'WITH n, __sort_insensitiveDrugName',
         'CALL {',
         '  WITH n',
         '  CALL {',
@@ -148,9 +148,9 @@ describe('compileSortClause', () => {
         '    WITH n AS this',
         '    MATCH (this)-[:HAS_STATUS]->(s) RETURN s.name AS statusName',
         '  }',
-        '  RETURN head(collect(`statusName`)) AS `statusName`',
+        '  RETURN head(collect(`statusName`)) AS __sort_statusName',
         '}',
-        'WITH n, __sort_insensitiveDrugName, `statusName` AS __sort_statusName',
+        'WITH n, __sort_insensitiveDrugName, __sort_statusName',
       ].join('\n'),
     );
     expect(result.orderBy).toBe(
@@ -170,7 +170,7 @@ describe('compileSortClause', () => {
       propertyLookup: lookupFromMap(props),
     });
 
-    expect(result.pre).toContain('WITH n, `lname` AS __sort_lname');
+    expect(result.pre).toContain('WITH n, __sort_lname');
     expect(result.orderBy).toBe('ORDER BY __sort_lname ASC, n.`title` DESC');
   });
 
@@ -186,7 +186,7 @@ describe('compileSortClause', () => {
       preserveVars: ['__typename'],
     });
 
-    expect(result.pre).toContain('WITH n, __typename, `lname` AS __sort_lname');
+    expect(result.pre).toContain('WITH n, __typename, __sort_lname');
   });
 
   it('falls back to stored-field syntax when @cypher field has no statement captured', () => {

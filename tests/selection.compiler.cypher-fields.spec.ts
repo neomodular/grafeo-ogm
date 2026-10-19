@@ -202,9 +202,9 @@ describe('SelectionCompiler — @cypher field resolution', () => {
           '    WITH n AS this',
           '    RETURN toLower(this.drugName) AS insensitiveDrugName',
           '  }',
-          '  RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+          '  RETURN head(collect(`insensitiveDrugName`)) AS __sel_n_insensitiveDrugName',
           '}',
-          'WITH n, `insensitiveDrugName` AS __sel_n_insensitiveDrugName',
+          'WITH n, __sel_n_insensitiveDrugName',
         ].join('\n'),
       );
     });
@@ -279,11 +279,9 @@ describe('SelectionCompiler — @cypher field resolution', () => {
       expect(out).toContain('`upperName`: __sel_n_upperName');
       expect(out).toContain('`lowerName`: __sel_n_lowerName');
       const flat = scope.emit().join('\n');
-      expect(flat).toContain('`shared` AS __sel_n_upperName');
-      expect(flat).toContain('`shared` AS __sel_n_lowerName');
-      expect(flat).toContain(
-        'WITH n, __sel_n_upperName, `shared` AS __sel_n_lowerName',
-      );
+      expect(flat).toContain('AS __sel_n_upperName');
+      expect(flat).toContain('AS __sel_n_lowerName');
+      expect(flat).toContain('WITH n, __sel_n_upperName, __sel_n_lowerName');
     });
 
     it('emits an inline head(COLLECT { ... }) projection for @cypher on a NESTED related node', () => {

@@ -27,22 +27,46 @@ export function buildCypherFieldCall(
    * abstract type). Other rows still keep their row, with `null`.
    */
   guardLabel?: string,
+  /**
+   * v2.5.3 — name the reduced column with this (unique) alias instead of
+   * `columnName`. Pre-2.5.3 the CALL returned `AS <columnName>` and the
+   * caller renamed it in a following WITH, so a `columnName` equal to a
+   * variable already in scope (`n`, `score`, `__typename`) failed the
+   * query with "Variable already declared".
+   */
+  outputAlias?: string,
 ): string {
   const col = escapeIdentifier(columnName);
+  if (outputAlias !== undefined)
+    assertSafeIdentifier(outputAlias, '@cypher alias');
+  const out = outputAlias ?? col;
+  // v2.5.3 — a statement that returns a column named like the node
+  // variable (`RETURN this.rank AS n`) would redeclare it when the inner
+  // CALL hands its columns back. Rebind the node to a private name first
+  // (only then, so every other statement's Cypher is unchanged).
+  const shadows = mentionsIdentifier(statement, nodeVar);
+  const inner = shadows ? `${nodeVar}__cf_this` : nodeVar;
   return [
     `CALL {`,
     `  WITH ${nodeVar}`,
+    ...(shadows ? [`  WITH ${nodeVar} AS ${inner}`] : []),
     ...(guardLabel !== undefined
-      ? [`  WITH ${nodeVar} WHERE ${nodeVar}:${escapeIdentifier(guardLabel)}`]
+      ? [`  WITH ${inner} WHERE ${inner}:${escapeIdentifier(guardLabel)}`]
       : []),
     `  CALL {`,
-    `    WITH ${nodeVar}`,
-    `    WITH ${nodeVar} AS this`,
+    `    WITH ${inner}`,
+    `    WITH ${inner} AS this`,
     `    ${statement}`,
     `  }`,
-    `  RETURN head(collect(${col})) AS ${col}`,
+    `  RETURN head(collect(${col})) AS ${out}`,
     `}`,
   ].join('\n');
+}
+
+/** Whether `name` appears in `cypher` as a standalone identifier token. */
+function mentionsIdentifier(cypher: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w.$])\`?${escaped}\`?(?![\\w])`).test(cypher);
 }
 
 /**
@@ -191,11 +215,10 @@ export class CypherFieldScope {
         this.nodeVar,
         columnName,
         guardLabel,
+        alias,
       ),
     );
-    this.callLines.push(
-      `WITH ${this.nodeVar}${carryStr}, ${escapeIdentifier(columnName)} AS ${alias}`,
-    );
+    this.callLines.push(`WITH ${this.nodeVar}${carryStr}, ${alias}`);
 
     this.carriedAliases.push(alias);
     this.aliases.set(key, alias);

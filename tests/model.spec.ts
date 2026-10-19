@@ -298,14 +298,12 @@ describe('Model', () => {
         'CALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this',
       );
       expect(cypher).toContain(
-        'RETURN head(collect(`insensitiveDrugName`)) AS `insensitiveDrugName`',
+        'RETURN head(collect(`insensitiveDrugName`)) AS __sort_insensitiveDrugName',
       );
       expect(cypher).toContain(
         'RETURN toLower(this.drugName) AS insensitiveDrugName',
       );
-      expect(cypher).toContain(
-        'WITH n, `insensitiveDrugName` AS __sort_insensitiveDrugName',
-      );
+      expect(cypher).toContain('WITH n, __sort_insensitiveDrugName');
       expect(cypher).toContain('ORDER BY __sort_insensitiveDrugName ASC');
 
       // The pre-RETURN block must come BEFORE the RETURN clause.
