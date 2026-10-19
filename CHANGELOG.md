@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.4 (2026-10-18) — security fix
+
+> **Security patch.** Fixes an authorization bypass in node-level security for nodes that carry the labels of two or more implementers of the same interface or union. Affects **1.7.0–2.5.3** for `InterfaceModel` reads (`find`, `findFirst`, `findUnique`, `count`, `aggregate`) and **2.3.0–2.5.3** for interface / union relationship targets (nested selections, traversal filters, `connect` / `disconnect` and nested writes). OGMs without `policies` compile the same policy-free Cypher as before. Upgrade if you use `policies`.
+
+### Security
+
+- **A node carrying two implementer labels was admitted under the laxer member's policy.** The policy for an abstract (interface / union) type was a first-match `CASE WHEN n:A THEN <A's policy> WHEN n:B THEN <B's policy> ELSE false END`. A node labelled `:A:B` only had to pass A's policy, and B's policy (including its default deny) was never evaluated. So `interfaceModel('Resource').find({ labels: ['Drug'] })` returned a node that `model('Drug').find()` hides. Through a relationship, fragment `@cypher` fields (`... on B { whisper }`) and B's stored fields were also returned for that node. Nodes get several implementer labels through overlapping `@node(labels: [...])`, `create({ labels })`, `setLabels`, or data written outside the OGM. The clause is now `((n:A OR n:B) AND (NOT n:A OR <A's policy>) AND (NOT n:B OR <B's policy>))`: a node must pass the policy of every member label it carries. This applies to `InterfaceModel` reads, nested selections, traversal and connection filters, `connect` / `disconnect`, and nested update / delete targets. Each fragment `@cypher` branch is now also guarded by its member's `read` policy.
+
+### Behavior change
+
+- A node that carries the labels of several implementers is now returned, matched or linked only when **every** one of those members' policies admits it. Results for nodes with a single implementer label are unchanged.
+
 ## 2.5.3 (2026-10-18) — non-breaking fixes from bug scan 4
 
 > **Patch release.** Fixes from the fourth bug scan that don't change results callers can rely on. No API changes. Only queries that errored or silently returned wrong data behave differently.
