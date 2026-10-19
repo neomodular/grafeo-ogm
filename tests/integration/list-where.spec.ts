@@ -12,6 +12,9 @@
  * - v2.5.3 — `_IN` / `_NOT_IN` on a list field coerced only the outer list,
  *   so BigInt strings and JS `Date`s inside the inner lists were bound raw
  *   and silently matched nothing.
+ * - v2.5.3 — `mode: 'insensitive'` wrapped non-String fields in
+ *   `toLower()` too, a server type error for an Int / BigInt / Float /
+ *   Boolean field or list.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -29,6 +32,8 @@ const typeDefs = /* GraphQL */ `
     seenAt: [DateTime!]
     tags: [String!]
     bigs: [BigInt!]
+    rank: Int
+    ranks: [Int!]
   }
 `;
 
@@ -61,6 +66,8 @@ describeLive('List-field where filters — live Neo4j', () => {
           seenAt: [T1, T2],
           tags: ['Red', 'Blue'],
           bigs: ['1', '2'],
+          rank: 3,
+          ranks: [1, 2],
         },
         { id: id('b'), runId, seenAt: [T2], tags: ['green'] },
       ],
@@ -118,5 +125,16 @@ describeLive('List-field where filters — live Neo4j', () => {
 
   it('_IN on a DateTime list coerces inner JS Dates', async () => {
     expect(await find({ seenAt_IN: [[new Date(T2)]] })).toEqual([id('b')]);
+  });
+
+  it('mode insensitive leaves non-String scalar and list fields alone', async () => {
+    expect(await find({ rank: 3, mode: 'insensitive' })).toEqual([id('a')]);
+    expect(await find({ rank_GTE: 3, mode: 'insensitive' })).toEqual([id('a')]);
+    expect(await find({ ranks: [1, 2], mode: 'insensitive' })).toEqual([
+      id('a'),
+    ]);
+    expect(
+      await find({ tags: ['red', 'BLUE'], rank: 3, mode: 'insensitive' }),
+    ).toEqual([id('a')]);
   });
 });

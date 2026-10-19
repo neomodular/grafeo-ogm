@@ -96,6 +96,22 @@ const MAX_DEPTH = 10;
  */
 const MAX_LOGICAL_ARRAY_LENGTH = 256;
 
+/** Scalar types whose stored values are never strings (v2.5.3). */
+const NON_STRING_SCALARS: ReadonlySet<string> = new Set([
+  'Int',
+  'BigInt',
+  'Float',
+  'Boolean',
+  'Point',
+  'CartesianPoint',
+  'DateTime',
+  'Date',
+  'Time',
+  'LocalTime',
+  'LocalDateTime',
+  'Duration',
+]);
+
 /**
  * Declarative operator definition. Use `%f` for (possibly case-insensitive) field
  * reference, `%rf` for raw field reference, `%p` for (possibly case-insensitive)
@@ -1907,6 +1923,12 @@ export class WhereCompiler {
       operator ?? '',
     );
     const temporalWrapped = rawParamRef !== `$${paramName}`;
+    // v2.5.3 — `mode: 'insensitive'` lowers string-valued fields only.
+    // Pre-2.5.3 an Int / BigInt / Float / Boolean (or Point / temporal)
+    // field in the same where was wrapped in `toLower()` too, which the
+    // server rejects ("Expected a string value for `toLower`").
+    if (propDef !== undefined && NON_STRING_SCALARS.has(propDef.type))
+      caseInsensitive = false;
     // v2.4.8 — `toLower(list)` is a Cypher type error. On a LIST field,
     // case-insensitive equality / `_NOT` lowers element-wise; `_IN` on a
     // list field (a list of lists) can't be lowered as one expression, so it
