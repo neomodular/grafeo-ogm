@@ -7,6 +7,7 @@
  * `strict` unset and `strict: false` the OGM must keep emitting exactly it.
  */
 import { Driver } from 'neo4j-driver';
+import { OGMError } from '../src/errors';
 import { Model } from '../src/model';
 import { OGM } from '../src/ogm';
 
@@ -391,4 +392,61 @@ describe('item 11 — aggregate avg / sum on a list field (v2.6.0, both modes)',
       expect(logger.warn).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('item 9 — one response key, different arguments (v2.6.0)', () => {
+  const c = () => caseNamed('same response key, different arguments');
+
+  it('default: keeps the first selection, warns once (cache hits too)', async () => {
+    Model.clearSelectionCache();
+    const made = makeOgm(undefined);
+    await c().run(made.ogm);
+    await c().run(made.ogm);
+    expectOneWarning(
+      made.logger,
+      'The selectionSet selects "reviews" twice with different arguments; 2.x keeps the first selection and drops the second.',
+    );
+    // A second OGM hits Model's shared selection cache and still warns.
+    const other = makeOgm(undefined);
+    await c().run(other.ogm);
+    expect(other.logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('same arguments merge silently', async () => {
+    const { logger } = await runCase(undefined, {
+      label: 'same',
+      expected: '',
+      run: (ogm) =>
+        ogm.model('Book').find({
+          selectionSet:
+            '{ reviews(where: { stars: 5 }) { id } reviews(where: { stars: 5 }) { body } }',
+        }),
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('strict: throws OGMError, like GraphQL validation', async () => {
+    Model.clearSelectionCache();
+    const { ogm, records } = makeOgm(true);
+    await expect(c().run(ogm)).rejects.toThrow(
+      new OGMError(
+        'Fields "reviews" conflict because they have differing arguments. Use different aliases on the fields to fetch both.',
+      ),
+    );
+    expect(records).toHaveLength(0);
+  });
+
+  it('strict: aliases fetch both', async () => {
+    const { cypher } = await runCase(true, {
+      label: 'aliased',
+      expected: '',
+      run: (ogm) =>
+        ogm.model('Book').find({
+          selectionSet:
+            '{ five: reviews(where: { stars: 5 }) { id } one: reviews(where: { stars: 1 }) { body } }',
+        }),
+    });
+    expect(cypher).toContain('five: [');
+    expect(cypher).toContain(', one: [');
+  });
 });

@@ -287,6 +287,28 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       },
     );
   });
-});
 
-export { OGMError };
+  describe('item 9 — one response key, different arguments', () => {
+    const selectionSet =
+      '{ id reviews(where: { stars: 5 }) { id } reviews(where: { stars: 1 }) { body } }';
+
+    it('default: the first selection wins, one warning', async () => {
+      const { doc, logger } = make();
+      for (let i = 0; i < 2; i++)
+        expect(
+          await doc.find({ where: { id: id('both') } as never, selectionSet }),
+        ).toEqual([{ id: id('both'), reviews: [{ id: id('r5') }] }]);
+      expectOneWarning(
+        logger,
+        'selects "reviews" twice with different arguments',
+      );
+    });
+
+    it('strict: throws OGMError', async () => {
+      const { doc } = make(true);
+      await expect(
+        doc.find({ where: { id: id('both') } as never, selectionSet }),
+      ).rejects.toThrow(OGMError);
+    });
+  });
+});

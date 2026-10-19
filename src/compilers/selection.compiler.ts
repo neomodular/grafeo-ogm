@@ -130,6 +130,25 @@ interface ParseWarning {
  */
 const parseWarnings = new WeakMap<SelectionNode[], ParseWarning[]>();
 
+/**
+ * v2.6.0 — strict-mode state of one selectionSet parse, threaded through
+ * the converters and merge helpers: the OGM's `strict` flag and the
+ * warnings found so far (recorded on the parsed result).
+ */
+interface ParseContext {
+  strict: boolean;
+  warnings: ParseWarning[];
+}
+
+function parseWarn(ctx: ParseContext, warning: ParseWarning): void {
+  if (
+    !ctx.warnings.some(
+      (w) => w.code === warning.code && w.detail === warning.detail,
+    )
+  )
+    ctx.warnings.push(warning);
+}
+
 function sameArguments(a: SelectionNode, b: SelectionNode): boolean {
   return (argumentKeys.get(a) ?? '') === (argumentKeys.get(b) ?? '');
 }
@@ -150,6 +169,7 @@ function mergeSelection(
   list: SelectionNode[],
   seen: Map<string, SelectionNode>,
   incoming: SelectionNode,
+  ctx: ParseContext,
 ): void {
   const key = incoming.alias ?? incoming.fieldName;
   const existing = seen.get(key);
@@ -168,16 +188,35 @@ function mergeSelection(
     ];
   // Also selected outside any fragment → unconditional.
   else delete existing.typeConditions;
-  if (!sameArguments(existing, incoming)) return;
+  if (!sameArguments(existing, incoming)) {
+    // v2.6.0 — GraphQL rejects one response key selected with different
+    // arguments; 2.x keeps the first selection and drops the second.
+    if (ctx.strict)
+      throw new OGMError(
+        `Fields "${key}" conflict because they have differing arguments. ` +
+          `Use different aliases on the fields to fetch both.`,
+      );
+    parseWarn(ctx, {
+      code: 'selection-key-arguments',
+      detail: key,
+      problem:
+        `The selectionSet selects "${key}" twice with different arguments; ` +
+        `2.x keeps the first selection and drops the second.`,
+      fix: 'reject the conflict, as GraphQL validation does',
+    });
+    return;
+  }
   if (incoming.children)
     existing.children = mergeSelectionLists(
       existing.children,
       incoming.children,
+      ctx,
     );
   if (incoming.edgeChildren)
     existing.edgeChildren = mergeSelectionLists(
       existing.edgeChildren,
       incoming.edgeChildren,
+      ctx,
     );
   if (existing.isConnection) {
     if (incoming.totalCount) existing.totalCount = true;
@@ -219,11 +258,12 @@ function mergeFragmentField(
 function mergeSelectionLists(
   base: SelectionNode[] | undefined,
   extra: SelectionNode[],
+  ctx: ParseContext,
 ): SelectionNode[] {
   const list: SelectionNode[] = [];
   const seen = new Map<string, SelectionNode>();
   for (const node of [...(base ?? []), ...extra])
-    mergeSelection(list, seen, node);
+    mergeSelection(list, seen, node, ctx);
   return list;
 }
 
@@ -717,6 +757,7 @@ export class SelectionCompiler {
       // order is the LRU iteration order we rely on for eviction.
       this.parseCache.delete(selectionSet);
       this.parseCache.set(selectionSet, cached);
+      this.replayParseWarnings(cached);
       return cached;
     }
 
@@ -739,7 +780,16 @@ export class SelectionCompiler {
     const dummyField = opDef.selectionSet.selections[0];
     if (dummyField.kind !== Kind.FIELD || !dummyField.selectionSet) return [];
 
-    const result = this.convertSelectionSet(dummyField.selectionSet);
+    const ctx: ParseContext = { strict: this.strictMode.strict, warnings: [] };
+    const result = this.convertSelectionSet(
+      dummyField.selectionSet,
+      undefined,
+      ctx,
+    );
+    if (ctx.warnings.length > 0) {
+      parseWarnings.set(result, ctx.warnings);
+      this.replayParseWarnings(result);
+    }
 
     // Real-LRU eviction: drop the oldest entry when the cache is full,
     // then insert. Pre-1.7.5 we just stopped caching at saturation,
@@ -760,7 +810,8 @@ export class SelectionCompiler {
   private convertSelectionSet(
     selectionSet: SelectionSetNode,
     /** Type condition of the enclosing inline fragment, if any (v2.4.8). */
-    typeCondition?: string,
+    typeCondition: string | undefined,
+    ctx: ParseContext,
   ): SelectionNode[] {
     const nodes: SelectionNode[] = [];
     const seen = new Map<string, SelectionNode>();
@@ -777,8 +828,9 @@ export class SelectionCompiler {
           for (const merged of this.convertSelectionSet(
             fragment.selectionSet,
             condition,
+            ctx,
           ))
-            mergeSelection(nodes, seen, merged);
+            mergeSelection(nodes, seen, merged, ctx);
 
         continue;
       }
@@ -813,10 +865,15 @@ export class SelectionCompiler {
       if (hasChildren && field.selectionSet)
         if (isConnection)
           // For connections, parse edges -> node and edges -> properties
-          this.parseConnectionChildren(field.selectionSet, node);
-        else node.children = this.convertSelectionSet(field.selectionSet);
+          this.parseConnectionChildren(field.selectionSet, node, ctx);
+        else
+          node.children = this.convertSelectionSet(
+            field.selectionSet,
+            undefined,
+            ctx,
+          );
 
-      mergeSelection(nodes, seen, node);
+      mergeSelection(nodes, seen, node, ctx);
     }
 
     return nodes;
@@ -828,6 +885,7 @@ export class SelectionCompiler {
   private parseConnectionChildren(
     selectionSet: SelectionSetNode,
     parentNode: SelectionNode,
+    ctx: ParseContext,
   ): void {
     let selectsEdges = false;
     for (const sel of selectionSet.selections) {
@@ -859,7 +917,8 @@ export class SelectionCompiler {
             this.recordConnectionAlias(parentNode, 'node', edgeField);
             parentNode.children = mergeSelectionLists(
               parentNode.children,
-              this.convertSelectionSet(edgeField.selectionSet),
+              this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
+              ctx,
             );
           }
 
@@ -867,7 +926,8 @@ export class SelectionCompiler {
             this.recordConnectionAlias(parentNode, 'properties', edgeField);
             parentNode.edgeChildren = mergeSelectionLists(
               parentNode.edgeChildren,
-              this.convertSelectionSet(edgeField.selectionSet),
+              this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
+              ctx,
             );
           }
         }
