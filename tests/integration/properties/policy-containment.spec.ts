@@ -117,21 +117,10 @@ describeLive('Property 4 — policy containment (live Neo4j)', () => {
       'policy-containment',
       fc.record({
         ctx: fc.integer({ min: 0, max: CONTEXTS.length - 1 }),
-        // EXCLUDED (finding F7, security): `upsert` on an EXISTING node
-        // ignores the type's `update` row policy — MERGE gets no policy
-        // predicate, only the WITH CHECK restrictives run — so a context
-        // that cannot update a chart can rewrite it (even take ownership)
-        // through `upsert`. Upserts on existing ItPChart nodes (the only
-        // type here with an update row filter) are not generated until
-        // fixed; upserts that create still are.
-        op: writeOp({ depth: 3 }).filter(
-          (op) =>
-            !(
-              op.kind === 'upsert' &&
-              op.model === 'ItPChart' &&
-              op.where.id !== '@upserted'
-            ),
-        ),
+        // Finding F7 (fixed in v2.6.1): `upsert` on an EXISTING node now
+        // applies the type's `update` row filter, so upserts on existing
+        // ItPChart nodes are generated again.
+        op: writeOp({ depth: 3 }),
       }),
       async ({ ctx, op }) => {
         const context = CONTEXTS[ctx];

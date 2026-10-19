@@ -936,4 +936,148 @@ describeLive('NLS enforcement — live Neo4j', () => {
       expect(await linked(m('tag-linked'), 'IT_TAGS_RES', m('ab0'))).toBe(true);
     });
   });
+
+  // --- v2.6.1: upsert / skipDuplicates honour the update row filter -------
+  // Pre-2.6.1 the MERGE of `upsert` got no `update` policy predicate: only
+  // the WITH CHECK restrictives ran, so a context that could not update a
+  // chart rewrote it (and took ownership) through `upsert`. createMany
+  // with skipDuplicates likewise relabelled existing nodes it matched.
+
+  describe('v2.6.1 — upsert on an existing node applies the update row filter', () => {
+    const u = (s: string) => id(`f7-${s}`);
+    const U1 = { uid: 'u1', tid: 't1', canCreateChart: true };
+    const U2 = { uid: 'u2', tid: 't1', canCreateChart: true };
+
+    async function chart(
+      chartId: string,
+    ): Promise<Record<string, unknown> | undefined> {
+      const rows = await run(
+        'MATCH (c {id: $chartId}) RETURN c.ownerId AS ownerId, c.title AS title, labels(c) AS labels',
+        { chartId },
+      );
+      return rows[0];
+    }
+
+    beforeAll(async () => {
+      await run(
+        `CREATE (:ItResource:ItChart {id: $c2, runId: $runId, ownerId: 'u2', tenantId: 't1', secret: false, title: 'orig'})
+         CREATE (:ItResource:ItChart {id: $own, runId: $runId, ownerId: 'u2', tenantId: 't1', secret: false, title: 'orig'})
+         CREATE (:ItResource:ItChart {id: $lab, runId: $runId, ownerId: 'u2', tenantId: 't1', secret: false, title: 'orig'})
+         CREATE (:ItResource:ItChart {id: $cm, runId: $runId, ownerId: 'u2', tenantId: 't1', secret: false, title: 'orig'})`,
+        { c2: u('c2'), own: u('own'), lab: u('lab'), cm: u('cm') },
+      );
+    });
+
+    it('a context that cannot update the chart cannot rewrite it (or take ownership) through upsert', async () => {
+      const result = await bound(U1)
+        .model('ItChart')
+        .upsert({
+          where: { id: u('c2') },
+          create: { id: u('c2'), runId, tenantId: 't1', ownerId: 'u1' },
+          update: { title: 'hijacked', ownerId: 'u1' },
+          selectionSet: '{ id }',
+        });
+      expect(result).toBeNull();
+      expect(await chart(u('c2'))).toMatchObject({
+        ownerId: 'u2',
+        title: 'orig',
+      });
+      const rows = await run('MATCH (c {id: $cid}) RETURN count(c) AS c', {
+        cid: u('c2'),
+      });
+      expect(Number(rows[0].c)).toBe(1);
+    });
+
+    it('matches the direct update, which matches 0 rows', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id: u('c2') },
+          update: { title: 'direct' },
+          selectionSet: '{ id }',
+        });
+      expect(res.itCharts).toEqual([]);
+      expect(await chart(u('c2'))).toMatchObject({ title: 'orig' });
+    });
+
+    it("the owner's upsert still updates the chart", async () => {
+      const result = await bound(U2)
+        .model('ItChart')
+        .upsert({
+          where: { id: u('own') },
+          create: { id: u('own'), runId, tenantId: 't1', ownerId: 'u2' },
+          update: { title: 'mine' },
+          selectionSet: '{ id title }',
+        });
+      expect(result).toEqual({ id: u('own'), title: 'mine' });
+      expect(await chart(u('own'))).toMatchObject({
+        ownerId: 'u2',
+        title: 'mine',
+      });
+    });
+
+    it('the create path still creates under the create policy', async () => {
+      const result = await bound(U1)
+        .model('ItChart')
+        .upsert({
+          where: { id: u('new') },
+          create: {
+            id: u('new'),
+            runId,
+            tenantId: 't1',
+            ownerId: 'u1',
+            secret: false,
+            title: 'fresh',
+          },
+          update: { title: 'never' },
+          selectionSet: '{ id title }',
+        });
+      expect(result).toEqual({ id: u('new'), title: 'fresh' });
+      expect(await chart(u('new'))).toMatchObject({
+        ownerId: 'u1',
+        title: 'fresh',
+      });
+    });
+
+    it('runtime labels are not added to an existing chart the context cannot update', async () => {
+      await bound(U1)
+        .model('ItChart')
+        .upsert({
+          where: { id: u('lab') },
+          create: { id: u('lab'), runId, tenantId: 't1', ownerId: 'u1' },
+          update: { title: 'x' },
+          labels: ['ItF7Extra'],
+        });
+      const c = await chart(u('lab'));
+      expect(c?.labels).not.toContain('ItF7Extra');
+      expect(c).toMatchObject({ title: 'orig' });
+    });
+
+    it('createMany skipDuplicates does not relabel an existing chart the context cannot update', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .createMany({
+          data: [
+            { id: u('cm'), runId, tenantId: 't1', ownerId: 'u1' },
+            { id: u('cm-new'), runId, tenantId: 't1', ownerId: 'u1' },
+          ],
+          skipDuplicates: true,
+          labels: ['ItF7Extra'],
+        });
+      expect(res.count).toBe(1);
+      expect((await chart(u('cm')))?.labels).not.toContain('ItF7Extra');
+      expect((await chart(u('cm-new')))?.labels).toContain('ItF7Extra');
+    });
+
+    it("createMany skipDuplicates still relabels the owner's existing chart", async () => {
+      await bound(U2)
+        .model('ItChart')
+        .createMany({
+          data: [{ id: u('cm'), runId, tenantId: 't1', ownerId: 'u2' }],
+          skipDuplicates: true,
+          labels: ['ItF7Extra'],
+        });
+      expect((await chart(u('cm')))?.labels).toContain('ItF7Extra');
+    });
+  });
 });

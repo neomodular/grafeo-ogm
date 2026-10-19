@@ -1,7 +1,10 @@
 import { DocumentNode } from 'graphql';
 import { Driver, int as neo4jInt } from 'neo4j-driver';
 import { FulltextCompiler } from './compilers/fulltext.compiler';
-import { MutationCompiler } from './compilers/mutation.compiler';
+import {
+  MutationCompiler,
+  type MatchGuard,
+} from './compilers/mutation.compiler';
 import { SelectNormalizer } from './compilers/select-normalizer';
 import {
   SelectionCompiler,
@@ -1427,9 +1430,13 @@ export class Model<
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
       );
 
-    // MERGE has no WHERE we can stitch into so we evaluate restrictives
-    // against both `create` and `update` inputs at the application layer.
-    // Permissive default-deny applies — see PolicyDeniedError.
+    // WITH CHECK restrictives are evaluated against both `create` and
+    // `update` inputs at the application layer. Permissive default-deny
+    // applies — see PolicyDeniedError. v2.6.1 — the `update` ROW filter is
+    // also applied, to the node the MERGE matches (`compileUpdateGuard`):
+    // an existing node the context cannot update is left untouched and the
+    // call returns null, as a direct `update` matches 0 rows. Pre-2.6.1
+    // only the WITH CHECK ran, so any existing node could be rewritten.
     const updatePolicy = this.resolvePolicyContext('update', params.unsafe);
     const createPolicy = this.resolvePolicyContext('create', params.unsafe);
     this.assertNotDeniedAtCompile(updatePolicy, 'update');
@@ -1454,17 +1461,18 @@ export class Model<
       params.create as Record<string, unknown> | undefined,
     );
 
+    // Shared counter so the update guard's and the selection's params don't
+    // collide with anything already in mergeParams.
+    const paramCounter = { count: 0 };
     const { cypher, params: mergeParams } = this.mutationCompiler.compileMerge(
       params.where as Record<string, unknown>,
       params.create as Record<string, unknown>,
       params.update as Record<string, unknown>,
       this.nodeDef,
       params.labels,
+      this.compileUpdateGuard(updatePolicy, paramCounter, ['__matched']),
     );
 
-    // Shared counter so the selection's connection-where params don't collide
-    // with anything already in mergeParams.
-    const paramCounter = { count: 0 };
     const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
     let finalCypher: string;
     if (params.select)
@@ -1513,12 +1521,30 @@ export class Model<
       params.data as unknown as TCreateInput[],
     );
 
+    // v2.6.1 — with skipDuplicates, default-mode `labels` are also SET on
+    // the EXISTING nodes the MERGE matches: a label change, gated by the
+    // `update` row filter as `setLabels` is. Pre-2.6.1 every matched node
+    // was relabelled. No compile-time throw: the call is a create, and a
+    // context without an update permissive simply relabels no matched node.
+    // (`policyContext` is null exactly when no policy is bound or a bypass
+    // is active, so the update bundle is resolved only when it can apply.)
+    const updateGuard =
+      policyContext &&
+      params.skipDuplicates &&
+      params.labels &&
+      params.labels.length > 0
+        ? this.compileUpdateGuard(
+            this.resolvePolicyContext('update', params.unsafe),
+            { count: 0 },
+          )
+        : undefined;
     const { cypher, params: mutParams } =
       this.mutationCompiler.compileCreateMany(
         params.data as Record<string, unknown>[],
         this.nodeDef,
         params.skipDuplicates,
         params.labels,
+        updateGuard,
       );
 
     const result = await this.executor.execute(
@@ -1922,6 +1948,31 @@ export class Model<
     input: Record<string, unknown> | undefined,
   ): void {
     evaluateWriteRestrictives(bundle, this.nodeDef.typeName, operation, input);
+  }
+
+  /**
+   * v2.6.1 — the root `update` row filter on `n`, for a MERGE-based write
+   * (upsert, createMany with skipDuplicates) to apply to the nodes it
+   * MATCHES. The same clause a direct `update` puts in its WHERE
+   * (permissives OR-ed, restrictives AND-ed, `false` when no permissive
+   * applies). `undefined` when no policy is bound, a bypass is active, the
+   * type has no `update` policy or an override fires — the MERGE is then
+   * compiled exactly as before.
+   */
+  private compileUpdateGuard(
+    bundle: PolicyContextBundle | null,
+    paramCounter: { count: number },
+    preserveVars: ReadonlyArray<string> = [],
+  ): MatchGuard | undefined {
+    if (!bundle) return undefined;
+    const guard = this.whereCompiler.compile(
+      undefined,
+      'n',
+      this.nodeDef,
+      paramCounter,
+      { policyContext: bundle, preserveVars },
+    );
+    return guard.cypher ? guard : undefined;
   }
 
   private defaultSelection(): SelectionNode[] {

@@ -38,6 +38,17 @@ export interface MutationResult {
 }
 
 /**
+ * v2.6.1 — a row filter on `n` that gates the MATCH side of a MERGE (the
+ * root type's `update` policy, compiled by `WhereCompiler.compile`). An
+ * empty `cypher` means "no filter" and leaves the emitted Cypher unchanged.
+ */
+export interface MatchGuard {
+  cypher: string;
+  params: Record<string, unknown>;
+  preludes?: string[];
+}
+
+/**
  * Where a connect / disconnect is emitted: its source variable, the WITH
  * that carries every variable still needed, and a prefix that keeps its
  * variables, params and aliases unique when nested (v2.4.8).
@@ -877,6 +888,12 @@ export class MutationCompiler {
   /**
    * Generate MERGE (upsert) Cypher with ON CREATE SET / ON MATCH SET.
    * Scalar properties only — nested relationship ops are not supported.
+   *
+   * v2.6.1 — `updateGuard` is the root type's `update` row filter on `n`
+   * (compiled by the caller with `preserveVars: ['__matched']`). When it
+   * is non-empty, an EXISTING node is updated only when it passes the
+   * guard, exactly like a direct `update`; one that fails it is left
+   * untouched and no row is returned. See `buildGuardedMerge`.
    */
   compileMerge(
     where: Record<string, unknown>,
@@ -884,6 +901,7 @@ export class MutationCompiler {
     update: Record<string, unknown>,
     nodeDef: NodeDefinition,
     labels?: string[],
+    updateGuard?: MatchGuard,
   ): MutationResult {
     const labelStr = this.getCachedLabelString(nodeDef);
     const lines: string[] = [];
@@ -1020,10 +1038,21 @@ export class MutationCompiler {
       updateSets.push(`n.${escapeIdentifier(key)} = ${valueExpr}`);
       params[paramName] = coerceWriteValue(value, propDef);
     }
-    if (updateSets.length > 0)
+    if (updateGuard !== undefined && updateGuard.cypher !== '') {
+      const guarded = buildGuardedMerge(
+        labelStr,
+        mergeProps,
+        updateGuard,
+        updateSets,
+        params,
+      );
+      lines.unshift(...guarded.before);
+      lines.push(...guarded.after);
+    } else if (updateSets.length > 0)
       lines.push(`ON MATCH SET ${updateSets.join(', ')}`);
 
-    // Extra labels
+    // Extra labels. v2.6.1 — with an update guard, the rows that reach this
+    // SET are the created node and an existing node that passed the guard.
     if (labels && labels.length > 0 && !labelsOnCreate) {
       const validatedLabels = labels.map((l) => assertSafeLabel(l)).join(':');
       lines.push(`SET n:${validatedLabels}`);
@@ -1100,6 +1129,14 @@ export class MutationCompiler {
     nodeDef: NodeDefinition,
     skipDuplicates?: boolean,
     labels?: string[],
+    /**
+     * v2.6.1 — the root type's `update` row filter on `n`. With
+     * `skipDuplicates` and default-mode `labels`, an EXISTING node the
+     * MERGE matched is relabelled only when it passes this guard (a label
+     * change is an update, as `setLabels` enforces); created nodes get the
+     * labels in `ON CREATE SET`.
+     */
+    updateGuard?: MatchGuard,
   ): MutationResult {
     if (data.length === 0) return { cypher: 'RETURN 0 AS count', params: {} };
 
@@ -1189,6 +1226,14 @@ export class MutationCompiler {
 
     lines.push('UNWIND $items AS item');
 
+    const guardedLabels =
+      Boolean(skipDuplicates) &&
+      !this.strictMode.strict &&
+      labels !== undefined &&
+      labels.length > 0 &&
+      updateGuard !== undefined &&
+      updateGuard.cypher !== '';
+
     if (skipDuplicates) {
       // MERGE key: the unique/id fields EVERY item supplies — an item
       // missing one would MERGE on null, which Neo4j rejects.
@@ -1244,7 +1289,13 @@ export class MutationCompiler {
       }
 
       // v2.6.0 — strict: labels only on the nodes MERGE creates.
-      if (this.strictMode.strict && labels && labels.length > 0)
+      // v2.6.1 — also with an update guard: the matched nodes are
+      // relabelled below, only where the guard passes.
+      if (
+        (this.strictMode.strict || guardedLabels) &&
+        labels &&
+        labels.length > 0
+      )
         onCreateSets.push(
           `n:${labels.map((l) => assertSafeLabel(l)).join(':')}`,
         );
@@ -1276,7 +1327,21 @@ export class MutationCompiler {
     }
 
     // Extra labels
-    if (
+    if (guardedLabels) {
+      // v2.6.1 — matched nodes are relabelled only where the update guard
+      // passes. Pre-2.6.1 `SET n:<labels>` ran on every node the MERGE
+      // returned, so an existing node the context could not update was
+      // relabelled. FOREACH keeps one row per item (invariant 2).
+      const validatedLabels = labels!.map((l) => assertSafeLabel(l)).join(':');
+      mergeParams(params, updateGuard!.params);
+      lines.push('WITH n');
+      if (updateGuard!.preludes && updateGuard!.preludes.length > 0)
+        lines.push(...updateGuard!.preludes);
+      lines.push(
+        `FOREACH (__l IN CASE WHEN ${updateGuard!.cypher} THEN [1] ELSE [] END | SET n:${validatedLabels})`,
+      );
+      this.labelsOnMatchedNodes(nodeDef, 'createMany');
+    } else if (
       labels &&
       labels.length > 0 &&
       !(skipDuplicates && this.strictMode.strict)
@@ -3253,6 +3318,56 @@ function upsertRelationshipError(
     `upsert does not support relationship fields: "${key}" in "${branch}" (${nodeDef.typeName}). ` +
       `Use create() / update() for nested relationship operations.`,
   );
+}
+
+/**
+ * v2.6.1 — the lines around an upsert MERGE that apply the root type's
+ * `update` row filter to the node it MATCHES, as a direct `update` does:
+ *
+ *   OPTIONAL MATCH (__existing:L { key })        ┐ before
+ *   WITH count(__existing) > 0 AS __matched      ┘
+ *   MERGE (n:L { key })
+ *   ON CREATE SET …
+ *   WITH n, __matched                            ┐ after
+ *   [@cypher preludes of the guard]              │
+ *   WHERE NOT __matched OR (<guard>)             │
+ *   FOREACH (__u IN CASE WHEN __matched THEN [1] ELSE [] END | SET …)
+ *
+ * A created node passes untouched by the update sets; an existing node is
+ * updated only when it passes the guard; one that fails it is neither
+ * updated nor returned (and the MERGE created nothing). Pre-2.6.1 the
+ * update went in `ON MATCH SET` with no row filter, so any context the
+ * WITH CHECK admitted rewrote any existing node — even its owner field.
+ *
+ * `count()` keeps one row before the MERGE whether 0, 1 or several nodes
+ * match (invariant 2); FOREACH needs no subquery after the write
+ * (invariant 1). Under a race, a node created between the OPTIONAL MATCH
+ * and the MERGE is matched with `__matched = false`: its properties are
+ * not updated (default-mode runtime `labels`, SET after this, still are).
+ */
+function buildGuardedMerge(
+  labelStr: string,
+  mergeProps: string[],
+  guard: MatchGuard,
+  updateSets: string[],
+  params: Record<string, unknown>,
+): { before: string[]; after: string[] } {
+  mergeParams(params, guard.params);
+  const after = ['WITH n, __matched'];
+  if (guard.preludes && guard.preludes.length > 0)
+    after.push(...guard.preludes);
+  after.push(`WHERE NOT __matched OR (${guard.cypher})`);
+  if (updateSets.length > 0)
+    after.push(
+      `FOREACH (__u IN CASE WHEN __matched THEN [1] ELSE [] END | SET ${updateSets.join(', ')})`,
+    );
+  return {
+    before: [
+      `OPTIONAL MATCH (__existing:${labelStr} { ${mergeProps.join(', ')} })`,
+      'WITH count(__existing) > 0 AS __matched',
+    ],
+    after,
+  };
 }
 
 /** `null` / `{}`: the whole-relationship (blanket) form, never per member. */

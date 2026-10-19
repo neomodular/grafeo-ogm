@@ -19,7 +19,9 @@
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
  *   update item is iterating.
  * - F5 `disconnectItem`: blanket disconnect on a shared relationship type.
- * - F7 (policy suite only): `upsert` on an existing policy-guarded node.
+ *
+ * (F7, `upsert` on an existing policy-guarded node in the policy suite, was
+ * fixed in v2.6.1 and is generated again.)
  *
  * Generated rarely or in the runtime shape, because the generated TYPES
  * offer a shape the runtime rejects with OGMError (F3, F4 and the
