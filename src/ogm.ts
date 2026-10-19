@@ -106,6 +106,65 @@ function warnSharedRelationshipTypes(
   }
 }
 
+/**
+ * v2.6.2 — warn once per interface / union relationship field whose
+ * relationship type also links its source type to NON-member nodes through
+ * another field: a second field of the same type with that type and
+ * direction (`resources: [Resource]` and `vaults: [Vault]`, both `HAS`), or
+ * the inverse field of another type. Reads through the abstract field bind
+ * no target label, so they also return, count and match those nodes
+ * (`__typename: null`); strict mode restricts them to the member types.
+ */
+function warnAbstractReadsSharedTypes(
+  schema: SchemaMetadata,
+  strictMode: StrictMode,
+): void {
+  if (strictMode.strict) return;
+  const concrete = (typeName: string): string[] =>
+    schema.nodes.has(typeName)
+      ? [typeName]
+      : (schema.interfaces.get(typeName)?.implementedBy ??
+        schema.unions?.get(typeName) ??
+        []);
+  for (const node of schema.nodes.values())
+    for (const a of node.relationships.values()) {
+      if (schema.nodes.has(a.target)) continue;
+      const iface = schema.interfaces.get(a.target);
+      const kind = iface ? 'interface' : 'union';
+      const members = concrete(a.target);
+      if (members.length === 0) continue;
+      const others: string[] = [];
+      for (const b of node.relationships.values())
+        if (
+          b !== a &&
+          b.type === a.type &&
+          b.direction === a.direction &&
+          concrete(b.target).some((t) => !members.includes(t))
+        )
+          others.push(`${node.typeName}.${b.fieldName} (${b.target})`);
+      for (const other of schema.nodes.values()) {
+        if (members.includes(other.typeName)) continue;
+        for (const c of other.relationships.values())
+          if (
+            c.type === a.type &&
+            c.direction !== a.direction &&
+            concrete(c.target).includes(node.typeName)
+          )
+            others.push(
+              `${other.typeName}.${c.fieldName} (${c.target}, ${c.direction})`,
+            );
+      }
+      for (const o of others)
+        strictMode.warn(
+          'abstract-read-shared-type',
+          `${node.typeName}\u0000${a.fieldName}\u0000${o}`,
+          `${node.typeName}.${a.fieldName} (${kind} ${a.target}) shares relationship type "${a.type}" (${a.direction}) with ` +
+            `${o}: reads through it also return, count and match the non-member nodes linked that way.`,
+          'restrict every read of an interface / union field to its member types',
+        );
+    }
+}
+
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
   C extends PolicyContext = PolicyContext,
@@ -245,6 +304,7 @@ export class OGM<
     };
 
     warnSharedRelationshipTypes(this.schema, strictMode);
+    warnAbstractReadsSharedTypes(this.schema, strictMode);
 
     // Build the policy registry and validate against the schema. An OGM
     // configured WITHOUT policies builds an empty registry — all model

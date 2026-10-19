@@ -83,6 +83,8 @@ describeLive(
     let driver: Driver;
     let plain: OGM;
     let allowAll: OGM;
+    let strictPlain: OGM;
+    let strictAllowAll: OGM;
     const stats = new OutcomeStats('allow-all-equivalence');
 
     beforeAll(async () => {
@@ -93,6 +95,14 @@ describeLive(
       allowAll = new OGM({
         typeDefs,
         driver,
+        policies: allowAllPolicies,
+        policyDefaults: { auditMetadata: false },
+      });
+      strictPlain = new OGM({ typeDefs, driver, strict: true });
+      strictAllowAll = new OGM({
+        typeDefs,
+        driver,
+        strict: true,
         policies: allowAllPolicies,
         policyDefaults: { auditMetadata: false },
       });
@@ -111,13 +121,14 @@ describeLive(
     it('random reads return the same rows', async () => {
       await checkProperty(
         'allow-all/read',
-        // EXCLUDED (finding F8): without policies, a read through the
-        // INTERFACE field `resources` (nested selection, connection,
-        // `totalCount`, `resources_SOME` / `_ALL` filters) also returns /
-        // counts / matches `ItPVault` nodes, which share its relationship
-        // type but are not implementors; the per-member policy CASE of the
-        // allow-all OGM filters them out. Reads naming `resources` are not
-        // compared until fixed.
+        // EXCLUDED in default mode (finding F8, strict since v2.6.2):
+        // without policies, a read through the INTERFACE field `resources`
+        // (nested selection, connection, `totalCount`, `resources_SOME` /
+        // `_ALL` filters) also returns / counts / matches `ItPVault` nodes,
+        // which share its relationship type but are not implementors; the
+        // per-member policy CASE of the allow-all OGM filters them out. 2.x
+        // keeps that result by default; the strict variant below compares
+        // these reads too.
         readOp(2, false).filter(
           (op) => !JSON.stringify(op).includes('resources'),
         ),
@@ -129,6 +140,34 @@ describeLive(
             runRead(bound(), op, runId, tx),
           );
           stats.add(`read ${a.ok ? 'ok' : a.kind}`);
+          const ka = outcomeKey(a);
+          const kb = outcomeKey(b);
+          if (ka !== kb)
+            throw new Error(
+              redact(`no policies:\n  ${ka}\nallow-all:\n  ${kb}`, runId),
+            );
+        },
+        200,
+      );
+    });
+
+    it('strict: random reads return the same rows, interface fields included', async () => {
+      // v2.6.2 — strict mode restricts every read of an abstract field to
+      // its members (finding F8), so a policy-free OGM reads exactly what
+      // the allow-all one does, `resources` included.
+      const strictBound = () =>
+        strictAllowAll.withContext({ uid: 'u1', tid: 't1' });
+      await checkProperty(
+        'allow-all/read-strict',
+        readOp(2, false),
+        async (op) => {
+          const a = await inRollback(driver, (tx) =>
+            runRead(strictPlain, op, runId, tx),
+          );
+          const b = await inRollback(driver, (tx) =>
+            runRead(strictBound(), op, runId, tx),
+          );
+          stats.add(`strict read ${a.ok ? 'ok' : a.kind}`);
           const ka = outcomeKey(a);
           const kb = outcomeKey(b);
           if (ka !== kb)

@@ -755,7 +755,7 @@ export class WhereCompiler {
       });
       return {
         user: plain.cypher,
-        policy: '',
+        policy: this.strictMemberRestriction(targetDef.typeName, targetVar),
         params: plain.params,
         preludes: plain.preludes ?? [],
       };
@@ -807,10 +807,40 @@ export class WhereCompiler {
     mergeParams(params, policyPart.params);
     return {
       user: userPart.cypher,
-      policy: policyPart.cypher ?? '',
+      // A member clause already starts with the member-label disjunction.
+      policy:
+        policyPart.cypher ??
+        this.strictMemberRestriction(targetDef.typeName, targetVar),
       params,
       preludes: [...(userPart.preludes ?? []), ...policyPart.preludes],
     };
+  }
+
+  /**
+   * v2.6.2 — strict mode: the member-label disjunction `(v:A OR v:B)`
+   * restricting an interface / union target to its member types, `''`
+   * otherwise (and always `''` in 2.x default mode).
+   *
+   * An abstract target binds no label in the read pattern, so the
+   * relationship type alone decides what it reaches. When another field
+   * shares that type (`resources: [Resource]` and `vaults: [Vault]`, both
+   * `HAS`), every read through the abstract field — nested selection,
+   * connection edges and `totalCount`, `_SOME` / `_NONE` / `_ALL` /
+   * `_SINGLE`, connection and null filters, count / aggregate — also
+   * returned, counted or matched the other field's nodes, with
+   * `__typename: null` (warned once at OGM construction). The writes were
+   * restricted in v2.5.1. Like a target policy, the restriction sits
+   * outside every negation, so `_ALL` / `_NONE` judge member nodes only.
+   *
+   * @internal
+   */
+  strictMemberRestriction(typeName: string, varName: string): string {
+    if (!this.strictMode.strict) return '';
+    const members = this.abstractMembers(typeName)?.filter((m) =>
+      this.schema.nodes.has(m),
+    );
+    if (!members || members.length === 0) return '';
+    return `(${members.map((m) => `${varName}:${escapeIdentifier(m)}`).join(' OR ')})`;
   }
 
   private compileConditions(
@@ -1116,7 +1146,11 @@ export class WhereCompiler {
           nodeScope,
         )
       : null;
-    const policy = target?.policy ?? '';
+    // v2.6.2 — strict: an abstract target is restricted to its members
+    // even without a policy (`strictMemberRestriction`).
+    const policy = target
+      ? target.policy
+      : this.strictMemberRestriction(targetNodeDef.typeName, relVar);
     if (target) mergeParams(innerParams, target.params);
 
     // Stitch the inner preludes (CALL { ... } + WITH ...) INSIDE the
@@ -1802,7 +1836,8 @@ export class WhereCompiler {
     exists: boolean,
   ): string {
     const relDef = nodeDef.relationships.get(field)!;
-    if (!resolveTargetDef(relDef.target, this.schema))
+    const targetDef = resolveTargetDef(relDef.target, this.schema);
+    if (!targetDef)
       throw new OGMError(
         `Cannot resolve the target type "${relDef.target}" of relationship "${field}".`,
       );
@@ -1820,9 +1855,10 @@ export class WhereCompiler {
       // rows match.
       schema: this.schema,
     });
-    return exists
-      ? `EXISTS { MATCH ${pattern} }`
-      : `NOT EXISTS { MATCH ${pattern} }`;
+    // v2.6.2 — strict: only member nodes count (`strictMemberRestriction`).
+    const members = this.strictMemberRestriction(targetDef.typeName, relVar);
+    const body = members ? `${pattern} WHERE ${members}` : pattern;
+    return exists ? `EXISTS { MATCH ${body} }` : `NOT EXISTS { MATCH ${body} }`;
   }
 
   private compileEdgeConditions(

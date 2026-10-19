@@ -1123,6 +1123,23 @@ await books.find({ selectionSet: '{ reviewsConnection { edges { a: node { id } b
 
 `properties` keys inside one `edges` work the same way.
 
+#### 11. Reads of an interface / union field whose relationship type another field shares
+
+```graphql
+type User @node {
+  resources: [Resource!]! @relationship(type: "HAS", direction: OUT) # interface Resource = Doc | Image
+  vaults: [Vault!]! @relationship(type: "HAS", direction: OUT)
+}
+```
+
+```typescript
+await users.find({ select: { resources: { select: { id: true } } } });
+// default: [(n)-[:HAS]->(n0) | …]                          — the vaults too, with __typename null (warned once when the OGM is built)
+// strict:  [(n)-[:HAS]->(n0) WHERE (n0:Doc OR n0:Image) | …] — only the members
+```
+
+Every read path is restricted (since 2.6.2): nested lists, connection `edges` and `totalCount`, `resources_SOME` / `_NONE` / `_ALL` / `_SINGLE`, connection filters, `resources: null`, `count` and `aggregate`. Writes were restricted in 2.5.1.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
