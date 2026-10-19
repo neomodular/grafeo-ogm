@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.5.2 (2026-10-18) — security fix
+
+> **Security patch.** Fixes an authorization bypass in nested `connect` / `disconnect` under node-level security. Affects **2.4.8–2.5.1** (the releases that support a connect nested in a connect item and a disconnect nested in a disconnect item). OGMs without `policies` are unaffected and compile byte-identical Cypher. Upgrade if you use `policies`.
+
+### Security
+
+- **A nested connect / disconnect could write a node the context could only read.** A `connect` nested in a connect item (`connect: { charts: [{ where, connect: { categories: [...] } }] }`) and a `disconnect` nested in a disconnect item link and unlink the *intermediate* node's own relationships. The intermediate was gated only by its `read` policy, never its `update` policy. So a context that could read a chart, but not update it, could link or unlink that chart's categories through any root it could update, while the direct `Chart.update({ connect | disconnect })` correctly did nothing. This affected `create`, `update` and `updateMany`, nested connects inside an update body item, per-member union / interface shapes, deeper chains, and blanket nested disconnects (`disconnect: { categories: null }`). The intermediate now has to pass its `update` policy before any nested connect or disconnect runs on it. The outer link or unlink still needs `read` only.
+
+### Behavior change
+
+- A nested connect / disconnect through a node the context can only read now links / unlinks nothing on that node. The outer link or unlink to it still happens. Under `policyDefaults: { onDeny: 'throw' }`, when no `update` permissive applies to the intermediate's type, the write throws `PolicyDeniedError` (operation `update`) before it reaches the database, as the direct update does.
+
 ## 2.5.1 (2026-10-18) — regression fixes
 
 > **Patch release.** Fixes regressions introduced in **2.4.8** (writes) and a `db push --force-drop` bug. No API changes.
