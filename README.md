@@ -1173,6 +1173,18 @@ await plans.find({ selectionSet: '{ id ownerzAggregate { count } }' }); // no re
 
 A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection`, `<relationship>Aggregate { … }` (since 2.7.0, see [Relationship aggregate selections](#relationship-aggregate-selections)) or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check, and an aggregate's own keys (`count`, `node`, `edge`, the aggregates) are validated by the aggregate itself, in both modes. In 2.6.3 every `<relationship>Aggregate` was reported unknown, because the OGM did not compile it; since 2.7.0 it returns the aggregate and does not warn. Only a bare `ownersAggregate` without a selection of aggregates is still unknown.
 
+#### 13. A nested delete that reaches a node the update still holds (since 2.7.1)
+
+A nested `delete` whose target type is the type of the root, or of an enclosing nested-update target, can delete that node through a cycle: a chart's tags' charts include the chart itself.
+
+```typescript
+await charts.updateMany({ where: { id_IN: ['c1', 'c4'] }, data: { tags: [{ update: { node: { charts: [{ delete: [{}] }] } } }] } });
+// default: { count: 2 } — the deleted roots are still counted (and warns)
+// strict:  { count: 0 } — a deleted root is neither counted nor returned, and its remaining nested writes are skipped
+```
+
+By default the statement compiles exactly as in 2.7.0. When a later clause reads or writes the deleted node (the `update` response, a nested `create` or `connect` from it), the server rejects the statement with `Neo.ClientError.Statement.EntityNotFound`. Since 2.7.1, when the OGM owns the transaction (auto-commit, or a caller `session`), it then re-runs the statement once with the deleted node's remaining writes skipped, so `update` returns the surviving roots. In a caller `transaction` the server has already rolled the transaction back, so the error is still thrown (and warned about once). Strict mode compiles the guard up front, in every transaction.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

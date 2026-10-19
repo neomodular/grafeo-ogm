@@ -15,7 +15,8 @@
  *
  * Excluded because of an OPEN FINDING (each marked at its generator, with
  * the finding id; remove the exclusion with the fix):
- * - F1 `updateItem`: nested `delete` whose target type is an ancestor.
+ * - F1 `writeOp` (default mode only): nested `delete` whose target type is
+ *   an ancestor; generated with `cycleDelete` for a strict OGM (v2.7.1).
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
  *   update item is iterating (explosive, not a hang; see the generator).
  * - F5 `writeOp` (default mode only): blanket disconnect on a shared
@@ -655,6 +656,53 @@ export function hasSharedBlanketDisconnect(op: unknown): boolean {
   return walk(op, undefined);
 }
 
+/**
+ * FINDING F1 (default mode only): a nested `delete` inside an `update` /
+ * `updateMany` whose target type is the type of an enclosing node — the
+ * root or an enclosing nested-update target (chart -> tags -> charts). When
+ * it deletes that node, default mode keeps v2.7.0's statement: a later
+ * clause that touches the node fails with `EntityNotFound` (re-run with the
+ * guard only outside a caller transaction, and the suites run in one) and
+ * `updateMany` counts a deleted root. `strict: true` (v2.7.1) skips the
+ * deleted node's remaining writes and leaves a deleted root out.
+ */
+export function hasCycleDelete(op: unknown): boolean {
+  const o = op as Rec;
+  if (o?.kind !== 'update' && o?.kind !== 'updateMany') return false;
+  const asArray = (x: unknown): Rec[] =>
+    (Array.isArray(x) ? x : x == null ? [] : [x]) as Rec[];
+  const walk = (type: string, body: unknown, held: string[]): boolean => {
+    if (!body || typeof body !== 'object') return false;
+    const inner = [...held, type];
+    for (const def of RELS[type] ?? []) {
+      const value = (body as Rec)[def.field];
+      if (value == null) continue;
+      const perMember: Array<[string | undefined, unknown]> =
+        def.kind === 'union'
+          ? Object.entries(value as Rec)
+          : [[undefined, value]];
+      for (const [member, list] of perMember)
+        for (const item of asArray(list)) {
+          const targets = member ? [member] : def.members;
+          if (item.delete && targets.some((t) => inner.includes(t)))
+            return true;
+          const node = (item.update as Rec | undefined)?.node as
+            | Rec
+            | undefined;
+          if (!node) continue;
+          if (member) {
+            if (walk(member, node, inner)) return true;
+          } else if (def.kind === 'interface') {
+            for (const m of def.members)
+              if (m in node && walk(m, node[m], inner)) return true;
+          } else if (walk(def.members[0], node, inner)) return true;
+        }
+    }
+    return false;
+  };
+  return walk(o.model as string, o.kind === 'update' ? o.update : o.data, []);
+}
+
 /** `<Target>DeleteInput` — cascade below a delete item. */
 function deleteInputOf(type: string, depth: number): fc.Arbitrary<Rec> {
   const rels = (RELS[type] ?? []).filter((d) => d.kind !== 'union');
@@ -785,14 +833,11 @@ function updateItem(
     ops.connect = connectItems(connectItem(def, member, depth));
     ops.create = items(createItem(def, member, depth));
   }
-  // EXCLUDED (finding F1): a nested `delete` whose target type is an
-  // ANCESTOR of this update item (a cycle such as chart -> tags -> charts)
-  // can delete the root or an intermediate node, and the rest of the
-  // statement then fails on the server with
-  // `Neo.ClientError.Statement.EntityNotFound`. Not generated until fixed.
-  const targets = member ? [member] : def.members;
-  if (!targets.some((t) => path.types.includes(t)))
-    ops.delete = items(deleteItem(def, member, depth));
+  // A nested `delete` whose target type is an ANCESTOR of this update item
+  // (a cycle such as chart -> tags -> charts) can delete the root or an
+  // intermediate node (finding F1). Generated always; `writeOp` keeps it
+  // only with `cycleDelete` (a strict OGM, see `hasCycleDelete`).
+  ops.delete = items(deleteItem(def, member, depth));
   return fc
     .tuple(
       fc.option(connectionWhere(def, member, 1), { nil: undefined }),
@@ -904,6 +949,11 @@ export interface WriteOptions {
    * OGM with `strict: true`, which restricts it to the field's target.
    */
   sharedBlanketDisconnect?: boolean;
+  /**
+   * Also generate F1's shape (`hasCycleDelete`): only for an OGM with
+   * `strict: true`, which skips a deleted node's remaining writes (v2.7.1).
+   */
+  cycleDelete?: boolean;
 }
 
 /** A random write: any model method, nested ops up to `depth` (≤ 3). */
@@ -1005,8 +1055,9 @@ export function writeOp(opts: WriteOptions = {}): fc.Arbitrary<WriteOp> {
     .map(renumberCreates)
     .filter(
       (op) =>
-        opts.sharedBlanketDisconnect === true ||
-        !hasSharedBlanketDisconnect(op),
+        (opts.sharedBlanketDisconnect === true ||
+          !hasSharedBlanketDisconnect(op)) &&
+        (opts.cycleDelete === true || !hasCycleDelete(op)),
     );
 }
 

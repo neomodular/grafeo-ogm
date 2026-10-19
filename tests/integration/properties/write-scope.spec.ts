@@ -17,7 +17,8 @@
  *
  * The strict variant runs a `strict: true` OGM on the same writes plus the
  * shapes only strict mode keeps in scope: a blanket disconnect on a
- * relationship type two fields share (finding F5, v2.6.0 strict item 4).
+ * relationship type two fields share (finding F5, v2.6.0 strict item 4),
+ * and a nested delete reached through a cycle (finding F1, v2.7.1).
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
  * in afterAll; every case runs in a rolled-back transaction.
@@ -25,7 +26,11 @@
 import fc from 'fast-check';
 import type { Driver } from 'neo4j-driver';
 import { OGM } from '../../../src/ogm';
-import { hasSharedBlanketDisconnect, writeOp } from './arbitraries';
+import {
+  hasCycleDelete,
+  hasSharedBlanketDisconnect,
+  writeOp,
+} from './arbitraries';
 import { runWrite } from './exec';
 import {
   checkProperty,
@@ -117,15 +122,15 @@ describeLive('Property 3 — write scope (live Neo4j)', () => {
     );
   });
 
-  it('strict: the same, blanket disconnects on a shared relationship type included', async () => {
+  it('strict: the same, blanket disconnects on a shared relationship type and deletes through a cycle included', async () => {
     await checkProperty(
       'write-scope/strict',
-      writeOp({ depth: 3, sharedBlanketDisconnect: true }),
+      writeOp({ depth: 3, sharedBlanketDisconnect: true, cycleDelete: true }),
       (op) =>
         checkScope(
           strictOgm,
           op,
-          hasSharedBlanketDisconnect(op) ? 'strict F5 ' : 'strict ',
+          `strict ${hasSharedBlanketDisconnect(op) ? 'F5 ' : ''}${hasCycleDelete(op) ? 'F1 ' : ''}`,
         ),
       400,
     );
@@ -142,6 +147,21 @@ describeLive('Property 3 — write scope (live Neo4j)', () => {
         sharedBlanketDisconnect: true,
       }).filter(hasSharedBlanketDisconnect),
       (op) => checkScope(strictOgm, op, 'strict F5 '),
+      150,
+    );
+  });
+
+  it('strict: a nested delete reached through a cycle stays in scope', async () => {
+    // F1's shape alone (rare in the general generator).
+    await checkProperty(
+      'write-scope/strict-F1',
+      writeOp({
+        depth: 3,
+        kinds: ['update', 'updateMany'],
+        roots: ['ItPTag', 'ItPChart', 'ItPCategory'],
+        cycleDelete: true,
+      }).filter(hasCycleDelete),
+      (op) => checkScope(strictOgm, op, 'strict F1 '),
       150,
     );
   });

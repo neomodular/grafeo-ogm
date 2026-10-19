@@ -1,5 +1,5 @@
 import { DocumentNode } from 'graphql';
-import { Driver, int as neo4jInt } from 'neo4j-driver';
+import { Driver, int as neo4jInt, QueryResult } from 'neo4j-driver';
 import { FulltextCompiler } from './compilers/fulltext.compiler';
 import {
   MutationCompiler,
@@ -518,6 +518,69 @@ export class Model<
   }
 
   /**
+   * Run an `update` / `updateMany` statement built by `compile`.
+   *
+   * v2.7.1 — finding F1. A nested delete reached through a cycle (chart ->
+   * tags -> charts) can delete a node the statement still holds, and a
+   * later clause that reads or writes it fails with `EntityNotFound`.
+   * Strict mode compiles the alive guard up front. Default mode runs the
+   * v2.7.0 statement unchanged, so every statement that worked keeps its
+   * Cypher and result; when one with such a delete fails with
+   * `EntityNotFound` in a transaction the OGM owns (auto-commit, or a
+   * caller `session`), the failed attempt has been rolled back and it is
+   * re-run once with the guard: the deleted node's remaining writes are
+   * skipped and a deleted root is left out of the result. In a caller's
+   * `transaction` the server has already rolled the transaction back, so
+   * the error is rethrown (and warned about once).
+   */
+  private async executeUpdate(
+    compile: (guardDeleted: boolean) => {
+      cypher: string;
+      params: Record<string, unknown>;
+      cycleDelete?: boolean;
+    },
+    context: ExecutionContext | undefined,
+    operation: 'update' | 'updateMany',
+    audit: (
+      context: ExecutionContext | undefined,
+    ) => ExecutionContext | undefined,
+  ): Promise<QueryResult> {
+    const first = compile(this.strictMode.strict);
+    try {
+      return await this.executor.execute(
+        first.cypher,
+        first.params,
+        audit(context),
+      );
+    } catch (err) {
+      if (
+        !first.cycleDelete ||
+        this.strictMode.strict ||
+        (err as { code?: unknown } | null)?.code !==
+          'Neo.ClientError.Statement.EntityNotFound'
+      )
+        throw err;
+      if (context?.executionContext ?? context?.transaction) {
+        this.strictMode.warn(
+          'cycle-delete-in-transaction',
+          `${this.nodeDef.typeName}\u0000${operation}`,
+          `${operation} on ${this.nodeDef.typeName} failed with EntityNotFound: a nested delete reached through a cycle ` +
+            `removed a node the statement still reads or writes. Outside a caller transaction the OGM re-runs such ` +
+            `a statement with the deleted node's remaining writes skipped; in a caller transaction it cannot.`,
+          'skip the remaining writes of a deleted node, and leave a deleted root out of the result, in any transaction',
+        );
+        throw err;
+      }
+      const guarded = compile(true);
+      return this.executor.execute(
+        guarded.cypher,
+        guarded.params,
+        audit(context),
+      );
+    }
+  }
+
+  /**
    * Build `ExecutionContext` with audit metadata when policies are
    * configured. Preserves the user's transaction/session selection.
    */
@@ -1001,59 +1064,72 @@ export class Model<
       policyContext,
     );
 
-    const paramCounter = { count: 0 };
-    const whereResult = this.whereCompiler.compile(
-      params.where,
-      'n',
-      this.nodeDef,
-      paramCounter,
-      policyContext ? { policyContext } : undefined,
-    );
-
-    const { cypher, params: mutParams } = this.mutationCompiler.compileUpdate(
-      params.where ?? {},
-      params.update as Record<string, unknown> | undefined,
-      params.connect as Record<string, unknown> | undefined,
-      params.disconnect as Record<string, unknown> | undefined,
-      this.nodeDef,
-      whereResult,
-      params.labels,
-      'node',
-      // Thread the caller's update bundle + shared param counter so every
-      // connect/disconnect target MATCH AND-stitches the TARGET type's
-      // `read` policy (see MutationCompiler.buildTargetPolicyPredicate).
-      policyContext ?? undefined,
-      paramCounter,
-    );
-
-    const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
-    let finalCypher: string;
-    if (params.select)
-      finalCypher = this.applySelectToMutation(
-        cypher,
-        params.select,
-        mutParams,
+    const compile = (guardDeleted: boolean) => {
+      const paramCounter = { count: 0 };
+      const whereResult = this.whereCompiler.compile(
+        params.where,
+        'n',
+        this.nodeDef,
         paramCounter,
-        readPolicyContext,
-      );
-    else
-      finalCypher = this.applySelectionSetToMutation(
-        cypher,
-        params.selectionSet ?? this._selectionSet,
-        mutParams,
-        paramCounter,
-        readPolicyContext,
+        policyContext ? { policyContext } : undefined,
       );
 
-    const result = await this.executor.execute(
-      finalCypher,
-      mutParams,
-      this.withAuditMetadata(
-        params.context,
-        policyContext,
-        'update',
-        Boolean(params.unsafe?.bypassPolicies),
-      ),
+      const {
+        cypher,
+        params: mutParams,
+        cycleDelete,
+      } = this.mutationCompiler.compileUpdate(
+        params.where ?? {},
+        params.update as Record<string, unknown> | undefined,
+        params.connect as Record<string, unknown> | undefined,
+        params.disconnect as Record<string, unknown> | undefined,
+        this.nodeDef,
+        whereResult,
+        params.labels,
+        'node',
+        // Thread the caller's update bundle + shared param counter so every
+        // connect/disconnect target MATCH AND-stitches the TARGET type's
+        // `read` policy (see MutationCompiler.buildTargetPolicyPredicate).
+        policyContext ?? undefined,
+        paramCounter,
+        guardDeleted,
+      );
+
+      const readPolicyContext = this.resolvePolicyContext(
+        'read',
+        params.unsafe,
+      );
+      let finalCypher: string;
+      if (params.select)
+        finalCypher = this.applySelectToMutation(
+          cypher,
+          params.select,
+          mutParams,
+          paramCounter,
+          readPolicyContext,
+        );
+      else
+        finalCypher = this.applySelectionSetToMutation(
+          cypher,
+          params.selectionSet ?? this._selectionSet,
+          mutParams,
+          paramCounter,
+          readPolicyContext,
+        );
+      return { cypher: finalCypher, params: mutParams, cycleDelete };
+    };
+
+    const result = await this.executeUpdate(
+      compile,
+      params.context,
+      'update',
+      (context) =>
+        this.withAuditMetadata(
+          context,
+          policyContext,
+          'update',
+          Boolean(params.unsafe?.bypassPolicies),
+        ),
     );
     const summary = result.summary;
     const counters = summary.counters.updates();
@@ -1594,39 +1670,44 @@ export class Model<
       policyContext,
     );
 
-    const paramCounter = { count: 0 };
-    const whereResult = this.whereCompiler.compile(
-      params.where,
-      'n',
-      this.nodeDef,
-      paramCounter,
-      policyContext ? { policyContext } : undefined,
-    );
+    const compile = (guardDeleted: boolean) => {
+      const paramCounter = { count: 0 };
+      const whereResult = this.whereCompiler.compile(
+        params.where,
+        'n',
+        this.nodeDef,
+        paramCounter,
+        policyContext ? { policyContext } : undefined,
+      );
 
-    const { cypher, params: mutParams } = this.mutationCompiler.compileUpdate(
-      params.where ?? {},
-      params.data as Record<string, unknown>,
-      undefined, // no connect
-      undefined, // no disconnect
-      this.nodeDef,
-      whereResult,
-      params.labels,
-      'count',
-      // `data` may still carry nested connect/disconnect ops, so thread the
-      // policy bundle + shared counter for target `read` enforcement.
-      policyContext ?? undefined,
-      paramCounter,
-    );
+      return this.mutationCompiler.compileUpdate(
+        params.where ?? {},
+        params.data as Record<string, unknown>,
+        undefined, // no connect
+        undefined, // no disconnect
+        this.nodeDef,
+        whereResult,
+        params.labels,
+        'count',
+        // `data` may still carry nested connect/disconnect ops, so thread the
+        // policy bundle + shared counter for target `read` enforcement.
+        policyContext ?? undefined,
+        paramCounter,
+        guardDeleted,
+      );
+    };
 
-    const result = await this.executor.execute(
-      cypher,
-      mutParams,
-      this.withAuditMetadata(
-        params.context,
-        policyContext,
-        'update',
-        Boolean(params.unsafe?.bypassPolicies),
-      ),
+    const result = await this.executeUpdate(
+      compile,
+      params.context,
+      'updateMany',
+      (context) =>
+        this.withAuditMetadata(
+          context,
+          policyContext,
+          'update',
+          Boolean(params.unsafe?.bypassPolicies),
+        ),
     );
     const record = result.records[0];
     const count = record

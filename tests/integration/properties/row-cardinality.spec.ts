@@ -8,7 +8,9 @@
  * independently: the root `where` is evaluated in JS against a snapshot,
  * and under a policy context the mirrored `update` policy filters them
  * (and, for the rows `update` returns, the mirrored `read` policy on the
- * post-write state — v2.6.1).
+ * post-write state — v2.6.1). The strict variant also generates nested
+ * deletes reached through a cycle (finding F1, v2.7.1): a root the write
+ * itself deleted is expected in neither.
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
  * in afterAll; every case runs in a rolled-back transaction.
@@ -16,7 +18,7 @@
 import fc from 'fast-check';
 import type { Driver } from 'neo4j-driver';
 import { OGM } from '../../../src/ogm';
-import { writeOp, type WriteOp } from './arbitraries';
+import { hasCycleDelete, writeOp, type WriteOp } from './arbitraries';
 import { runWrite, type OgmLike } from './exec';
 import {
   checkProperty,
@@ -43,6 +45,8 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
   let driver: Driver;
   let plain: OGM;
   let guarded: OGM;
+  let strictPlain: OGM;
+  let strictGuarded: OGM;
   const stats = new OutcomeStats('row-cardinality');
 
   beforeAll(async () => {
@@ -53,6 +57,14 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
     guarded = new OGM({
       typeDefs,
       driver,
+      policies,
+      policyDefaults: { auditMetadata: false },
+    });
+    strictPlain = new OGM({ typeDefs, driver, strict: true });
+    strictGuarded = new OGM({
+      typeDefs,
+      driver,
+      strict: true,
       policies,
       policyDefaults: { auditMetadata: false },
     });
@@ -71,6 +83,66 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
     fc.integer({ min: 0, max: CONTEXTS.length - 1 }),
   );
 
+  async function checkCase(
+    ctx: number,
+    op: WriteOp,
+    strict: boolean,
+  ): Promise<void> {
+    const ogm: OgmLike = strict
+      ? ctx < 0
+        ? strictPlain
+        : strictGuarded.withContext(CONTEXTS[ctx])
+      : ctx < 0
+        ? plain
+        : guarded.withContext(CONTEXTS[ctx]);
+    const label = strict ? 'strict ' : '';
+    await inRollback(driver, async (tx) => {
+      const before = await snapshot(tx, runId);
+      if (op.kind !== 'update' && op.kind !== 'updateMany')
+        throw new Error(`unexpected ${op.kind}`);
+      const where = resolvePlaceholders(op.where, runId);
+      const expected = matchRoots(before, op.model, where)
+        .filter(
+          (n) =>
+            ctx < 0 || POLICY_MIRROR.updatable(n.type, n.props, CONTEXTS[ctx]),
+        )
+        .map((n) => n.key)
+        .sort();
+      const outcome = await runWrite(ogm, op, runId, tx);
+      if (!outcome.ok) {
+        stats.add(
+          `${label}${outcome.kind}: ${outcome.summary.split('\n')[0].slice(0, 100)}`,
+        );
+        if (outcome.kind !== 'ogm')
+          throw new Error(`server rejected the write: ${outcome.summary}`);
+        return;
+      }
+      // v2.7.1 (finding F1, strict only): a root the write itself deleted
+      // (a nested delete reaching it through a cycle) is no longer a node,
+      // so it is neither returned nor counted.
+      const after = await snapshot(tx, runId);
+      const surviving = strict
+        ? expected.filter((k) => after.nodes.has(k))
+        : expected;
+      stats.add(
+        `${label}ok ${op.kind} (${expected.length === 0 ? 'zero' : expected.length === 1 ? 'one' : 'many'} roots${surviving.length < expected.length ? ', some deleted' : ''})`,
+      );
+      // v2.6.1 (finding F6): `update` RETURNS only the updated roots the
+      // context can read after the write; `updateMany` still counts all.
+      let returned = surviving;
+      if (ctx >= 0 && op.kind === 'update')
+        returned = surviving.filter((k) => {
+          const n = after.nodes.get(k);
+          return n === undefined || POLICY_MIRROR.readable(n.type, n.props);
+        });
+      checkRows(
+        op,
+        outcome.result as Rec,
+        op.kind === 'update' ? returned : surviving,
+      );
+    });
+  }
+
   it('update / updateMany return each matched root exactly once', async () => {
     await checkProperty(
       'row-cardinality',
@@ -82,52 +154,44 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
           roots: ['ItPTag', 'ItPChart', 'ItPCategory'],
         }),
       }),
-      async ({ ctx, op }) => {
-        const ogm: OgmLike =
-          ctx < 0 ? plain : guarded.withContext(CONTEXTS[ctx]);
-        await inRollback(driver, async (tx) => {
-          const before = await snapshot(tx, runId);
-          if (op.kind !== 'update' && op.kind !== 'updateMany')
-            throw new Error(`unexpected ${op.kind}`);
-          const where = resolvePlaceholders(op.where, runId);
-          const expected = matchRoots(before, op.model, where)
-            .filter(
-              (n) =>
-                ctx < 0 ||
-                POLICY_MIRROR.updatable(n.type, n.props, CONTEXTS[ctx]),
-            )
-            .map((n) => n.key)
-            .sort();
-          const outcome = await runWrite(ogm, op, runId, tx);
-          if (!outcome.ok) {
-            stats.add(
-              `${outcome.kind}: ${outcome.summary.split('\n')[0].slice(0, 100)}`,
-            );
-            if (outcome.kind !== 'ogm')
-              throw new Error(`server rejected the write: ${outcome.summary}`);
-            return;
-          }
-          stats.add(
-            `ok ${op.kind} (${expected.length === 0 ? 'zero' : expected.length === 1 ? 'one' : 'many'} roots)`,
-          );
-          // v2.6.1 (finding F6): `update` RETURNS only the updated roots the
-          // context can read after the write; `updateMany` still counts all.
-          let returned = expected;
-          if (ctx >= 0 && op.kind === 'update') {
-            const after = await snapshot(tx, runId);
-            returned = expected.filter((k) => {
-              const n = after.nodes.get(k);
-              return n === undefined || POLICY_MIRROR.readable(n.type, n.props);
-            });
-          }
-          checkRows(
-            op,
-            outcome.result as Rec,
-            op.kind === 'update' ? returned : expected,
-          );
-        });
-      },
+      ({ ctx, op }) => checkCase(ctx, op, false),
       300,
+    );
+  });
+
+  it('strict: the same, roots a nested delete reached through a cycle left out', async () => {
+    await checkProperty(
+      'row-cardinality/strict',
+      fc.record({
+        ctx: ctxArb,
+        op: writeOp({
+          kinds: ['update', 'updateMany'],
+          depth: 3,
+          roots: ['ItPTag', 'ItPChart', 'ItPCategory'],
+          sharedBlanketDisconnect: true,
+          cycleDelete: true,
+        }),
+      }),
+      ({ ctx, op }) => checkCase(ctx, op, true),
+      300,
+    );
+  });
+
+  it('strict: roots a nested delete reached through a cycle are neither returned nor counted', async () => {
+    // F1's shape alone (rare in the general generator).
+    await checkProperty(
+      'row-cardinality/strict-F1',
+      fc.record({
+        ctx: ctxArb,
+        op: writeOp({
+          kinds: ['update', 'updateMany'],
+          depth: 3,
+          roots: ['ItPTag', 'ItPChart', 'ItPCategory'],
+          cycleDelete: true,
+        }).filter(hasCycleDelete),
+      }),
+      ({ ctx, op }) => checkCase(ctx, op, true),
+      150,
     );
   });
 
