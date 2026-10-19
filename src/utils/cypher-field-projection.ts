@@ -103,7 +103,16 @@ export function buildInlineCypherFieldExpr(
  * subquery expression, which does not aggregate the enclosing query).
  */
 const AGGREGATING_CALL =
-  /\b(?:avg|collect|count|max|min|percentileCont|percentileDisc|stDev|stDevP|sum)\s*\(/i;
+  /(?<![\w.$`])(?:avg|collect|count|max|min|percentileCont|percentileDisc|stDev|stDevP|sum)\s*\(/i;
+
+/**
+ * v2.5.3 — string literals and comments, blanked before the aggregation
+ * test: pre-2.5.3 `RETURN 'count(' + this.x AS c` was refused. A name
+ * qualified with `.` (`apoc.coll.max(`) is not an aggregating call either
+ * (see the lookbehind above).
+ */
+const LITERALS_AND_COMMENTS =
+  /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`[^`]*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
 
 /**
  * Refuse an aggregating `@cypher` statement where it would be projected
@@ -120,7 +129,8 @@ export function assertInlineableCypherField(
   fieldLabel: string,
   statement: string,
 ): void {
-  if (!AGGREGATING_CALL.test(statement)) return;
+  if (!AGGREGATING_CALL.test(statement.replace(LITERALS_AND_COMMENTS, "''")))
+    return;
   throw new OGMError(
     `@cypher field "${fieldLabel}" aggregates in its statement, so it can only be selected at the top level of a query. ` +
       `Neo4j 5 rejects aggregating subqueries nested inside a projection ("Aggregation column contains implicit grouping expressions"), ` +

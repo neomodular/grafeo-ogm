@@ -216,6 +216,13 @@ describe('inline @cypher projection of aggregating statements (v2.4.8)', () => {
     'RETURN this.rank * 10 AS c',
     'RETURN COUNT { (this)-[:W]->() } AS c',
     'MATCH (this)-[:W]->(p) RETURN p.counter AS c',
+    // v2.5.3 — literals, comments and qualified names were refused.
+    "RETURN 'count(' + this.title + ')' AS c",
+    'RETURN "max(" + this.title AS c',
+    "RETURN 'it\\'s sum(' AS c",
+    'RETURN this.x AS c // count(x)',
+    'RETURN apoc.coll.max([this.a, this.b]) AS c',
+    'RETURN this.`count(` AS c',
   ])('accepts %s', (stmt) => {
     expect(() => assertInlineableCypherField('User.c', stmt)).not.toThrow();
   });
