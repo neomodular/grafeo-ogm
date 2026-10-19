@@ -407,6 +407,48 @@ export class MutationCompiler {
   }
 
   /**
+   * v2.6.0 — keys of a connect / disconnect item that the compiler does not
+   * read. Pre-2.6.0 (and still by default) they are ignored, so a typo such
+   * as `{ wehre: … }` compiles to an item with NO filter: a connect links
+   * every target node, a disconnect unlinks every related one. Default: one
+   * warning per OGM; strict: `OGMError`, like an unknown write field.
+   */
+  private checkLinkItemKeys(
+    item: Record<string, unknown>,
+    kind: 'connect' | 'disconnect',
+    relDef: RelationshipDefinition,
+  ): void {
+    const allowed =
+      kind === 'connect' ? CONNECT_ITEM_KEYS : DISCONNECT_ITEM_KEYS;
+    const unknown = Object.keys(item).filter(
+      (k) => item[k] !== undefined && !allowed.has(k),
+    );
+    if (unknown.length === 0) return;
+    const list = unknown.map((k) => `"${k}"`).join(', ');
+    const allowedList = [...allowed].map((k) => `"${k}"`).join(', ');
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `Unknown key(s) ${list} in a ${kind} item on "${relDef.fieldName}". Allowed: ${allowedList}.`,
+      );
+    const unfiltered = item.where == null;
+    this.strictMode.warn(
+      `${kind}-unknown-key`,
+      `${relDef.fieldName}\u0000${unknown.join(',')}`,
+      `Unknown key(s) ${list} in a ${kind} item on "${relDef.fieldName}" ` +
+        `${unknown.length > 1 ? 'are' : 'is'} ignored` +
+        (unfiltered
+          ? `; with no "where", the item ${
+              kind === 'connect'
+                ? `connects EVERY "${relDef.target}" node`
+                : `unlinks EVERY related "${relDef.target}" node`
+            }.`
+          : '.') +
+        ` Allowed: ${allowedList}.`,
+      `throw an OGMError for unknown ${kind} item keys`,
+    );
+  }
+
+  /**
    * Generate CREATE Cypher for one or more nodes.
    * Handles scalar properties, nested relationship creates, and connects.
    */
@@ -1593,6 +1635,10 @@ export class MutationCompiler {
             }),
           );
       else {
+        // Every item is a plain object here (fast-path eligibility).
+        for (const item of spec as Record<string, unknown>[]) {
+          this.checkLinkItemKeys(item, 'connect', relDef);
+        }
         const targetVar = `${varPrefix}target`;
         const relVar = `${varPrefix}r`;
         const targetLabelStr = this.getCachedLabelString(targetNodeDef);
@@ -1771,6 +1817,7 @@ export class MutationCompiler {
           connectSpec === null ? 'null' : typeof connectSpec
         }.`,
       );
+    this.checkLinkItemKeys(connectSpec, 'connect', relDef);
     const lines: string[] = [];
     const whereSpec = connectSpec.where as Record<string, unknown> | undefined;
     const edgeInput = connectSpec.edge as Record<string, unknown> | undefined;
@@ -2064,6 +2111,8 @@ export class MutationCompiler {
       } else {
         // Specific disconnect with conditions
         const disconnectSpec = item as Record<string, unknown>;
+        if (isPlainObject(disconnectSpec))
+          this.checkLinkItemKeys(disconnectSpec, 'disconnect', relDef);
         const whereSpec = disconnectSpec.where as
           | Record<string, unknown>
           | undefined;
@@ -2310,6 +2359,8 @@ export class MutationCompiler {
 
           for (let di = 0; di < disconnectItems.length; di++) {
             const disconnectSpec = disconnectItems[di];
+            if (isPlainObject(disconnectSpec))
+              this.checkLinkItemKeys(disconnectSpec, 'disconnect', relDef);
             const whereSpec = disconnectSpec.where as
               | Record<string, unknown>
               | undefined;
@@ -2818,6 +2869,22 @@ export class MutationCompiler {
  * path to validate that every item shares the same shape; mismatched
  * shapes silently drop keys from the compiled WHERE / SET.
  */
+/**
+ * v2.6.0 — the keys a connect / disconnect item is compiled from. `overwrite`
+ * is offered by the generated `ConnectFieldInput` and accepted as before
+ * (MERGE + SET always overwrites the edge properties it is given).
+ */
+const CONNECT_ITEM_KEYS: ReadonlySet<string> = new Set([
+  'where',
+  'edge',
+  'overwrite',
+  'connect',
+]);
+const DISCONNECT_ITEM_KEYS: ReadonlySet<string> = new Set([
+  'where',
+  'disconnect',
+]);
+
 /** Keys that make a nested-mutation `where` connection-shaped. */
 const CONNECTION_WHERE_KEYS: ReadonlySet<string> = new Set([
   'node',
