@@ -319,4 +319,54 @@ describeLive('Strict mode, write paths — live Neo4j', () => {
       expect(await usersWithEmail(email)).toEqual([id('up-str-a')]);
     });
   });
+
+  describe('item 4 — blanket disconnect on a shared relationship type', () => {
+    async function seed(tag: string) {
+      const [u, p, t] = [id(`${tag}-u`), id(`${tag}-p`), id(`${tag}-t`)];
+      await run(
+        `CREATE (u:ItSmUser {id: $u, runId: $runId})
+         CREATE (u)-[:IT_SM_HAS]->(:ItSmPet {id: $p, runId: $runId})
+         CREATE (u)-[:IT_SM_HAS]->(:ItSmToy {id: $t, runId: $runId})`,
+        { u, p, t },
+      );
+      return { u, p, t };
+    }
+    const shared = (warnings: string[]) =>
+      warnings.filter((w) => w.includes('share relationship type'));
+
+    it('default: disconnecting all pets also unlinks the toys, warning once at construction', async () => {
+      const { u } = await seed('b-def');
+      const { ogm, warnings } = makeOgm();
+      await ogm
+        .model('ItSmUser')
+        .update({ where: { id: u }, disconnect: { pets: {} } });
+      expect(await linked(u, 'IT_SM_HAS', 'ItSmPet')).toEqual([]);
+      expect(await linked(u, 'IT_SM_HAS', 'ItSmToy')).toEqual([]);
+      expect(shared(warnings)).toEqual([
+        expect.stringContaining(
+          'ItSmUser.pets (ItSmPet) and ItSmUser.toys (ItSmToy) share relationship type "IT_SM_HAS" (OUT)',
+        ),
+      ]);
+      expect(warnings).toHaveLength(1);
+    });
+
+    it('strict: disconnecting all pets keeps the toys (top-level and nested)', async () => {
+      const { ogm, warnings } = makeOgm(true);
+      const a = await seed('b-str');
+      await ogm
+        .model('ItSmUser')
+        .update({ where: { id: a.u }, disconnect: { pets: null } });
+      expect(await linked(a.u, 'IT_SM_HAS', 'ItSmPet')).toEqual([]);
+      expect(await linked(a.u, 'IT_SM_HAS', 'ItSmToy')).toEqual([a.t]);
+
+      const b = await seed('b-str-nested');
+      await ogm.model('ItSmUser').update({
+        where: { id: b.u },
+        update: { pets: [{ disconnect: [{}] }] },
+      });
+      expect(await linked(b.u, 'IT_SM_HAS', 'ItSmPet')).toEqual([]);
+      expect(await linked(b.u, 'IT_SM_HAS', 'ItSmToy')).toEqual([b.t]);
+      expect(warnings).toEqual([]);
+    });
+  });
 });

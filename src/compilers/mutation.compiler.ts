@@ -2157,15 +2157,22 @@ export class MutationCompiler {
               paramCounter,
             )
           : undefined;
+        const { labelRaw, labelPredicate } = this.blanketRestriction(
+          relDef,
+          targetNodeDef,
+          blanketTarget,
+        );
         const pattern = buildRelPattern({
           sourceVar,
           relDef,
-          targetVar: predicate ? blanketTarget : '',
+          targetVar: predicate || labelPredicate ? blanketTarget : '',
           edgeVar: relVar,
-          targetLabelRaw: this.blanketTargetLabel(relDef),
+          targetLabelRaw: labelRaw,
         });
         lines.push(`OPTIONAL MATCH ${pattern}`);
-        if (predicate) lines.push(`WHERE ${predicate}`);
+        const blanketConditions = [labelPredicate, predicate].filter(Boolean);
+        if (blanketConditions.length > 0)
+          lines.push(`WHERE ${blanketConditions.join(' AND ')}`);
         lines.push(`DELETE ${relVar}`);
       } else {
         // Specific disconnect with conditions
@@ -2258,6 +2265,38 @@ export class MutationCompiler {
     const narrowed: RelationshipDefinition = { ...relDef, target: member };
     this.narrowedRelDefs.add(narrowed);
     return narrowed;
+  }
+
+  /**
+   * v2.6.0 — how a blanket disconnect (`null` / `{}`) restricts its target.
+   *
+   * Default (v2.5.3): only a relationship narrowed to a union / interface
+   * member keeps that member's label; otherwise the target is anonymous,
+   * so with two fields on one relationship type and direction
+   * (`pets: [Pet]`, `toys: [Toy]`, both `HAS`) a blanket disconnect of one
+   * also unlinks the other's nodes (warned once at OGM construction).
+   *
+   * Strict: the field's own target type — its label, or for an abstract
+   * target a predicate over its members' labels on `targetVar`.
+   */
+  private blanketRestriction(
+    relDef: RelationshipDefinition,
+    targetNodeDef: NodeDefinition | undefined,
+    targetVar: string,
+  ): { labelRaw: string | undefined; labelPredicate: string | null } {
+    const narrowed = this.blanketTargetLabel(relDef);
+    if (narrowed || !this.strictMode.strict || !targetNodeDef)
+      return { labelRaw: narrowed, labelPredicate: null };
+    if (abstractTarget(targetNodeDef.typeName, this.schema))
+      return {
+        labelRaw: undefined,
+        labelPredicate: this.targetMatch(targetNodeDef, targetVar)
+          .labelPredicate,
+      };
+    return {
+      labelRaw: this.getCachedLabelString(targetNodeDef),
+      labelPredicate: null,
+    };
   }
 
   /** The label a blanket disconnect over `relDef` must keep (see above). */
@@ -2449,16 +2488,25 @@ export class MutationCompiler {
                 policyContext,
                 paramCounter,
               );
-              if (predicate) varCounter++;
+              const { labelRaw, labelPredicate } = this.blanketRestriction(
+                relDef,
+                targetNodeDef,
+                blanketTarget,
+              );
+              if (predicate || labelPredicate) varCounter++;
               const pattern = buildRelPattern({
                 sourceVar,
                 relDef,
-                targetVar: predicate ? blanketTarget : '',
+                targetVar: predicate || labelPredicate ? blanketTarget : '',
                 edgeVar: relVar,
-                targetLabelRaw: this.blanketTargetLabel(relDef),
+                targetLabelRaw: labelRaw,
               });
               lines.push(`OPTIONAL MATCH ${pattern}`);
-              if (predicate) lines.push(`WHERE ${predicate}`);
+              const blanketConditions = [labelPredicate, predicate].filter(
+                Boolean,
+              );
+              if (blanketConditions.length > 0)
+                lines.push(`WHERE ${blanketConditions.join(' AND ')}`);
               lines.push(`DELETE ${relVar}`);
             } else {
               const discTarget = `${sourceVar}_disc${varCounter}`;

@@ -71,6 +71,41 @@ function withDefaultDatabase(driver: Driver, database: string): Driver {
   });
 }
 
+/**
+ * v2.6.0 — warn once per pair of relationship fields of one type that share
+ * a relationship type and direction but point at different target types.
+ * A blanket disconnect (`null` / `{}`) on either binds no target label, so
+ * it also unlinks the other field's nodes; strict mode restricts it to the
+ * field's own target type.
+ */
+function warnSharedRelationshipTypes(
+  schema: SchemaMetadata,
+  strictMode: StrictMode,
+): void {
+  if (strictMode.strict) return;
+  for (const node of schema.nodes.values()) {
+    const rels = [...node.relationships.values()];
+    for (let i = 0; i < rels.length; i++)
+      for (let j = i + 1; j < rels.length; j++) {
+        const [a, b] = [rels[i], rels[j]];
+        if (
+          a.type !== b.type ||
+          a.direction !== b.direction ||
+          a.target === b.target
+        )
+          continue;
+        strictMode.warn(
+          'blanket-disconnect-shared-type',
+          `${node.typeName}\u0000${a.fieldName}\u0000${b.fieldName}`,
+          `${node.typeName}.${a.fieldName} (${a.target}) and ${node.typeName}.${b.fieldName} (${b.target}) ` +
+            `share relationship type "${a.type}" (${a.direction}): a blanket disconnect (null / {}) on either ` +
+            `also unlinks the other's nodes.`,
+          "restrict a blanket disconnect to the field's own target type",
+        );
+      }
+  }
+}
+
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
   C extends PolicyContext = PolicyContext,
@@ -208,6 +243,8 @@ export class OGM<
       fulltext,
       strictMode,
     };
+
+    warnSharedRelationshipTypes(this.schema, strictMode);
 
     // Build the policy registry and validate against the schema. An OGM
     // configured WITHOUT policies builds an empty registry — all model

@@ -43,14 +43,22 @@ async function warnsOnce(run: Run, expected: string | RegExp) {
   expect(warnings()[0]).toContain(STRICT_HINT);
 }
 
+/** Legitimate shapes strict mode still compiles differently (item 4). */
+const BLANKET = new Set(['disconnect null', 'disconnect {} (unshared type)']);
+
 describe('legitimate write shapes never warn and compile the same strict', () => {
-  it.each(Object.entries(legitWriteShapes))('%s', async (_name, run) => {
+  it.each(Object.entries(legitWriteShapes))('%s', async (name, run) => {
     const lenient = setup();
     await run(lenient.ogm);
     expect(lenient.warnings()).toEqual([]);
     const strict = setup(true);
     await run(strict.ogm);
-    expect(strict.records).toEqual(lenient.records);
+    if (BLANKET.has(name))
+      // Strict binds the target label even when no other field shares the type.
+      expect(strict.records[0].cypher).toContain(
+        'OPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(:`Post`)',
+      );
+    else expect(strict.records).toEqual(lenient.records);
   });
 });
 
@@ -153,5 +161,82 @@ describe('item 3 — upsert where with several unique keys', () => {
       'upsert "where" must name exactly one @id / @unique field of User; got "id", "email".',
     );
     expect(records).toEqual([]);
+  });
+});
+
+describe('item 4 — blanket disconnect on a shared relationship type', () => {
+  it('default warns once per sharing pair, at construction', async () => {
+    const { ogm, logger } = setup();
+    await badWriteShapes['blanket disconnect on a shared relationship type'](
+      ogm,
+    );
+    const shared = logger.warn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes('share relationship type'));
+    expect(shared).toEqual([
+      '[OGM] User.pets (Pet) and User.toys (Toy) share relationship type "HAS" (OUT): a blanket disconnect ' +
+        "(null / {}) on either also unlinks the other's nodes. Enable `strict: true` (default in 3.0) to " +
+        "restrict a blanket disconnect to the field's own target type.",
+    ]);
+  });
+
+  it('strict does not warn and binds the target label', async () => {
+    const top = setup(true);
+    await badWriteShapes['blanket disconnect on a shared relationship type'](
+      top.ogm,
+    );
+    expect(top.logger.warn).not.toHaveBeenCalled();
+    expect(top.records[0].cypher).toBe(
+      [
+        'MATCH (n:`User`)',
+        'WHERE n.`id` = $param0',
+        'WITH n',
+        'CALL {',
+        'WITH n',
+        'OPTIONAL MATCH (n)-[r_pets_0:`HAS`]->(:`Pet`)',
+        'DELETE r_pets_0',
+        'RETURN count(*) AS _r_pets_0',
+        '}',
+        "RETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+      ].join('\n'),
+    );
+    const nested = setup(true);
+    await badWriteShapes[
+      'blanket disconnect on a shared relationship type (nested in update)'
+    ](nested.ogm);
+    expect(nested.records[0].cypher).toContain(
+      'OPTIONAL MATCH (n)-[r_disc_pets_0_0:`HAS`]->(:`Pet`)\nDELETE r_disc_pets_0_0',
+    );
+  });
+
+  it('strict restricts an abstract target to its members', async () => {
+    const records: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs: /* GraphQL */ `
+        interface Animal {
+          name: String
+        }
+        type Dog implements Animal @node {
+          name: String
+        }
+        type Cat implements Animal @node {
+          name: String
+        }
+        type Owner @node {
+          id: ID! @id @unique
+          animals: [Animal!]! @relationship(type: "OWNS", direction: OUT)
+        }
+      `,
+      driver: recordingDriver(records),
+      strict: true,
+    });
+    await ogm
+      .model('Owner')
+      .update({ where: { id: 'o1' }, disconnect: { animals: null } });
+    expect(records[0].cypher).toContain(
+      'OPTIONAL MATCH (n)-[r_animals_0:`OWNS`]->(target_animals_0)\n' +
+        'WHERE (target_animals_0:`Dog` OR target_animals_0:`Cat`)\n' +
+        'DELETE r_animals_0',
+    );
   });
 });
