@@ -1634,10 +1634,21 @@ export type AuthorSelectFields = {
         >;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: BookSelectFields };
+                cursor?: boolean;
                 properties?: boolean | { select: AuthorBooksEdgeSelectFields };
               };
         };
@@ -1771,10 +1782,21 @@ export type BookSelectFields = {
         >;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: AuthorSelectFields };
+                cursor?: boolean;
                 properties?: boolean | { select: BookAuthorEdgeSelectFields };
               };
         };
@@ -1789,10 +1811,21 @@ export type BookSelectFields = {
         >;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: CategorySelectFields };
+                cursor?: boolean;
                 properties?:
                   | boolean
                   | { select: BookCategoriesEdgeSelectFields };
@@ -1806,10 +1839,21 @@ export type BookSelectFields = {
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: ReviewSelectFields };
+                cursor?: boolean;
               };
         };
       };
@@ -2002,10 +2046,21 @@ export type CategorySelectFields = {
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: BookSelectFields };
+                cursor?: boolean;
               };
         };
       };
@@ -2097,10 +2152,21 @@ export type ReviewSelectFields = {
         orderBy?: Array<{ node: Record<string, "ASC" | "DESC"> }>;
         select: {
           totalCount?: boolean;
+          pageInfo?:
+            | boolean
+            | {
+                select: {
+                  hasNextPage?: boolean;
+                  hasPreviousPage?: boolean;
+                  startCursor?: boolean;
+                  endCursor?: boolean;
+                };
+              };
           edges?:
             | boolean
             | {
                 node?: boolean | { select: BookSelectFields };
+                cursor?: boolean;
               };
         };
       };
