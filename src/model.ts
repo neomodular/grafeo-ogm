@@ -2032,6 +2032,46 @@ export class Model<
   }
 
   /**
+   * v2.6.1 — filter a mutation's returned rows by the root type's `read`
+   * policy: the write still happens, but a node the context cannot read
+   * (in its post-write state) is not returned, as `find` would not return
+   * it. Pre-2.6.1 create / update / upsert returned every node they wrote,
+   * so a context allowed to update (or create) a node it could not read got
+   * it back in full. Nested selections already applied their target read
+   * policies; this adds the root.
+   *
+   * Inserts `WITH n [@cypher preludes] WHERE <read clause>` before the
+   * trailing `RETURN n` (a WITH closes the write part, invariant 1; the
+   * WHERE only drops rows, invariant 2). No-op — byte-identical — when no
+   * policy is bound, a bypass is active, the type has no read policy or an
+   * override fires.
+   */
+  private applyRootReadFilter(
+    cypher: string,
+    params: Record<string, unknown>,
+    paramCounter: { count: number },
+    policyContext: PolicyContextBundle | null,
+  ): string {
+    if (!policyContext) return cypher;
+    const read = this.whereCompiler.compile(
+      undefined,
+      'n',
+      this.nodeDef,
+      paramCounter,
+      { policyContext },
+    );
+    if (!read.cypher) return cypher;
+    mergeParams(params, read.params);
+    const lines = ['WITH n', ...(read.preludes ?? []), `WHERE ${read.cypher}`];
+    // A replacer function: the clause holds `$param` text, which a
+    // replacement STRING would scan for `$&`-style patterns.
+    return cypher.replace(
+      /RETURN n\s*$/,
+      () => `${lines.join('\n')}\nRETURN n`,
+    );
+  }
+
+  /**
    * Replace the plain "RETURN n" in mutation cypher with a projected RETURN
    * when a selectionSet is provided, enabling relationship traversals.
    *
@@ -2045,6 +2085,12 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
+    cypher = this.applyRootReadFilter(
+      cypher,
+      params,
+      paramCounter,
+      policyContext,
+    );
     let selection: SelectionNode[];
 
     if (selectionSet) {
@@ -2111,6 +2157,12 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
+    cypher = this.applyRootReadFilter(
+      cypher,
+      params,
+      paramCounter,
+      policyContext,
+    );
     const entitySelect = select[this.nodeDef.pluralName];
     // v1.8.4 — when typed select doesn't request the entity field
     // (e.g., `select: { info: {...} }` only), pre-1.8.4 left a bare
@@ -2175,6 +2227,12 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
+    cypher = this.applyRootReadFilter(
+      cypher,
+      params,
+      paramCounter,
+      policyContext,
+    );
     // v1.8.4 — symmetric with `applySelectionSetToMutation`: project
     // via `defaultSelection()` (which includes `__typename`) when no
     // selectionSet is provided, instead of leaving the bare `RETURN n`.
@@ -2208,6 +2266,12 @@ export class Model<
     paramCounter: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string {
+    cypher = this.applyRootReadFilter(
+      cypher,
+      params,
+      paramCounter,
+      policyContext,
+    );
     const selection = this.selectNormalizer.normalize(select, this.nodeDef);
     const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(

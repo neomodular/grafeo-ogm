@@ -14,6 +14,8 @@
  * - every node whose properties changed is updatable (and its new values
  *   pass the update WITH CHECK); every created node passes its create
  *   policy; every deleted node is deletable;
+ * - every row the mutation returns is readable in its post-write state
+ *   (v2.6.1, finding F6);
  * - and nothing changed outside the write's envelope (property 3).
  *
  * "Readable", "updatable", "deletable", "creatable" come from
@@ -45,7 +47,12 @@ import {
   seedGraph,
   snapshot,
 } from './harness';
-import { policyViolations, scopeViolations, writeEnvelope } from './oracle';
+import {
+  policyViolations,
+  responseViolations,
+  scopeViolations,
+  writeEnvelope,
+} from './oracle';
 import {
   CONTEXTS,
   GRAPH_TYPES,
@@ -155,6 +162,7 @@ describeLive('Property 4 — policy containment (live Neo4j)', () => {
           const violations = [
             ...scopeViolations(diff, env),
             ...policyViolations(diff, env, before, after, context),
+            ...responseViolations(op, outcome.result, after),
           ];
           if (violations.length > 0)
             throw new Error(

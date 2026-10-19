@@ -722,16 +722,46 @@ export function policyViolations(
 }
 
 /**
- * FINDING F6 — the node a write is performed ON (a root of `update`, a
- * nested-update target, the intermediate of a nested connect) is gated by
- * its `update` policy only, never by `read`: a context may update, link
- * and unlink a node it cannot read, and the mutation response returns that
- * node in full (`update({ where: { id }, update: {} })` reveals a row
- * `find` hides). This is the documented model (README "Relationships and
- * nested writes": nested update = `update` row filter), so the strict
- * rule "both endpoints readable" is relaxed for the OWNER endpoint only,
- * which must then be updatable. The other endpoint — the node being
- * linked or unlinked — must still be readable. Set to `false` to enforce
- * the strict rule once F6 is decided.
+ * Rule 4b (finding F6, fixed in v2.6.1): every row a mutation RETURNS is
+ * readable by the context in its post-write state — the response applies
+ * the root `read` policy as `find` does. Rows are the arrays of a
+ * create / update response (`{ info, <plural>: [...] }`) and the node an
+ * upsert returns; each carries its `id` (the default selection).
+ */
+export function responseViolations(
+  op: WriteOp,
+  result: unknown,
+  after: Snapshot,
+): string[] {
+  const rows: Rec[] = [];
+  if (op.kind === 'upsert') {
+    if (result && typeof result === 'object') rows.push(result as Rec);
+  } else if (op.kind === 'create' || op.kind === 'update') {
+    for (const [key, value] of Object.entries((result ?? {}) as Rec))
+      if (key !== 'info' && Array.isArray(value))
+        rows.push(...(value as Rec[]));
+  }
+  const out: string[] = [];
+  for (const row of rows) {
+    const n = typeof row.id === 'string' ? after.nodes.get(row.id) : undefined;
+    if (n === undefined)
+      out.push(`response row ${String(row.id)} is not a node of the run`);
+    else if (!POLICY_MIRROR.readable(n.type, n.props))
+      out.push(`response returned ${n.key} (${n.type}), which is not readable`);
+  }
+  return out;
+}
+
+/**
+ * Finding F6, decided in v2.6.1 — the node a write is performed ON (a root
+ * of `update`, a nested-update target, the intermediate of a nested
+ * connect) is gated by its `update` policy only, never by `read`: a
+ * context may update, link and unlink a node it cannot read (README
+ * "Relationships and nested writes": nested update = `update` row
+ * filter). What v2.6.1 changed is the RESPONSE: such a node is no longer
+ * returned (rule 4b, `responseViolations`). So the rule "both endpoints
+ * readable" stays relaxed for the OWNER endpoint only, which must then be
+ * updatable; the other endpoint — the node being linked or unlinked —
+ * must still be readable.
  */
 const OWNER_NEEDS_UPDATE_ONLY = true;

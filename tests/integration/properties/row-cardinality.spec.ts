@@ -6,7 +6,9 @@
  * nested ops (connect / disconnect / create / update / delete at depth
  * ≤ 3) match: zero targets, one, or many. The expected roots are computed
  * independently: the root `where` is evaluated in JS against a snapshot,
- * and under a policy context the mirrored `update` policy filters them.
+ * and under a policy context the mirrored `update` policy filters them
+ * (and, for the rows `update` returns, the mirrored `read` policy on the
+ * post-write state — v2.6.1).
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
  * in afterAll; every case runs in a rolled-back transaction.
@@ -108,7 +110,21 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
           stats.add(
             `ok ${op.kind} (${expected.length === 0 ? 'zero' : expected.length === 1 ? 'one' : 'many'} roots)`,
           );
-          checkRows(op, outcome.result as Rec, expected);
+          // v2.6.1 (finding F6): `update` RETURNS only the updated roots the
+          // context can read after the write; `updateMany` still counts all.
+          let returned = expected;
+          if (ctx >= 0 && op.kind === 'update') {
+            const after = await snapshot(tx, runId);
+            returned = expected.filter((k) => {
+              const n = after.nodes.get(k);
+              return n === undefined || POLICY_MIRROR.readable(n.type, n.props);
+            });
+          }
+          checkRows(
+            op,
+            outcome.result as Rec,
+            op.kind === 'update' ? returned : expected,
+          );
         });
       },
       300,

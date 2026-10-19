@@ -1526,6 +1526,8 @@ Writes follow one principle: **a nested write enforces exactly what the equivale
 
 Write restrictives and create default-deny are checked before the query runs, so a rejected nested write throws `PolicyDeniedError` and nothing is written.
 
+**Mutation responses are reads.** The nodes that `create`, `update` and `upsert` return are filtered by the root type's `read` policy, checked against the node as it is after the write, just as `find` would filter them. A write to a node the context may update or create but not read still happens, but that node is left out of the response: it is missing from the `<plural>` array, and `upsert` returns `null`. The `info` counters still count it. Nested selections in the response were already filtered by their own target-type policies. Before v2.6.1 the root node came back in full, including fields its `read` policy hides.
+
 > **A type without policies is open, but not a gateway.** Before v2.3.0, reading or writing through a type with no policies of its own skipped the policies of the types beyond it, and nested writes enforced no target-type policy at all. If a nested write into a protected type now gets filtered or denied, add the matching policy for that operation on the target type, or perform the write directly on its model.
 
 #### Enforcement boundary

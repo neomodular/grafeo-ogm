@@ -1080,4 +1080,156 @@ describeLive('NLS enforcement — live Neo4j', () => {
       expect((await chart(u('cm')))?.labels).toContain('ItF7Extra');
     });
   });
+
+  // --- v2.6.1: mutation responses apply the root read policy --------------
+  // Pre-2.6.1 a context that could update (or create) a node it could not
+  // read got the node back in full in the mutation response.
+
+  describe('v2.6.1 — mutation responses omit rows the context cannot read', () => {
+    const r = (s: string) => id(`f6-${s}`);
+    const U1 = { uid: 'u1', tid: 't1', canCreateChart: true };
+
+    async function title(chartId: string): Promise<unknown> {
+      const rows = await run('MATCH (c {id: $chartId}) RETURN c.title AS t', {
+        chartId,
+      });
+      return rows[0]?.t;
+    }
+
+    beforeAll(async () => {
+      await run(
+        `CREATE (:ItResource:ItChart {id: $hidden, runId: $runId, ownerId: 'u1', tenantId: 't1', secret: true, title: 'hidden'})
+         CREATE (:ItResource:ItChart {id: $hidden2, runId: $runId, ownerId: 'u1', tenantId: 't1', secret: true, title: 'hidden'})
+         CREATE (:ItResource:ItChart {id: $vis, runId: $runId, ownerId: 'u1', tenantId: 't1', secret: false, title: 'visible'})
+         CREATE (:ItResource:ItChart {id: $flip, runId: $runId, ownerId: 'u1', tenantId: 't1', secret: false, title: 'visible'})`,
+        {
+          hidden: r('hidden'),
+          hidden2: r('hidden2'),
+          vis: r('vis'),
+          flip: r('flip'),
+        },
+      );
+    });
+
+    it('find hides the secret chart (control)', async () => {
+      expect(
+        await bound(U1)
+          .model('ItChart')
+          .find({ where: { id: r('hidden') } }),
+      ).toEqual([]);
+    });
+
+    it('update omits the unreadable chart from the response, and the write still lands', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id: r('hidden') },
+          update: { title: 'rewritten' },
+          selectionSet: '{ id title secret }',
+        });
+      expect(res.itCharts).toEqual([]);
+      expect(await title(r('hidden'))).toBe('rewritten');
+    });
+
+    it('update with typed select omits the unreadable chart too', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id: r('hidden') },
+          update: {},
+          select: { itCharts: { id: true, secret: true } },
+        });
+      expect(res.itCharts).toEqual([]);
+    });
+
+    it('update of several charts returns only the readable ones', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id_IN: [r('hidden'), r('vis')] },
+          update: {},
+          selectionSet: '{ id title }',
+        });
+      expect(res.itCharts).toEqual([{ id: r('vis'), title: 'visible' }]);
+    });
+
+    it('a chart the update makes unreadable is omitted (post-write state)', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id: r('flip') },
+          update: { secret: true },
+          selectionSet: '{ id }',
+        });
+      expect(res.itCharts).toEqual([]);
+      const rows = await run('MATCH (c {id: $cid}) RETURN c.secret AS s', {
+        cid: r('flip'),
+      });
+      expect(rows[0].s).toBe(true);
+    });
+
+    it('create omits an unreadable created chart, and the node is still created', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .create({
+          input: [
+            {
+              id: r('new-secret'),
+              runId,
+              tenantId: 't1',
+              ownerId: 'u1',
+              secret: true,
+              title: 'new',
+            },
+            {
+              id: r('new-public'),
+              runId,
+              tenantId: 't1',
+              ownerId: 'u1',
+              secret: false,
+              title: 'new',
+            },
+          ],
+          selectionSet: '{ id }',
+        });
+      expect(res.itCharts).toEqual([{ id: r('new-public') }]);
+      expect(res.info.nodesCreated).toBe(2);
+      expect(await exists(r('new-secret'))).toBe(true);
+    });
+
+    it('upsert returns null for an updatable but unreadable chart, and the update lands', async () => {
+      const result = await bound(U1)
+        .model('ItChart')
+        .upsert({
+          where: { id: r('hidden2') },
+          create: { id: r('hidden2'), runId, tenantId: 't1', ownerId: 'u1' },
+          update: { title: 'upserted' },
+          selectionSet: '{ id title secret }',
+        });
+      expect(result).toBeNull();
+      expect(await title(r('hidden2'))).toBe('upserted');
+    });
+
+    it('readable rows are returned unchanged', async () => {
+      const res = await bound(U1)
+        .model('ItChart')
+        .update({
+          where: { id: r('vis') },
+          update: { title: 'still visible' },
+          selectionSet: '{ id title secret }',
+        });
+      expect(res.itCharts).toEqual([
+        { id: r('vis'), title: 'still visible', secret: false },
+      ]);
+    });
+
+    it('without a policy context the response is unfiltered', async () => {
+      const res = await ogm.model('ItChart').update({
+        where: { id: r('hidden') },
+        update: {},
+        selectionSet: '{ id }',
+      });
+      expect(res.itCharts).toEqual([{ id: r('hidden') }]);
+    });
+  });
 });
