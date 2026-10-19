@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.6.0 (2026-10-18) — strict mode
+
+> **Minor release.** It adds an opt-in `strict` mode with the corrected behaviour for input shapes that 2.x compiles in surprising ways. **There are no behaviour changes without `strict`.** With `strict` unset or `false`, every input compiles to the same Cypher as in 2.5.4 and returns the same results. The one exception is the aggregate fix under Fixes, where a query that used to crash now returns `null` for the affected keys. Apart from that, the only difference is the deprecation warnings described below. Generated types are unchanged.
+
+### Added
+
+- **`new OGM({ …, strict: true })`.** A new optional `OGMConfig.strict` field. It defaults to `false` and **becomes the default in 3.0**. Strict mode switches on the corrected behaviour for every item under Deprecations: the shape either throws `OGMError` or compiles to what the input means. See the README "Strict mode" section.
+- **Deprecation warnings.** With `strict` off, the OGM logs one `warn` through its `logger` the first time an instance meets each shape. Each is logged once per OGM instance and message key, so hot paths don't spam. Every warning has the form `[OGM] <problem> Enable \`strict: true\` (default in 3.0) to <fix>.`
+
+### Notes
+
+- **Default mode now logs one-time deprecation warnings** through the configured `logger` (`logger.warn`). This includes the construction-time warning for relationship fields that share a type and direction (Deprecations item 4), which fires in `new OGM(...)` without any query. Tests that assert `logger.warn` is never called may now see these warnings. Fix the flagged shape, or turn on `strict: true`. An OGM without a `logger`, or whose logger has no `warn`, logs nothing.
+
+### Fixes
+
+- **`aggregate` on a list field (`[Int]`, `[Float]`) failed the whole query.** It emitted `avg` / `sum` over a list, and the server rejected that (`AVG(...) can only handle numerical values, duration, or null`). In both modes, those keys now come back `null` and the rest of the aggregate works. The same applies to `InterfaceModel.aggregate`. Generated types are unchanged.
+
+### Deprecations (the behaviour 3.0 flips; `strict: true` gives it now)
+
+Each entry lists the 2.x behaviour, the warning you will see, and what `strict: true` does instead.
+
+1. **Unknown keys in a connect / disconnect item are ignored.** A typo such as `{ wehre: … }` leaves the item with no filter: a connect links every target node, and a disconnect unlinks every related node.
+   - Warning: `Unknown key(s) "wehre" in a connect item on "pets" is ignored; with no "where", the item connects EVERY "Pet" node. Allowed: "where", "edge", "overwrite", "connect".` A disconnect gets the same warning, ending in `unlinks EVERY related "Pet" node` with allowed keys `"where", "disconnect"`.
+   - Strict: throws `OGMError`.
+   - Connect-all `[{}]` and the blanket disconnect `null` / `{}` are not affected.
+2. **Unknown `edge` keys are stored as stray relationship properties.** This covers connect, nested create and nested update.
+   - Warning: `Unknown field "rolee" in the edge input of "posts" is not a property of the relationship properties type "Wrote"; it is written to the relationship as a stray property.`
+   - Strict: throws `Unknown field "rolee" in the edge input (…) of "posts" …`.
+3. **`upsert` with several unique keys in `where` can create a duplicate.** MERGE matches all the keys together.
+   - Warning: `upsert on User with several unique keys in "where" ("id", "email") MERGEs on all of them together: a node that has one but not the others is not matched and a duplicate is created.`
+   - Strict: throws unless exactly one `@id` / `@unique` key is given.
+4. **A blanket disconnect on a shared relationship type over-reaches.** With `pets: [Pet]` and `toys: [Toy]` both on `HAS`, `disconnect: { pets: null }` also unlinks the toys.
+   - Warning, logged once per field pair when the OGM is constructed: `User.pets (Pet) and User.toys (Toy) share relationship type "HAS" (OUT): a blanket disconnect (null / {}) on either also unlinks the other's nodes.`
+   - Strict: the blanket disconnect binds the field's own target label. For interface / union targets it binds the member labels.
+5. **`labels` on `upsert` / `createMany({ skipDuplicates })` relabel matched existing nodes.**
+   - Warning: `"labels" on upsert (User) are added to every node the MERGE returns, so an existing node it matched is relabelled too.` The same warning is logged for `createMany with skipDuplicates`.
+   - Strict: the labels go in `ON CREATE SET`, so only newly created nodes get them.
+6. **A fulltext `score` inside `OR` / `AND` / `NOT` is ignored.**
+   - Warning: `A fulltext \`score\` inside OR / AND / NOT (on Book) is ignored in 2.x: only a top-level fulltext entry's score filters results.`
+   - Strict: the threshold applies to its own branch.
+7. **`@include` / `@skip` in a `selectionSet` are ignored.**
+   - Warning: `@include / @skip on "title" in a selectionSet is ignored in 2.x: the selection is always kept.`
+   - Strict: honoured for a literal `if: true | false`. A `$variable` or a missing or non-boolean `if` throws.
+8. **`mode: 'insensitive'` does not apply to `_IN` / `_NOT_IN`.**
+   - Warning: `` `mode: 'insensitive'` does not apply to `title_IN`: _IN / _NOT_IN compare case-sensitively in 2.x. ``
+   - Strict: both sides are compared lowercased. This applies to String fields only.
+9. **The same response key selected twice with different arguments keeps the first selection.**
+   - Warning: `The selectionSet selects "reviews" twice with different arguments; 2.x keeps the first selection and drops the second.`
+   - Strict: throws `Fields "reviews" conflict because they have differing arguments. Use different aliases on the fields to fetch both.`
+   - Only selections that can apply to the same object conflict. That is the case when either one is outside any fragment, or when their fragment types share a concrete type; interface and union conditions expand to their members. Fragments on disjoint types (`... on Dog { pals(where: A) }` and `... on Cat { pals(where: B) }`) are valid GraphQL: they never warn and never throw. In strict mode each type gets its own arguments; by default the first selection is used for both, as before.
+10. **Differently aliased `edges`, `node` or `properties` in one connection keep only the first key.**
+    - Warning: `"reviewsConnection" selects \`edges\` under two response keys ("a", "b"); 2.x returns only "a", with both selections merged into it.` Inside one `edges`, the warning reads `"reviewsConnection" selects \`node\` under two response keys ("a", "b") in its edges; …` (likewise for `properties`).
+    - Strict: each key is returned with its own selection.
+
 ## 2.5.4 (2026-10-18) — security fix
 
 > **Security patch.** Fixes an authorization bypass in node-level security for nodes that carry the labels of two or more implementers of the same interface or union. Affects **1.7.0–2.5.3** for `InterfaceModel` reads (`find`, `findFirst`, `findUnique`, `count`, `aggregate`) and **2.3.0–2.5.3** for interface / union relationship targets (nested selections, traversal filters, `connect` / `disconnect` and nested writes). OGMs without `policies` compile the same policy-free Cypher as before. Upgrade if you use `policies`.
