@@ -4,6 +4,7 @@ import {
   print,
   valueFromASTUntyped,
   type ValueNode,
+  type DirectiveNode,
   type DocumentNode,
   type FieldNode,
   type InlineFragmentNode,
@@ -283,6 +284,55 @@ function assertNoVariables(value: ValueNode, where: string): void {
     for (const v of value.values) assertNoVariables(v, where);
   if (value.kind === Kind.OBJECT)
     for (const f of value.fields) assertNoVariables(f.value, where);
+}
+
+/**
+ * v2.6.0 — whether `@include` / `@skip` keep a selectionSet field or inline
+ * fragment. 2.x ignores both directives (the selection is always kept) and
+ * warns; strict honours a literal `if: true | false` and rejects anything
+ * else, `$variables` included (selectionSet strings have no variables).
+ */
+function keptByDirectives(
+  directives: readonly DirectiveNode[] | undefined,
+  where: string,
+  ctx: ParseContext,
+): boolean {
+  const relevant = (directives ?? []).filter(
+    (d) => d.name.value === 'include' || d.name.value === 'skip',
+  );
+  if (relevant.length === 0) return true;
+  if (!ctx.strict) {
+    parseWarn(ctx, {
+      code: 'selection-include-skip',
+      detail: where,
+      problem:
+        `@include / @skip on "${where}" in a selectionSet is ignored in 2.x: ` +
+        `the selection is always kept.`,
+      fix: 'honour @include / @skip with a literal `if: true | false`',
+    });
+    return true;
+  }
+  let kept = true;
+  for (const directive of relevant) {
+    const name = directive.name.value;
+    const args = directive.arguments ?? [];
+    const arg = args.length === 1 ? args[0] : undefined;
+    if (!arg || arg.name.value !== 'if')
+      throw new OGMError(
+        `@${name} on "${where}" takes exactly one argument: if: true | false.`,
+      );
+    if (arg.value.kind === Kind.VARIABLE)
+      throw new OGMError(
+        `GraphQL variables are not supported in selectionSet directives (@${name} on "${where}": ` +
+          `$${arg.value.name.value}). Use a literal true or false.`,
+      );
+    if (arg.value.kind !== Kind.BOOLEAN)
+      throw new OGMError(
+        `@${name}(if:) on "${where}" must be a literal true or false.`,
+      );
+    if (name === 'include' ? !arg.value.value : arg.value.value) kept = false;
+  }
+  return kept;
 }
 
 function assertNoArguments(field: FieldNode, where: string): void {
@@ -824,6 +874,14 @@ export class SelectionCompiler {
       if (sel.kind === Kind.INLINE_FRAGMENT) {
         const fragment = sel as InlineFragmentNode;
         const condition = fragment.typeCondition?.name.value ?? typeCondition;
+        if (
+          !keptByDirectives(
+            fragment.directives,
+            `... on ${condition ?? '(inline fragment)'}`,
+            ctx,
+          )
+        )
+          continue;
         if (fragment.selectionSet)
           for (const merged of this.convertSelectionSet(
             fragment.selectionSet,
@@ -838,6 +896,14 @@ export class SelectionCompiler {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
       const fieldName = field.name.value;
+      if (
+        !keptByDirectives(
+          field.directives,
+          field.alias?.value ?? fieldName,
+          ctx,
+        )
+      )
+        continue;
       // v2.5.0 — fields are keyed by their OUTPUT name, so the same field
       // under two aliases (`a: kids { .. } b: kids { .. }`) stays two
       // selections. Pre-2.5.0 they collapsed into one.
@@ -892,6 +958,14 @@ export class SelectionCompiler {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
       assertNoArguments(field, `${parentNode.fieldName}.${field.name.value}`);
+      if (
+        !keptByDirectives(
+          field.directives,
+          `${parentNode.fieldName}.${field.name.value}`,
+          ctx,
+        )
+      )
+        continue;
 
       if (field.name.value === 'totalCount') {
         parentNode.totalCount = true;
@@ -910,6 +984,14 @@ export class SelectionCompiler {
             edgeField,
             `${parentNode.fieldName}.edges.${edgeField.name.value}`,
           );
+          if (
+            !keptByDirectives(
+              edgeField.directives,
+              `${parentNode.fieldName}.edges.${edgeField.name.value}`,
+              ctx,
+            )
+          )
+            continue;
 
           // v2.5.3 — a repeated `edges { node { … } }` merges its
           // sub-selections; pre-2.5.3 the last one replaced the others.

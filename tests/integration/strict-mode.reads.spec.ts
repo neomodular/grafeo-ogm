@@ -311,4 +311,39 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       ).rejects.toThrow(OGMError);
     });
   });
+
+  describe('item 7 — @include / @skip in a selectionSet', () => {
+    const selectionSet =
+      '{ id title @include(if: false) body @skip(if: true) pages @include(if: true) }';
+
+    it('default: the directives are ignored, one warning per field', async () => {
+      const { doc, logger } = make();
+      const rows = await doc.find({
+        where: { id: id('both') } as never,
+        selectionSet,
+      });
+      expect(rows).toEqual([
+        { id: id('both'), title: word('alpha'), body: word('beta'), pages: 10 },
+      ]);
+      await doc.find({ where: { id: id('both') } as never, selectionSet });
+      // One warning per directive-carrying field, never repeated.
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+      expect(String(logger.warn.mock.calls[0][0])).toContain(
+        '@include / @skip on "title" in a selectionSet is ignored in 2.x',
+      );
+    });
+
+    it('strict: the directives are honoured', async () => {
+      const { doc } = make(true);
+      expect(
+        await doc.find({ where: { id: id('both') } as never, selectionSet }),
+      ).toEqual([{ id: id('both'), pages: 10 }]);
+      await expect(
+        doc.find({
+          where: { id: id('both') } as never,
+          selectionSet: '{ id title @include(if: $x) }',
+        }),
+      ).rejects.toThrow(OGMError);
+    });
+  });
 });

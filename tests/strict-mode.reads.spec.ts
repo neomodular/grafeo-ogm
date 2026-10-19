@@ -450,3 +450,71 @@ describe('item 9 — one response key, different arguments (v2.6.0)', () => {
     expect(cypher).toContain(', one: [');
   });
 });
+
+describe('item 7 — @include / @skip in a selectionSet (v2.6.0)', () => {
+  const find = (selectionSet: string): Case => ({
+    label: selectionSet,
+    expected: '',
+    run: (ogm) => ogm.model('Book').find({ selectionSet }),
+  });
+
+  it('default: ignored, one warning per selection (cache hits too)', async () => {
+    const { logger } = await runCase(
+      undefined,
+      find('{ id title @include(if: false) }'),
+      3,
+    );
+    expectOneWarning(
+      logger,
+      '@include / @skip on "title" in a selectionSet is ignored in 2.x: the selection is always kept.',
+    );
+  });
+
+  it('default: a $variable is still ignored, not rejected', async () => {
+    const { cypher } = await runCase(
+      undefined,
+      find('{ id title @include(if: $show) }'),
+    );
+    expect(cypher).toBe('MATCH (n:`Book`)\nRETURN n { .`id`, .`title` }');
+  });
+
+  it('strict: honours literal if on fields, fragments and connection keys', async () => {
+    const { cypher, logger } = await runCase(
+      true,
+      caseNamed('@include / @skip in a selectionSet'),
+    );
+    expect(cypher).toBe('MATCH (n:`Book`)\nRETURN n { .`id`, .`pages` }');
+    const more = await runCase(
+      true,
+      find(
+        '{ id ... on Book @skip(if: true) { title } reviewsConnection { totalCount @skip(if: true) edges { node { id } properties @include(if: false) { at } } } }',
+      ),
+    );
+    expect(more.cypher).toBe(
+      'MATCH (n:`Book`)\n' +
+        'RETURN n { .`id`, reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | { node: n0 { .`id` } }] } }',
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      '{ id title @include(if: $show) }',
+      'GraphQL variables are not supported in selectionSet directives (@include on "title": $show). Use a literal true or false.',
+    ],
+    [
+      '{ id title @skip(if: "yes") }',
+      '@skip(if:) on "title" must be a literal true or false.',
+    ],
+    [
+      '{ id title @include }',
+      '@include on "title" takes exactly one argument: if: true | false.',
+    ],
+  ])('strict: rejects %s', async (selectionSet, message) => {
+    Model.clearSelectionCache();
+    const { ogm } = makeOgm(true);
+    await expect(find(selectionSet).run(ogm)).rejects.toThrow(
+      new OGMError(message),
+    );
+  });
+});
