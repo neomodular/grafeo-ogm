@@ -539,6 +539,36 @@ export class MutationCompiler {
   }
 
   /**
+   * v2.7.1 — whether a connect item keeps an EXISTING relationship's edge
+   * properties (`overwrite: false`). Through v2.7.0 (and still by default)
+   * `overwrite` is accepted but ignored: MERGE + SET overwrites the edge
+   * values of a relationship that already exists. Default: one warning per
+   * relationship field when the item carries edge values (without any the
+   * flag changes nothing) and `false`; strict: `true`, and the item's edge
+   * values go in ON CREATE SET.
+   */
+  private connectKeepsExistingEdge(
+    item: Record<string, unknown>,
+    relDef: RelationshipDefinition,
+  ): boolean {
+    if (item.overwrite !== false) return false;
+    if (this.strictMode.strict) return true;
+    const edge = item.edge;
+    if (
+      isPlainObject(edge) &&
+      Object.keys(edge).some((k) => edge[k] !== undefined)
+    )
+      this.strictMode.warn(
+        'connect-overwrite-false',
+        relDef.fieldName,
+        `"overwrite: false" on a connect item of "${relDef.fieldName}" is ignored: when the relationship ` +
+          `already exists, its edge properties are overwritten with the item's "edge" values.`,
+        'leave an existing relationship unchanged when "overwrite" is false',
+      );
+    return false;
+  }
+
+  /**
    * Generate CREATE Cypher for one or more nodes.
    * Handles scalar properties, nested relationship creates, and connects.
    */
@@ -1864,11 +1894,17 @@ export class MutationCompiler {
       // isConnectFastPathEligible). Everything else — null values,
       // logical keys, traversals, abstract targets — takes one CALL
       // subquery per item, compiled through WhereCompiler.
+      // v2.7.1 — in strict mode an `overwrite: false` item takes the
+      // per-item path, which compiles its edge values to ON CREATE SET.
       const useFastPath =
         !abstractTarget(targetNodeDef.typeName, this.schema) &&
         this.isConnectFastPathEligible(
           spec as Record<string, unknown>[],
           targetNodeDef,
+        ) &&
+        !(
+          this.strictMode.strict &&
+          spec.some((it) => isPlainObject(it) && it.overwrite === false)
         );
 
       if (!useFastPath)
@@ -1895,6 +1931,7 @@ export class MutationCompiler {
         for (const item of spec as Record<string, unknown>[]) {
           this.checkLinkItemKeys(item, 'connect', relDef);
           this.checkEdgeKeys(relDef, item.edge, 'connect');
+          this.connectKeepsExistingEdge(item, relDef);
         }
         const targetVar = `${varPrefix}target`;
         const relVar = `${varPrefix}r`;
@@ -2110,6 +2147,7 @@ export class MutationCompiler {
     ].filter((c): c is string => Boolean(c));
     if (conditions.length > 0) lines.push(`WHERE ${conditions.join(' AND ')}`);
 
+    const keepExisting = this.connectKeepsExistingEdge(connectSpec, relDef);
     if (edgeInput && Object.keys(edgeInput).length > 0) {
       // Use bare target var (no label) since connectVar is already bound by MATCH.
       // Including labels on a bound variable in MERGE causes Neo4j to reject it.
@@ -2135,7 +2173,7 @@ export class MutationCompiler {
         );
         a.params[paramName] = coerceWriteValue(val, edgePropDef);
       }
-      if (setItems.length > 0) lines.push(`SET ${setItems.join(', ')}`);
+      lines.push(...edgeMergeSets(setItems, keepExisting));
     } else {
       const relPattern = buildRelPattern({
         sourceVar,
@@ -3293,6 +3331,16 @@ export class MutationCompiler {
 }
 
 /**
+ * v2.7.1 — the SET clause after a connect's `MERGE` of the relationship:
+ * its edge values on every match (the pre-2.7.1 `SET …`), or only when the
+ * MERGE creates it when `keepExisting` (`overwrite: false`, strict mode).
+ */
+function edgeMergeSets(explicit: string[], keepExisting: boolean): string[] {
+  if (explicit.length === 0) return [];
+  return [`${keepExisting ? 'ON CREATE SET' : 'SET'} ${explicit.join(', ')}`];
+}
+
+/**
  * Build a stable signature for a `connect` array item — the set of keys
  * inside `where.node` (or `where` directly for the legacy bare-object
  * shape) PLUS the set of keys inside `edge`. Used by the UNWIND fast
@@ -3302,7 +3350,8 @@ export class MutationCompiler {
 /**
  * v2.6.0 — the keys a connect / disconnect item is compiled from. `overwrite`
  * is offered by the generated `ConnectFieldInput` and accepted as before
- * (MERGE + SET always overwrites the edge properties it is given).
+ * (MERGE + SET always overwrites the edge properties it is given; v2.7.1 —
+ * strict mode honours `overwrite: false`, see connectKeepsExistingEdge).
  */
 const CONNECT_ITEM_KEYS: ReadonlySet<string> = new Set([
   'where',

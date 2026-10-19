@@ -1187,6 +1187,16 @@ await charts.updateMany({ where: { id_IN: ['c1', 'c4'] }, data: { tags: [{ updat
 
 By default the statement compiles exactly as in 2.7.0. When a later clause reads or writes the deleted node (the `update` response, a nested `create` or `connect` from it), the server rejects the statement with `Neo.ClientError.Statement.EntityNotFound`. Since 2.7.1, when the OGM owns the transaction (auto-commit, or a caller `session`), it then re-runs the statement once with the deleted node's remaining writes skipped, so `update` returns the surviving roots. In a caller `transaction` the server has already rolled the transaction back, so the error is still thrown (and warned about once). Strict mode compiles the guard up front, in every transaction.
 
+#### 14. Connect `overwrite: false` (since 2.7.1)
+
+```typescript
+await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: teamId } }, edge: { role: 'admin' }, overwrite: false }] } });
+// default: MERGE … SET r.role = … — an existing relationship's role is overwritten (and warns)
+// strict:  MERGE … ON CREATE SET r.role = … — an existing relationship is left unchanged; a missing one is created with the edge values
+```
+
+Applies to every connect: top-level, nested in `create` / `update`, per union or interface member, and inside another connect. Without `edge` values the flag changes nothing, so it does not warn. In `@neo4j/graphql`, `overwrite: false` instead made the mutation fail (through APOC) when the relationship already existed.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
