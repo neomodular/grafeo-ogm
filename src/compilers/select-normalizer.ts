@@ -280,6 +280,21 @@ export class SelectNormalizer {
       isConnection: true,
     };
 
+    // v2.5.3 — the generated SelectFields offer `xConnection: true`,
+    // `edges: true`, `node: true` and `properties: true`. Pre-2.5.3 only the
+    // `{ select }` object forms were read, so every `true` form returned
+    // `edges: [{}]`. `true` now selects all scalars (node and edge), as it
+    // does for a plain relationship field.
+    const allNode = () => [...this.allScalarFields(targetDef)];
+    const allEdge = () => this.allEdgeScalarFields(relDef);
+
+    if (value === true) {
+      node.children = allNode();
+      const edgeChildren = allEdge();
+      if (edgeChildren.length > 0) node.edgeChildren = edgeChildren;
+      return node;
+    }
+
     if (!isPlainObject(value)) return node;
 
     const obj = value;
@@ -308,11 +323,16 @@ export class SelectNormalizer {
           node.totalCountOnly = true;
       }
 
-      if (selectObj.edges && typeof selectObj.edges === 'object') {
+      if (selectObj.edges === true) {
+        node.children = allNode();
+        const edgeChildren = allEdge();
+        if (edgeChildren.length > 0) node.edgeChildren = edgeChildren;
+      } else if (selectObj.edges && typeof selectObj.edges === 'object') {
         const edgesObj = selectObj.edges as Record<string, unknown>;
 
         // edges.node.select -> children
-        if (edgesObj.node && typeof edgesObj.node === 'object') {
+        if (edgesObj.node === true) node.children = allNode();
+        else if (edgesObj.node && typeof edgesObj.node === 'object') {
           const nodeObj = edgesObj.node as Record<string, unknown>;
           if (nodeObj.select && typeof nodeObj.select === 'object') {
             const children = this.normalize(
@@ -335,7 +355,13 @@ export class SelectNormalizer {
         }
 
         // edges.properties.select -> edgeChildren
-        if (edgesObj.properties && typeof edgesObj.properties === 'object') {
+        if (edgesObj.properties === true) {
+          const edgeChildren = allEdge();
+          if (edgeChildren.length > 0) node.edgeChildren = edgeChildren;
+        } else if (
+          edgesObj.properties &&
+          typeof edgesObj.properties === 'object'
+        ) {
           const propsObj = edgesObj.properties as Record<string, unknown>;
           if (propsObj.select && typeof propsObj.select === 'object')
             node.edgeChildren = this.normalizeEdgeProperties(
@@ -465,6 +491,27 @@ export class SelectNormalizer {
         });
     }
 
+    return nodes;
+  }
+
+  /**
+   * v2.5.3 — SelectionNode[] for every edge property of a relationship
+   * (empty when it has no `@relationshipProperties`).
+   */
+  private allEdgeScalarFields(relDef: RelationshipDefinition): SelectionNode[] {
+    if (!relDef.properties) return [];
+    const propsDef = this.schema.relationshipProperties.get(relDef.properties);
+    if (!propsDef) return [];
+    const nodes: SelectionNode[] = [];
+    for (const [, prop] of propsDef.properties) {
+      if (prop.isCypher) continue;
+      nodes.push({
+        fieldName: prop.name,
+        isScalar: true,
+        isRelationship: false,
+        isConnection: false,
+      });
+    }
     return nodes;
   }
 
