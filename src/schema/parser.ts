@@ -259,7 +259,13 @@ function parseField(
           );
         return scalar;
       });
-    } else if (val) defaultValue = scalarDefaultString(val);
+    } else if (val) {
+      const scalar = scalarDefaultString(val);
+      // v2.5.3 — a single value on a list field coerces to a one-element
+      // list (GraphQL input coercion). Pre-2.5.3 the scalar was stored on
+      // a field the generated types declare as a list.
+      defaultValue = isArray && scalar !== undefined ? [scalar] : scalar;
+    }
   }
 
   // Determine if this is truly a scalar property

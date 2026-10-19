@@ -652,6 +652,21 @@ describe('parseSchema - @default directive', () => {
     const user = metadata.nodes.get('User')!;
     expect(user.properties.get('onboardingStep')!.defaultValue).toBe('WELCOME');
   });
+
+  // v2.5.3 — a single value on a list field coerces to a one-element list.
+  it('wraps a scalar default on a list field into a list', () => {
+    const user = parseSchema(`
+      type User @node {
+        id: ID! @id
+        tags: [String!] @default(value: "solo")
+        counts: [Int!]! @default(value: 7)
+        name: String @default(value: "n")
+      }
+    `).nodes.get('User')!;
+    expect(user.properties.get('tags')!.defaultValue).toEqual(['solo']);
+    expect(user.properties.get('counts')!.defaultValue).toEqual(['7']);
+    expect(user.properties.get('name')!.defaultValue).toBe('n');
+  });
 });
 
 describe('parseSchema - union types', () => {
