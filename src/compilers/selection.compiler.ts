@@ -155,6 +155,74 @@ export interface SelectionNode {
    * default `true`). Only relationship aggregates accept it.
    */
   directed?: boolean;
+  /**
+   * Connection only (v2.7.1): the `pageInfo` selections, one per response
+   * key. Pre-2.7.1 `pageInfo` was silently dropped although the generated
+   * connection type declares it.
+   */
+  pageInfo?: PageInfoSelection[];
+  /**
+   * Connection edge set only (v2.7.1): the `cursor` selections of `edges`,
+   * one per response key. Pre-2.7.1 `cursor` was silently dropped.
+   */
+  cursors?: ConnectionKeySelection[];
+}
+
+/**
+ * v2.7.1 — one selected key inside a connection (`cursor` of `edges`, or a
+ * field of `pageInfo`): its response key, the field it selects and whether
+ * it was given a sub-selection (a shape mismatch: reported, never projected).
+ */
+export interface ConnectionKeySelection {
+  key: string;
+  field: string;
+  subSelection?: boolean;
+}
+
+/**
+ * v2.7.1 — a connection's `pageInfo` under one response key. `fields` is
+ * absent when `pageInfo` was selected without a sub-selection (a shape
+ * mismatch: reported, never projected).
+ */
+export interface PageInfoSelection {
+  key: string;
+  fields?: ConnectionKeySelection[];
+}
+
+/** v2.7.1 — the fields of the generated `PageInfo` type. */
+export const PAGE_INFO_FIELDS: ReadonlySet<string> = new Set([
+  'hasNextPage',
+  'hasPreviousPage',
+  'startCursor',
+  'endCursor',
+]);
+
+/** v2.7.1 — merge selections by response key (first one wins). */
+function mergeKeySelections(
+  base: ConnectionKeySelection[] | undefined,
+  extra: ConnectionKeySelection[] | undefined,
+): ConnectionKeySelection[] | undefined {
+  if (!extra || extra.length === 0) return base;
+  const out = [...(base ?? [])];
+  for (const sel of extra)
+    if (!out.some((s) => s.key === sel.key)) out.push(sel);
+  return out;
+}
+
+/** v2.7.1 — merge `pageInfo` selections by response key, fields unioned. */
+function mergePageInfo(
+  base: PageInfoSelection[] | undefined,
+  extra: PageInfoSelection[] | undefined,
+): PageInfoSelection[] | undefined {
+  if (!extra || extra.length === 0) return base;
+  const out = (base ?? []).map((p) => ({ ...p }));
+  for (const sel of extra) {
+    const same = out.find((p) => p.key === sel.key);
+    if (!same) out.push({ ...sel });
+    else if (sel.fields)
+      same.fields = mergeKeySelections(same.fields ?? [], sel.fields);
+  }
+  return out;
 }
 
 /** One extra `node` / `properties` key of an edge set (v2.6.0, strict). */
@@ -367,6 +435,11 @@ function mergeSameArguments(
     );
   if (existing.isConnection) {
     if (incoming.totalCount) existing.totalCount = true;
+    // v2.7.1 — `pageInfo` / `cursor` merge by response key.
+    const pageInfo = mergePageInfo(existing.pageInfo, incoming.pageInfo);
+    if (pageInfo) existing.pageInfo = pageInfo;
+    const cursors = mergeKeySelections(existing.cursors, incoming.cursors);
+    if (cursors) existing.cursors = cursors;
     if (existing.totalCountOnly && !incoming.totalCountOnly)
       delete existing.totalCountOnly;
     if (incoming.connectionAliases)
@@ -474,6 +547,9 @@ function mergeEdgeKeys(
     }
     setEdgeKeyEntries(into, which, merged);
   }
+  // v2.7.1 — `cursor` keys merge by response key too.
+  const cursors = mergeKeySelections(into.cursors, from.cursors);
+  if (cursors) into.cursors = cursors;
 }
 
 /** A connection's edges selection as a standalone edge set (strict). */
@@ -489,6 +565,7 @@ function asEdgeSet(node: SelectionNode): SelectionNode | null {
   if (node.edgeChildren) set.edgeChildren = node.edgeChildren;
   if (node.extraNodes) set.extraNodes = node.extraNodes;
   if (node.extraProperties) set.extraProperties = node.extraProperties;
+  if (node.cursors) set.cursors = node.cursors;
   const { totalCount: _total, ...aliases } = node.connectionAliases ?? {};
   if (Object.keys(aliases).length > 0) set.connectionAliases = aliases;
   return set;
@@ -528,9 +605,13 @@ function mergeConnectionEdgeSets(
     existing.connectionAliases?.totalCount ??
     incoming.connectionAliases?.totalCount;
   if (incoming.totalCount) existing.totalCount = true;
+  const pageInfo = mergePageInfo(existing.pageInfo, incoming.pageInfo);
+  if (pageInfo) existing.pageInfo = pageInfo;
   const [main, ...rest] = [...sets.values()];
   if (main) {
     delete existing.totalCountOnly;
+    if (main.cursors) existing.cursors = main.cursors;
+    else delete existing.cursors;
     if (main.children) existing.children = main.children;
     else delete existing.children;
     if (main.edgeChildren) existing.edgeChildren = main.edgeChildren;
@@ -676,6 +757,41 @@ function outputKey(node: SelectionNode): string {
   return escapeIdentifier(node.fieldName);
 }
 
+/** v2.7.1 — the base64 alphabet, for {@link cursorExpr}. */
+const BASE64_ALPHABET =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/** v2.7.1 — base64 of `arrayconnection` (15 bytes: no padding). */
+const CURSOR_PREFIX_B64 = 'YXJyYXljb25uZWN0aW9u';
+/** v2.7.1 — the cursor of offset 0: base64 of `arrayconnection:0`. */
+const FIRST_CURSOR = 'YXJyYXljb25uZWN0aW9uOjA=';
+
+/**
+ * v2.7.1 — a Cypher expression for upstream `@neo4j/graphql`'s connection
+ * cursor of the integer offset `index`: `offsetToCursor(index)` from
+ * `graphql-relay`, i.e. base64 of `arrayconnection:<index>`.
+ *
+ * Neo4j 5.x has no base64 function (APOC's is optional), so it is encoded
+ * here: the 15-byte prefix is a constant, and the rest, `:` and the
+ * decimal digits, is encoded three bytes at a time from the character
+ * codes (`:` = 58, `0`–`9` = 48–57). Variables carry `depth` so nested
+ * connections never shadow each other.
+ */
+function cursorExpr(index: string, depth: number): string {
+  const [l, c, a, n, g] = ['l', 'c', 'a', 'n', 'g'].map(
+    (v) => `__c${v}${depth}`,
+  );
+  const sym = (i: string) => `substring('${BASE64_ALPHABET}', ${i}, 1)`;
+  return (
+    `'${CURSOR_PREFIX_B64}' + head([${l} IN [[${c} IN split(':' + toString(${index}), '') | ` +
+    `CASE ${c} WHEN ':' THEN 58 ELSE 48 + toInteger(${c}) END]] | ` +
+    `reduce(${a} = '', ${n} IN [${g} IN range(0, size(${l}) - 1, 3) | ` +
+    `[${l}[${g}] * 65536 + coalesce(${l}[${g} + 1], 0) * 256 + coalesce(${l}[${g} + 2], 0), size(${l}) - ${g}]] | ` +
+    `${a} + ${sym(`${n}[0] / 262144`)} + ${sym(`${n}[0] / 4096 % 64`)} + ` +
+    `CASE WHEN ${n}[1] > 1 THEN ${sym(`${n}[0] / 64 % 64`)} ELSE '=' END + ` +
+    `CASE WHEN ${n}[1] > 2 THEN ${sym(`${n}[0] % 64`)} ELSE '=' END)])`
+  );
+}
+
 /** First letter uppercased, as the generated type names spell fields. */
 function pascal(fieldName: string): string {
   return fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
@@ -815,6 +931,111 @@ export interface UnknownSelectedField {
    * alternatives, appended to the message.
    */
   hint?: string;
+  /**
+   * v2.7.1 — what 2.x does with it, when not the default unknown-field
+   * outcome (fields inside a connection's `pageInfo`).
+   */
+  outcome?: string;
+  /**
+   * v2.7.1 — the field is KNOWN but selected in the wrong shape (a scalar
+   * with a sub-selection, a relationship without one): `expected` says
+   * what the field is and how to select it, `outcome` what 2.x does.
+   */
+  shape?: { expected: string; outcome: string };
+}
+
+/** v2.7.1 — 2.x outcome of a selection the compiler drops. */
+export const LEFT_OUT = '2.x leaves it out of the result';
+/** v2.7.1 — 2.x outcome of a selection projected as a raw property. */
+export const RAW_PROPERTY =
+  '2.x projects it as a raw node property (null unless one is stored)';
+
+/** v2.7.1 — whether a property holds a scalar / enum, not a node type. */
+export function isScalarProperty(
+  prop: PropertyDefinition,
+  schema: SchemaMetadata,
+): boolean {
+  return (
+    !schema.nodes.has(prop.type) &&
+    !schema.interfaces?.has(prop.type) &&
+    !schema.unions?.has(prop.type)
+  );
+}
+
+/** v2.7.1 — `String`, `[String]` … as the schema declares a property. */
+export function propertyTypeName(prop: PropertyDefinition): string {
+  return prop.isArray ? `[${prop.type}]` : prop.type;
+}
+
+/**
+ * v2.7.1 — the problems of a connection's `pageInfo` and `cursor`
+ * selections (`node` and its strict-mode extra edge sets): `pageInfo`
+ * without fields, a field `PageInfo` does not declare, a scalar given a
+ * sub-selection. The compiler leaves each of them out of the result.
+ *
+ * @param typePrefix `<Parent><Field>`, so owners name the generated
+ *   `<Parent><Field>Connection` / `<Parent><Field>Relationship` types
+ */
+export function connectionKeyIssues(
+  node: SelectionNode,
+  typePrefix: string,
+  api: 'selectionSet' | 'select' = 'selectionSet',
+): UnknownSelectedField[] {
+  const out: UnknownSelectedField[] = [];
+  const asScalar = (field: string) =>
+    api === 'selectionSet'
+      ? `select it as "${field}"`
+      : `select it with \`${field}: true\``;
+  for (const sel of node.pageInfo ?? []) {
+    if (!sel.fields) {
+      out.push({
+        owner: `type "${typePrefix}Connection"`,
+        field: 'pageInfo',
+        subSelection: false,
+        shape: {
+          expected:
+            api === 'selectionSet'
+              ? 'is an object (PageInfo) and needs a sub-selection, e.g. "pageInfo { hasNextPage endCursor }"'
+              : 'is an object (PageInfo): select it with `pageInfo: true` or `pageInfo: { select: { hasNextPage: true, … } }`',
+          outcome: LEFT_OUT,
+        },
+      });
+      continue;
+    }
+    for (const f of sel.fields) {
+      const known = f.field === '__typename' || PAGE_INFO_FIELDS.has(f.field);
+      if (!known)
+        out.push({
+          owner: 'type "PageInfo"',
+          field: f.field,
+          subSelection: !!f.subSelection,
+          outcome: LEFT_OUT,
+        });
+      else if (f.subSelection)
+        out.push({
+          owner: 'type "PageInfo"',
+          field: f.field,
+          subSelection: true,
+          shape: {
+            expected: `is a scalar field (${f.field.startsWith('has') ? 'Boolean' : 'String'}) and takes no sub-selection: ${asScalar(f.field)}`,
+            outcome: LEFT_OUT,
+          },
+        });
+    }
+  }
+  for (const set of [node, ...(node.extraEdges ?? [])])
+    for (const c of set.cursors ?? [])
+      if (c.subSelection)
+        out.push({
+          owner: `type "${typePrefix}Relationship"`,
+          field: 'cursor',
+          subSelection: true,
+          shape: {
+            expected: `is a scalar field (String) and takes no sub-selection: ${asScalar('cursor')}`,
+            outcome: LEFT_OUT,
+          },
+        });
+  return out;
 }
 
 /** v2.6.3 — record an unknown field once per owner + field. */
@@ -855,15 +1076,31 @@ export function reportUnknownSelectedField(
   api: 'selectionSet' | 'select',
   unknown: UnknownSelectedField,
 ): void {
-  const { owner, field, subSelection, edge, hint } = unknown;
+  const { owner, field, subSelection, edge, hint, shape } = unknown;
+  // v2.7.1 — a known field in the wrong shape (Bug 3).
+  if (shape) {
+    if (strictMode.strict)
+      throw new OGMError(
+        `Field "${field}" in ${api} on ${owner} ${shape.expected}.`,
+      );
+    strictMode.warn(
+      api === 'selectionSet' ? 'selection-field-shape' : 'select-field-shape',
+      `${owner}.${field}`,
+      `The ${api} selects "${field}" on ${owner} in the wrong shape: it ${shape.expected}; ${shape.outcome}.`,
+      `reject ${api} fields selected in the wrong shape`,
+    );
+    return;
+  }
   const suffix = hint ? ` ${hint}` : '';
   if (strictMode.strict)
     throw new OGMError(
       `Unknown field "${field}" in ${api} on ${owner}.${suffix}`,
     );
-  const outcome = subSelection
-    ? '2.x leaves it out of the result'
-    : `2.x projects it as a raw ${edge ? 'relationship' : 'node'} property (null unless one is stored)`;
+  const outcome =
+    unknown.outcome ??
+    (subSelection
+      ? LEFT_OUT
+      : `2.x projects it as a raw ${edge ? 'relationship' : 'node'} property (null unless one is stored)`);
   strictMode.warn(
     api === 'selectionSet' ? 'selection-unknown-field' : 'select-unknown-field',
     `${owner}.${field}`,
@@ -1109,6 +1346,7 @@ export class SelectionCompiler {
           ...(set.extraNodes ?? []).map((e) => e.children),
         ])
           this.collectUnknownFields(children, target, out, false, depth + 1);
+    this.collectPageInfoAndCursorIssues(node, owner, base, out);
     const props = rel.properties
       ? this.schema.relationshipProperties.get(rel.properties)
       : undefined;
@@ -1131,6 +1369,25 @@ export class SelectionCompiler {
               subSelection: !child.isScalar,
               edge: true,
             });
+  }
+
+  /**
+   * v2.7.1 — check a connection's `pageInfo` and `cursor` selections:
+   * `pageInfo` without a sub-selection, a field `PageInfo` does not declare
+   * and a sub-selection on a scalar are reported (the compiler leaves them
+   * out of the result).
+   */
+  private collectPageInfoAndCursorIssues(
+    node: SelectionNode,
+    owner: NodeDefinition,
+    base: string,
+    out: UnknownSelectedField[],
+  ): void {
+    for (const issue of connectionKeyIssues(
+      node,
+      `${owner.typeName}${pascal(base)}`,
+    ))
+      pushUnknown(out, issue);
   }
 
   /**
@@ -1735,6 +1992,25 @@ export class SelectionCompiler {
         parentNode.totalCount = true;
         this.recordConnectionAlias(parentNode, 'totalCount', field);
       }
+      // v2.7.1 — `pageInfo { … }`; pre-2.7.1 it was silently dropped.
+      if (field.name.value === 'pageInfo') {
+        const key = field.alias?.value ?? 'pageInfo';
+        if (key !== 'pageInfo') assertSafeIdentifier(key, 'selection alias');
+        parentNode.pageInfo = mergePageInfo(parentNode.pageInfo, [
+          {
+            key,
+            ...(field.selectionSet
+              ? {
+                  fields: this.parseConnectionKeys(
+                    field.selectionSet,
+                    `${parentNode.fieldName}.pageInfo`,
+                    ctx,
+                  ),
+                }
+              : {}),
+          },
+        ]);
+      }
       let target = parentNode;
       if (field.name.value === 'edges') {
         selectsEdges = true;
@@ -1779,6 +2055,19 @@ export class SelectionCompiler {
             )
           )
             continue;
+
+          // v2.7.1 — `cursor`; pre-2.7.1 it was silently dropped.
+          if (edgeField.name.value === 'cursor') {
+            const key = edgeField.alias?.value ?? 'cursor';
+            if (key !== 'cursor') assertSafeIdentifier(key, 'selection alias');
+            target.cursors = mergeKeySelections(target.cursors, [
+              {
+                key,
+                field: 'cursor',
+                ...(edgeField.selectionSet ? { subSelection: true } : {}),
+              },
+            ]);
+          }
 
           // v2.5.3 — a repeated `edges { node { … } }` merges its
           // sub-selections; pre-2.5.3 the last one replaced the others.
@@ -1848,6 +2137,45 @@ export class SelectionCompiler {
     assertSafeIdentifier(alias, 'selection alias');
     node.connectionAliases ??= {};
     node.connectionAliases[key] ??= alias;
+  }
+
+  /**
+   * v2.7.1 — the fields of a `pageInfo { … }` selection (inline fragments
+   * flattened), each with its response key. Whether a field exists is
+   * checked by `assertKnownFields`, not here.
+   */
+  private parseConnectionKeys(
+    selectionSet: SelectionSetNode,
+    where: string,
+    ctx: ParseContext,
+  ): ConnectionKeySelection[] {
+    let out: ConnectionKeySelection[] = [];
+    for (const sel of selectionSet.selections) {
+      if (sel.kind === Kind.INLINE_FRAGMENT) {
+        if (keptByDirectives(sel.directives, `${where} (inline fragment)`, ctx))
+          out =
+            mergeKeySelections(
+              out,
+              this.parseConnectionKeys(sel.selectionSet, where, ctx),
+            ) ?? out;
+        continue;
+      }
+      if (sel.kind !== Kind.FIELD) continue;
+      const name = sel.name.value;
+      assertNoArguments(sel, `${where}.${name}`);
+      if (!keptByDirectives(sel.directives, `${where}.${name}`, ctx)) continue;
+      const key = sel.alias?.value ?? name;
+      if (key !== name) assertSafeIdentifier(key, 'selection alias');
+      out =
+        mergeKeySelections(out, [
+          {
+            key,
+            field: name,
+            ...(sel.selectionSet ? { subSelection: true } : {}),
+          },
+        ]) ?? out;
+    }
+    return out;
   }
 
   /**
@@ -2782,29 +3110,39 @@ export class SelectionCompiler {
     const totalCount = node.totalCount
       ? `${totalCountKey}: size([${pattern}${whereClause} | 1])`
       : '';
-    if (node.totalCountOnly) return `{ ${totalCount} }`;
+    // v2.7.1 — `pageInfo`, over the same filtered list (`''` unselected).
+    const pageInfo = this.compilePageInfo(
+      node.pageInfo,
+      `size([${pattern}${whereClause} | 1])`,
+      currentDepth,
+    );
+    if (node.totalCountOnly) return `{ ${totalCount}${pageInfo} }`;
     // v2.6.0 — strict: `edges` selected under further response keys, each
     // its own list over the same pattern and filter. Empty otherwise.
     const extraEdges = (node.extraEdges ?? [])
-      .map(
-        (extra) =>
-          `, ${escapeIdentifier(edgesKeyOf(extra))}: [${pattern}${whereClause} | ${this.compileEdgeSetMap(
-            extra,
-            childVar,
-            edgeVar,
-            targetDef,
-            maxDepth,
-            currentDepth,
-            params,
-            paramCounter,
-            policyContext,
-          )}]`,
-      )
+      .map((extra) => {
+        const keys: string[] = [];
+        const map = this.compileEdgeSetMap(
+          extra,
+          childVar,
+          edgeVar,
+          targetDef,
+          maxDepth,
+          currentDepth,
+          params,
+          paramCounter,
+          policyContext,
+          keys,
+        );
+        return `, ${escapeIdentifier(edgesKeyOf(extra))}: ${this.withCursors(
+          `[${pattern}${whereClause} | ${map}]`,
+          keys,
+          extra.cursors,
+          currentDepth,
+        )}`;
+      })
       .join('');
-    const withTotal = `${extraEdges}${totalCount ? `, ${totalCount}` : ''}`;
-
-    if (sortKeyTokens.length === 0)
-      return `{ ${edgesKey}: [${pattern}${whereClause} | ${innerMap}]${withTotal} }`;
+    const withTotal = `${extraEdges}${totalCount ? `, ${totalCount}` : ''}${pageInfo}`;
 
     // Re-project only the user-facing keys so synthetic __skN scalars don't
     // leak out of the projection.
@@ -2812,9 +3150,100 @@ export class SelectionCompiler {
       projectionKeys.length > 0
         ? `{ ${projectionKeys.map((k) => `${k}: x.${k}`).join(', ')} }`
         : `{}`;
-    return `{ ${edgesKey}: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
-      ', ',
-    )}]) | ${outerProjection}]${withTotal} }`;
+    const edgesList =
+      sortKeyTokens.length === 0
+        ? `[${pattern}${whereClause} | ${innerMap}]`
+        : `[x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
+            ', ',
+          )}]) | ${outerProjection}]`;
+    // v2.7.1 — `cursor`: each edge's offset in the (sorted) list.
+    return `{ ${edgesKey}: ${this.withCursors(
+      edgesList,
+      projectionKeys,
+      node.cursors,
+      currentDepth,
+    )}${withTotal} }`;
+  }
+
+  /**
+   * v2.7.1 — add each selected `cursor` key to the edges of `list`, with
+   * upstream `@neo4j/graphql` 5.x semantics: the cursor of an edge is
+   * `offsetToCursor(<its offset in the list>)`. Without `first` / `after`
+   * (unsupported) the list is the whole filtered, sorted connection, so the
+   * offsets run from 0. `keys` are the (escaped) keys every edge map
+   * carries. Returns `list` unchanged when no cursor is selected.
+   */
+  private withCursors(
+    list: string,
+    keys: readonly string[],
+    cursors: ConnectionKeySelection[] | undefined,
+    depth: number,
+  ): string {
+    const selected = (cursors ?? []).filter((c) => !c.subSelection);
+    if (selected.length === 0) return list;
+    const e = `__ce${depth}`;
+    const i = `__ci${depth}`;
+    const fields = keys.map((k) => `${k}: ${e}[${i}].${k}`);
+    const rawKeys = keys.map((k) =>
+      k.startsWith('`') ? k.slice(1, -1).replace(/``/g, '`') : k,
+    );
+    for (const c of selected) {
+      const key = escapeIdentifier(c.key);
+      if (rawKeys.includes(c.key))
+        throw new OGMError(
+          `The connection edges select "${c.key}" twice, as cursor and as another field. ` +
+            `Use a different alias for one of them.`,
+        );
+      fields.push(`${key}: ${cursorExpr(i, depth)}`);
+    }
+    return `head([${e} IN [${list}] | [${i} IN range(0, size(${e}) - 1) | { ${fields.join(', ')} }]])`;
+  }
+
+  /**
+   * v2.7.1 — the `, <key>: { … }` entries of a connection's `pageInfo`
+   * selections (`''` when none), with upstream `@neo4j/graphql` 5.x
+   * semantics for a connection read without `first` / `after`: every
+   * filtered edge is on the page, so `hasNextPage` and `hasPreviousPage`
+   * are `false`, and `startCursor` / `endCursor` are the cursors of the
+   * first and last edge — `null` when there is none. `count` is the size
+   * of the very list `edges` and `totalCount` come from (same pattern,
+   * `where` and target `read` policy). Fields with no meaning on
+   * `PageInfo` are left out (`assertKnownFields` reports them).
+   */
+  private compilePageInfo(
+    selections: PageInfoSelection[] | undefined,
+    count: string,
+    depth: number,
+  ): string {
+    if (!selections || selections.length === 0) return '';
+    const c = `__pc${depth}`;
+    let out = '';
+    for (const sel of selections) {
+      if (!sel.fields) continue;
+      const parts: string[] = [];
+      let usesCount = false;
+      for (const f of sel.fields) {
+        if (f.subSelection) continue;
+        const key = escapeIdentifier(f.key);
+        if (f.field === '__typename') parts.push(`${key}: 'PageInfo'`);
+        else if (f.field === 'hasNextPage' || f.field === 'hasPreviousPage')
+          parts.push(`${key}: false`);
+        else if (f.field === 'startCursor') {
+          usesCount = true;
+          parts.push(`${key}: CASE WHEN ${c} > 0 THEN '${FIRST_CURSOR}' END`);
+        } else if (f.field === 'endCursor') {
+          usesCount = true;
+          parts.push(
+            `${key}: CASE WHEN ${c} > 0 THEN ${cursorExpr(`${c} - 1`, depth)} END`,
+          );
+        }
+      }
+      const map = `{ ${parts.join(', ')} }`;
+      out += `, ${escapeIdentifier(sel.key)}: ${
+        usesCount ? `head([${c} IN [${count}] | ${map}])` : map
+      }`;
+    }
+    return out;
   }
 
   /**
@@ -2831,12 +3260,21 @@ export class SelectionCompiler {
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
+    /** v2.7.1 — receives the (escaped) keys of the map, for `cursor`. */
+    keysOut: string[] = [],
   ): string {
     const parts: string[] = [];
     const aliases = set.connectionAliases ?? {};
+    const nodeKey = aliases.node ? escapeIdentifier(aliases.node) : 'node';
+    const propertiesKey = aliases.properties
+      ? escapeIdentifier(aliases.properties)
+      : 'properties';
+    if (set.children && set.children.length > 0) keysOut.push(nodeKey);
+    if (set.edgeChildren && set.edgeChildren.length > 0)
+      keysOut.push(propertiesKey);
     if (set.children && set.children.length > 0)
       parts.push(
-        `${aliases.node ? escapeIdentifier(aliases.node) : 'node'}: ${this.compile(
+        `${nodeKey}: ${this.compile(
           set.children,
           childVar,
           targetDef,
@@ -2858,9 +3296,7 @@ export class SelectionCompiler {
           return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
         })
         .join(', ');
-      parts.push(
-        `${aliases.properties ? escapeIdentifier(aliases.properties) : 'properties'}: ${edgeVar} { ${edgeFields} }`,
-      );
+      parts.push(`${propertiesKey}: ${edgeVar} { ${edgeFields} }`);
     }
     for (const [k, expr] of this.extraEdgeKeyParts(
       set,
@@ -2872,8 +3308,10 @@ export class SelectionCompiler {
       params,
       paramCounter,
       policyContext,
-    ))
+    )) {
       parts.push(`${k}: ${expr}`);
+      keysOut.push(k);
+    }
     return `{ ${parts.join(', ')} }`;
   }
 

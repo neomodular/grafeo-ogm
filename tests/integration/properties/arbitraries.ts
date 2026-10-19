@@ -1351,15 +1351,23 @@ export function selectionSet(
         fc.boolean(),
         nodeSel,
         fc.boolean(),
+        // v2.7.1 — `pageInfo` and the edge `cursor`.
+        fc.constantFrom(
+          '',
+          'pageInfo { hasNextPage hasPreviousPage startCursor endCursor } ',
+          'pi: pageInfo { endCursor s: startCursor } ',
+        ),
+        fc.constantFrom('', 'cursor ', 'c: cursor '),
       )
-      .map(([w, total, node, props]) => {
+      .map(([w, total, node, props, pageInfo, cursor]) => {
         const edgeParts = [
+          cursor.trim(),
           `node ${node}`,
           def.edge && props ? 'properties { weight note }' : '',
         ]
           .filter(Boolean)
           .join(' ');
-        return `${def.field}Connection${w ? `(where: ${gqlLiteral(w)})` : ''} { ${total ? 'totalCount ' : ''}edges { ${edgeParts} } }`;
+        return `${def.field}Connection${w ? `(where: ${gqlLiteral(w)})` : ''} { ${total ? 'totalCount ' : ''}${pageInfo}edges { ${edgeParts} } }`;
       });
     return fc.oneof(
       { weight: 3, arbitrary: plain },
@@ -1425,9 +1433,18 @@ export function select(type: string, depth: number): fc.Arbitrary<Rec> {
                 ...(def.edge
                   ? { properties: fc.constant(true as unknown) }
                   : {}),
+                // v2.7.1 — the edge `cursor`.
+                cursor: fc.constant(true as unknown),
               },
               { requiredKeys: [] },
             ),
+          ),
+          // v2.7.1 — `pageInfo`.
+          fc.option(
+            fc.constantFrom(true as unknown, {
+              select: { endCursor: true, hasNextPage: true },
+            }),
+            { nil: undefined },
           ),
           // Excluded: AND/OR/NOT in a typed-select connection where throws
           // OGMError ("not yet supported") although the types offer it.
@@ -1436,9 +1453,10 @@ export function select(type: string, depth: number): fc.Arbitrary<Rec> {
             { nil: undefined },
           ),
         )
-        .map(([total, edges, w]) => {
+        .map(([total, edges, pageInfo, w]) => {
           const sel: Rec = { edges };
           if (total) sel.totalCount = true;
+          if (pageInfo !== undefined) sel.pageInfo = pageInfo;
           return w ? { select: sel, where: w } : { select: sel };
         }),
     );

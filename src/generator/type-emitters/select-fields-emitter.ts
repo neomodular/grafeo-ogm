@@ -230,6 +230,8 @@ function emitConnectionField(
   // Build edge inner type
   const edgeMembers: string[] = [
     `        node?: boolean | { select: ${targetSelect} };`,
+    // v2.7.1 — the runtime projects `cursor` (upstream offset cursors).
+    `        cursor?: boolean;`,
   ];
 
   // Compute the orderBy union shape. Node sort is always available; edge sort
@@ -256,6 +258,8 @@ function emitConnectionField(
     // v2.4.8 — the runtime projects `totalCount` (filtered by the same
     // where + target read policy as `edges`); the select type now offers it.
     `      totalCount?: boolean;`,
+    // v2.7.1 — the runtime projects `pageInfo` (same filtered list).
+    `      pageInfo?: boolean | { select: { hasNextPage?: boolean; hasPreviousPage?: boolean; startCursor?: boolean; endCursor?: boolean } };`,
     `      edges?: boolean | {`,
     ...edgeMembers,
     `      };`,

@@ -785,6 +785,24 @@ await Author.find({
 
 `totalCount` counts the filtered edges; the sort orders `edges` only. Other connection arguments (`first`, `after`, …) are not supported and throw.
 
+**Connection `pageInfo` and edge `cursor`** (v2.7.1) — selected in a `selectionSet` (aliases and `__typename` included) or in the typed `select` (`pageInfo: true` or `pageInfo: { select: { endCursor: true, … } }`, and `edges: { cursor: true }`). They follow `@neo4j/graphql` 5.x for a connection read without `first` / `after`: an edge's `cursor` is upstream's `offsetToCursor(offset)` (base64 of `arrayconnection:<offset>`, its position in the filtered, sorted list), `hasNextPage` and `hasPreviousPage` are `false` (every filtered edge is returned), and `startCursor` / `endCursor` are the first and last edge's cursors, `null` when there is none. They count the same list as `edges` and `totalCount`: the connection `where` and the target type's `read` policy apply.
+
+```typescript
+await Author.find({
+  selectionSet: `{
+    booksConnection(where: { node: { published: true } }) {
+      totalCount
+      pageInfo { hasNextPage endCursor }
+      edges { cursor node { title } }
+    }
+  }`,
+});
+// { booksConnection: { totalCount: 2, pageInfo: { hasNextPage: false, endCursor: 'YXJyYXljb25uZWN0aW9uOjE=' },
+//   edges: [{ cursor: 'YXJyYXljb25uZWN0aW9uOjA=', node: … }, { cursor: 'YXJyYXljb25uZWN0aW9uOjE=', node: … }] } }
+```
+
+Before 2.7.1 both were silently left out of the result. `pageInfo` selected without `edges` or `totalCount` keeps the `edges` key it returned before (one empty map per edge). `xConnection: true` and `edges: true` in the typed `select` still select node and edge-property scalars only, unchanged. A `pageInfo` field that `PageInfo` does not declare, `pageInfo` without a sub-selection and `cursor { … }` are left out of the result, with a warning (an `OGMError` under [strict mode](#strict-mode)).
+
 ### Automatic `__typename` for Abstract Targets
 
 When a relationship resolves to a **union** or **interface**, `__typename` is emitted automatically into the projection — you don't need to add `__typename: true` to the select (or `__typename` to the `selectionSet`). This prevents silent discrimination failures on the client side where type guards return `false` because the discriminator was never projected.
@@ -1175,6 +1193,8 @@ await plans.find({ selectionSet: '{ id ownerzAggregate { count } }' }); // no re
 
 A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection`, `<relationship>Aggregate { … }` (since 2.7.0, see [Relationship aggregate selections](#relationship-aggregate-selections)) or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check, and an aggregate's own keys (`count`, `node`, `edge`, the aggregates) are validated by the aggregate itself, in both modes. In 2.6.3 every `<relationship>Aggregate` was reported unknown, because the OGM did not compile it; since 2.7.0 it returns the aggregate and does not warn. Only a bare `ownersAggregate` without a selection of aggregates is still unknown.
 
+Since 2.7.1 the fields of a connection's `pageInfo` are checked against `PageInfo` (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, `__typename`). An unknown one is left out of the result and warns, or throws under strict.
+
 #### 13. A nested delete that reaches a node the update still holds (since 2.7.1)
 
 A nested `delete` whose target type is the type of the root, or of an enclosing nested-update target, can delete that node through a cycle: a chart's tags' charts include the chart itself.
@@ -1197,7 +1217,7 @@ await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: te
 
 Applies to every connect: top-level, nested in `create` / `update`, per union or interface member, and inside another connect. Without `edge` values the flag changes nothing, so it does not warn. In `@neo4j/graphql`, `overwrite: false` instead made the mutation fail (through APOC) when the relationship already existed.
 
-#### 14. `@default` on relationship properties (since 2.7.1)
+#### 15. `@default` on relationship properties (since 2.7.1)
 
 ```graphql
 type Membership @relationshipProperties {
@@ -1212,6 +1232,16 @@ await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: te
 ```
 
 Strict applies the default whenever a relationship is created without the property: nested `create` (in `create` and `update`) and the create branch of every connect. As with node `@default`, an explicit `null` is kept, a connect to a relationship that already exists leaves it as it is, and an edge `update` never applies defaults. The generated `<Props>CreateInput` keeps the field required, because by default an omitted value is still not written.
+
+#### 16. Pagination fields selected in the wrong shape (since 2.7.1)
+
+```typescript
+await plans.find({ selectionSet: '{ ownersConnection { pageInfo edges { cursor { x } } } }' });
+// default: `pageInfo` and `cursor` are left out of the result (and warns)
+// strict: OGMError: Field "pageInfo" in selectionSet on type "PlanOwnersConnection" is an object (PageInfo) and needs a sub-selection, e.g. "pageInfo { hasNextPage endCursor }".
+```
+
+The same applies to a `PageInfo` field given a sub-selection, and in the typed `select` to `pageInfo` that is neither `true` nor `{ select: { … } }` and to `cursor` that is not `true`.
 
 #### Not behind the switch: `aggregate` on list fields
 

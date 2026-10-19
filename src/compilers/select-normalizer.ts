@@ -21,7 +21,11 @@ import { lenientStrictMode, type StrictMode } from '../utils/strict-mode';
 import { normalizeConnectionOrderBy } from './connection-order-by';
 import {
   aggregateFieldHint,
+  connectionKeyIssues,
+  PAGE_INFO_FIELDS,
   reportUnknownSelectedField,
+  type ConnectionKeySelection,
+  type PageInfoSelection,
   type SelectionNode,
 } from './selection.compiler';
 
@@ -522,12 +526,26 @@ export class SelectNormalizer {
           node.totalCountOnly = true;
       }
 
+      // v2.7.1 — `pageInfo` was ignored (silently undefined).
+      if (selectObj.pageInfo != null && selectObj.pageInfo !== false)
+        node.pageInfo = [this.normalizePageInfo(selectObj.pageInfo)];
+
       if (selectObj.edges === true) {
         node.children = allNode();
         const edgeChildren = allEdge();
         if (edgeChildren.length > 0) node.edgeChildren = edgeChildren;
       } else if (selectObj.edges && typeof selectObj.edges === 'object') {
         const edgesObj = selectObj.edges as Record<string, unknown>;
+
+        // v2.7.1 — `cursor` was ignored (silently undefined).
+        if (edgesObj.cursor != null && edgesObj.cursor !== false)
+          node.cursors = [
+            {
+              key: 'cursor',
+              field: 'cursor',
+              ...(edgesObj.cursor === true ? {} : { subSelection: true }),
+            },
+          ];
 
         // edges.node.select -> children
         if (edgesObj.node === true) node.children = allNode();
@@ -573,7 +591,41 @@ export class SelectNormalizer {
       }
     }
 
+    // v2.7.1 — report `pageInfo` / `cursor` the runtime cannot project.
+    for (const issue of connectionKeyIssues(
+      node,
+      `${nodeDef.typeName}${baseFieldName.charAt(0).toUpperCase()}${baseFieldName.slice(1)}`,
+      'select',
+    ))
+      reportUnknownSelectedField(this.strictMode, 'select', issue);
+
     return node;
+  }
+
+  /**
+   * v2.7.1 — a typed `pageInfo` select: `true` selects every `PageInfo`
+   * field, `{ select: { hasNextPage: true, … } }` the listed ones. Any
+   * other value is reported as a shape mismatch (`connectionKeyIssues`).
+   */
+  private normalizePageInfo(value: unknown): PageInfoSelection {
+    if (value === true)
+      return {
+        key: 'pageInfo',
+        fields: [...PAGE_INFO_FIELDS].map((f) => ({ key: f, field: f })),
+      };
+    if (!isPlainObject(value) || !isPlainObject(value.select))
+      return { key: 'pageInfo' };
+    const fields: ConnectionKeySelection[] = [];
+    for (const [field, on] of Object.entries(value.select)) {
+      if (on == null || on === false) continue;
+      assertSafeKey(field, 'select input');
+      fields.push({
+        key: field,
+        field,
+        ...(on === true ? {} : { subSelection: true }),
+      });
+    }
+    return { key: 'pageInfo', fields };
   }
 
   /**

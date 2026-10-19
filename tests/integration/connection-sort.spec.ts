@@ -296,4 +296,38 @@ describeLive('selectionSet connection sort — live Neo4j with APOC', () => {
       ]);
     }
   });
+
+  // v2.7.1 — cursors and pageInfo follow the sorted order (upstream:
+  // `offsetToCursor(<offset in the sorted list>)`).
+  it('cursor and pageInfo on a sorted connection', async () => {
+    const cursor = (i: number) =>
+      Buffer.from(`arrayconnection:${i}`).toString('base64');
+    const book = await bySelectionSet(
+      '{ chaptersConnection(where: { node: { title_IN: ["b", "c", "d"] } }, sort: [{ node: { title: DESC } }]) { pageInfo { startCursor endCursor hasNextPage } edges { cursor node { id } } } }',
+    );
+    const conn = book.chaptersConnection as {
+      pageInfo: Row;
+      edges: Array<Edge & { cursor: string }>;
+    };
+    expect(ids(conn.edges)).toEqual(['c5', 'c3', 'c1']);
+    expect(conn.edges.map((e) => e.cursor)).toEqual([0, 1, 2].map(cursor));
+    expect(conn.pageInfo).toEqual({
+      startCursor: cursor(0),
+      endCursor: cursor(2),
+      hasNextPage: false,
+    });
+    const typed = await byTyped({
+      chaptersConnection: {
+        where: { node: { title_IN: ['b', 'c', 'd'] } },
+        orderBy: [{ node: { title: 'DESC' } }],
+        select: {
+          pageInfo: {
+            select: { startCursor: true, endCursor: true, hasNextPage: true },
+          },
+          edges: { cursor: true, node: { select: { id: true } } },
+        },
+      },
+    });
+    expect(typed.chaptersConnection).toEqual(book.chaptersConnection);
+  });
 });
