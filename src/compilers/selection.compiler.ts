@@ -1253,8 +1253,23 @@ export class SelectionCompiler {
       : [{ def, field: node.fieldName }];
     for (const owner of owners) {
       const { field } = owner;
-      if (field === '__typename' || owner.def.properties.has(field)) continue;
+      if (field === '__typename') continue;
       const hasChildren = !node.isScalar;
+      const prop = owner.def.properties.get(field);
+      if (prop) {
+        // v2.7.1 — a scalar given a sub-selection is left out of the result.
+        if (hasChildren && isScalarProperty(prop, this.schema))
+          pushUnknown(out, {
+            owner: `type "${owner.def.typeName}"`,
+            field,
+            subSelection: true,
+            shape: {
+              expected: `is a scalar field (${propertyTypeName(prop)}) and takes no sub-selection: select it as "${field}"`,
+              outcome: LEFT_OUT,
+            },
+          });
+        continue;
+      }
       if (node.isConnection && hasChildren) {
         const base = field.replace(/Connection$/, '');
         if (owner.def.relationships.has(base)) {
@@ -1283,15 +1298,38 @@ export class SelectionCompiler {
                 depth + 1,
               );
           }
+        // v2.7.1 — a relationship without a sub-selection is projected
+        // as a raw property (null).
+        else if (!hasChildren)
+          pushUnknown(out, {
+            owner: `type "${owner.def.typeName}"`,
+            field,
+            subSelection: false,
+            shape: {
+              expected: `is a relationship to ${owner.def.relationships.get(field)!.target} and needs a sub-selection, e.g. "${field} { … }"`,
+              outcome: RAW_PROPERTY,
+            },
+          });
         continue;
       }
       // A scalar-shaped `<rel>Connection` of a relationship is a known
-      // name (selected without its sub-selection).
+      // name; v2.7.1 — selected without its sub-selection it is projected
+      // as a raw property (null), so it is reported.
       if (
         field.endsWith('Connection') &&
         owner.def.relationships.has(field.replace(/Connection$/, ''))
-      )
+      ) {
+        pushUnknown(out, {
+          owner: `type "${owner.def.typeName}"`,
+          field,
+          subSelection: false,
+          shape: {
+            expected: `is a connection and needs a sub-selection, e.g. "${field} { edges { node { … } } }"`,
+            outcome: RAW_PROPERTY,
+          },
+        });
         continue;
+      }
       // v2.7.0 — `<rel>Aggregate { … }` of a relationship is a known field
       // (compiled by `compileAggregate`, which validates its own
       // sub-selection). Only the scalar-shaped one, which has no meaning,
@@ -1358,17 +1396,28 @@ export class SelectionCompiler {
         set.edgeChildren ?? [],
         ...(set.extraProperties ?? []).map((e) => e.children),
       ])
-        for (const child of children)
-          if (
-            child.fieldName !== '__typename' &&
-            !props?.properties.has(child.fieldName)
-          )
+        for (const child of children) {
+          const edgeProp = props?.properties.get(child.fieldName);
+          // v2.7.1 — an edge property given a sub-selection is left out.
+          if (edgeProp && !child.isScalar)
+            pushUnknown(out, {
+              owner: edgeOwner,
+              field: child.fieldName,
+              subSelection: true,
+              edge: true,
+              shape: {
+                expected: `is a scalar field (${propertyTypeName(edgeProp)}) and takes no sub-selection: select it as "${child.fieldName}"`,
+                outcome: LEFT_OUT,
+              },
+            });
+          else if (child.fieldName !== '__typename' && !edgeProp)
             pushUnknown(out, {
               owner: edgeOwner,
               field: child.fieldName,
               subSelection: !child.isScalar,
               edge: true,
             });
+        }
   }
 
   /**

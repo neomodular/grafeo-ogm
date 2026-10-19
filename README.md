@@ -1243,6 +1243,21 @@ await plans.find({ selectionSet: '{ ownersConnection { pageInfo edges { cursor {
 
 The same applies to a `PageInfo` field given a sub-selection, and in the typed `select` to `pageInfo` that is neither `true` nor `{ select: { … } }` and to `cursor` that is not `true`.
 
+#### 14. Known fields selected in the wrong shape (since 2.7.1)
+
+```typescript
+await users.find({ selectionSet: '{ id name { first } posts postsConnection }' });
+// default: `name` is left out, `posts` and `postsConnection` come back null (and warns)
+// strict: OGMError: Field "name" in selectionSet on type "User" is a scalar field (String) and takes no sub-selection: select it as "name".
+// strict: OGMError: Field "posts" in selectionSet on type "User" is a relationship to Post and needs a sub-selection, e.g. "posts { … }".
+
+await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } } } });
+// default: both are left out of the result (and warns)
+// strict: OGMError: Field "name" in select on type "User" is a scalar field (String): select it with `name: true`.
+```
+
+Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) selects all scalar fields of the target, as `true` does, in both modes; before 2.7.1 it was left out of the result.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

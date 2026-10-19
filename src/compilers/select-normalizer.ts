@@ -22,12 +22,22 @@ import { normalizeConnectionOrderBy } from './connection-order-by';
 import {
   aggregateFieldHint,
   connectionKeyIssues,
+  isScalarProperty,
+  LEFT_OUT,
   PAGE_INFO_FIELDS,
+  propertyTypeName,
   reportUnknownSelectedField,
   type ConnectionKeySelection,
   type PageInfoSelection,
   type SelectionNode,
 } from './selection.compiler';
+
+/** v2.7.1 — the keys of a relationship's object select. */
+const RELATIONSHIP_SELECT_KEYS: ReadonlySet<string> = new Set([
+  'select',
+  'where',
+  'orderBy',
+]);
 
 /**
  * Converts a `select` object (used in the programmatic API) into the internal
@@ -118,6 +128,7 @@ export class SelectNormalizer {
       }
 
       if (relDef) {
+        this.checkRelationshipShape(fieldName, value, relDef, nodeDef);
         // It's a relationship field
         const relNode = this.normalizeRelationship(fieldName, value, relDef);
         if (relNode) nodes.push(relNode);
@@ -128,12 +139,24 @@ export class SelectNormalizer {
       // v2.6.3 — a key that is no field of the type (#23). Pre-2.6.3 —
       // and in 2.x default mode — `key: true` is projected as a raw
       // property (null) and an object value is dropped; strict throws.
-      if (fieldName !== '__typename' && !nodeDef.properties.has(fieldName))
+      const prop = nodeDef.properties.get(fieldName);
+      if (fieldName !== '__typename' && !prop)
         reportUnknownSelectedField(this.strictMode, 'select', {
           owner: `type "${nodeDef.typeName}"`,
           field: fieldName,
           subSelection: value !== true,
           hint: aggregateFieldHint(fieldName, nodeDef.relationships),
+        });
+      // v2.7.1 — a scalar given anything but `true` is left out.
+      else if (prop && value !== true && isScalarProperty(prop, this.schema))
+        reportUnknownSelectedField(this.strictMode, 'select', {
+          owner: `type "${nodeDef.typeName}"`,
+          field: fieldName,
+          subSelection: true,
+          shape: {
+            expected: `is a scalar field (${propertyTypeName(prop)}): select it with \`${fieldName}: true\``,
+            outcome: LEFT_OUT,
+          },
         });
 
       // It's a scalar field (property)
@@ -256,9 +279,75 @@ export class SelectNormalizer {
           ),
         };
       }
+
+      // v2.7.1 — `{ drugs: {} }` (every key optional in the generated
+      // types) selects all scalars, as `true` does. Pre-2.7.1 it was left
+      // out of the result. An object with an unknown key keeps that
+      // behaviour (reported by `checkRelationshipShape`).
+      if (Object.keys(obj).every((k) => RELATIONSHIP_SELECT_KEYS.has(k)))
+        return {
+          fieldName,
+          isScalar: false,
+          isRelationship: true,
+          isConnection: false,
+          children: [...this.allScalarFields(targetDef)],
+        };
     }
 
     return null;
+  }
+
+  /**
+   * v2.7.1 — report a relationship select value the runtime cannot honour
+   * (it is left out of the result, or its unknown keys are ignored):
+   * anything but `true` or an object, or an object with a key other than
+   * `select`, `where` and `orderBy`. Strict throws.
+   */
+  private checkRelationshipShape(
+    fieldName: string,
+    value: unknown,
+    relDef: RelationshipDefinition,
+    nodeDef: NodeDefinition,
+  ): void {
+    if (value === true) return;
+    const owner = `type "${nodeDef.typeName}"`;
+    if (!isPlainObject(value)) {
+      reportUnknownSelectedField(this.strictMode, 'select', {
+        owner,
+        field: fieldName,
+        subSelection: false,
+        shape: {
+          expected:
+            `is a relationship to ${relDef.target}: select it with \`${fieldName}: true\` (all scalar fields) ` +
+            `or \`${fieldName}: { select: { … }, where?, orderBy? }\``,
+          outcome: LEFT_OUT,
+        },
+      });
+      return;
+    }
+    const unknown = Object.keys(value).filter(
+      (k) => !RELATIONSHIP_SELECT_KEYS.has(k),
+    );
+    if (unknown.length === 0) return;
+    // What 2.x does: an object with a usable `select`, `where` or
+    // `orderBy` is compiled (the unknown keys ignored), any other dropped.
+    const kept =
+      (!!value.select && typeof value.select === 'object') ||
+      (!!value.where && typeof value.where === 'object') ||
+      value.orderBy !== undefined;
+    reportUnknownSelectedField(this.strictMode, 'select', {
+      owner,
+      field: fieldName,
+      subSelection: true,
+      shape: {
+        expected:
+          `is a relationship to ${relDef.target} and takes \`select\`, \`where\` and \`orderBy\`, ` +
+          `not ${unknown.map((k) => `"${k}"`).join(', ')}`,
+        outcome: kept
+          ? `2.x ignores the unknown key${unknown.length > 1 ? 's' : ''}`
+          : LEFT_OUT,
+      },
+    });
   }
 
   /**
@@ -660,6 +749,19 @@ export class SelectNormalizer {
           field: fieldName,
           subSelection: value !== true,
           edge: true,
+        });
+      // v2.7.1 — an edge property given anything but `true` is left out.
+      const edgeProp = props?.properties.get(fieldName);
+      if (edgeProp && value != null && value !== false && value !== true)
+        reportUnknownSelectedField(this.strictMode, 'select', {
+          owner: `relationship properties type "${props!.typeName}"`,
+          field: fieldName,
+          subSelection: true,
+          edge: true,
+          shape: {
+            expected: `is a scalar field (${propertyTypeName(edgeProp)}): select it with \`${fieldName}: true\``,
+            outcome: LEFT_OUT,
+          },
         });
       if (value === true)
         nodes.push({
