@@ -30,6 +30,7 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
+import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import {
   stitchUserAndPolicy,
   traversalBundle,
@@ -114,6 +115,20 @@ export interface SelectionNode {
  * selections carry the same arguments.
  */
 const argumentKeys = new WeakMap<SelectionNode, string>();
+
+/** A strict-mode warning found while parsing a selectionSet (v2.6.0). */
+interface ParseWarning {
+  code: string;
+  detail: string;
+  problem: string;
+  fix: string;
+}
+
+/**
+ * v2.6.0 — the strict-mode warnings of each parsed selectionSet, replayed
+ * on cache hits (see `SelectionCompiler.replayParseWarnings`).
+ */
+const parseWarnings = new WeakMap<SelectionNode[], ParseWarning[]>();
 
 function sameArguments(a: SelectionNode, b: SelectionNode): boolean {
   return (argumentKeys.get(a) ?? '') === (argumentKeys.get(b) ?? '');
@@ -338,12 +353,27 @@ export class SelectionCompiler {
    */
   private parseCache = new Map<string, SelectionNode[]>();
   private whereCompiler?: WhereCompiler;
+  /** v2.6.0 — strict mode + warn-once log, shared per OGM. */
+  private strictMode: StrictMode;
 
   constructor(
     private schema: SchemaMetadata,
     whereCompiler?: WhereCompiler,
+    strictMode?: StrictMode,
   ) {
     this.whereCompiler = whereCompiler;
+    this.strictMode = strictMode ?? lenientStrictMode();
+  }
+
+  /**
+   * v2.6.0 — re-log (through the warn-once log) the strict-mode warnings
+   * found when `parsed` was first parsed. Parsed selections are cached —
+   * here and in `Model`'s cross-OGM cache — so a cache hit must still warn
+   * on an OGM instance that has not seen the shape yet.
+   */
+  replayParseWarnings(parsed: SelectionNode[]): void {
+    for (const w of parseWarnings.get(parsed) ?? [])
+      this.strictMode.warn(w.code, w.detail, w.problem, w.fix);
   }
 
   /** Clear the parse cache. Useful in tests to prevent cross-test pollution. */

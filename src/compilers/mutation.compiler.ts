@@ -29,6 +29,7 @@ import {
   wrapWhereParam,
   wrapWriteExpr,
 } from '../utils/write-coercion';
+import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import { WhereCompiler } from './where.compiler';
 
 export interface MutationResult {
@@ -115,12 +116,20 @@ export class MutationCompiler {
    */
   private policyWhereCompiler?: WhereCompiler;
 
+  /** v2.6.0 — strict mode + warn-once log, shared per OGM. */
+  private strictMode: StrictMode;
+
   constructor(
     private schema: SchemaMetadata,
-    options?: { logger?: OGMLogger; whereCompiler?: WhereCompiler },
+    options?: {
+      logger?: OGMLogger;
+      whereCompiler?: WhereCompiler;
+      strictMode?: StrictMode;
+    },
   ) {
     this.logger = options?.logger;
     this.policyWhereCompiler = options?.whereCompiler;
+    this.strictMode = options?.strictMode ?? lenientStrictMode();
   }
 
   /**

@@ -42,6 +42,7 @@ import {
   SubgraphDeleteResult,
 } from './subgraph/types';
 import { deepFreezeSnapshot } from './utils/deep-freeze';
+import { StrictMode } from './utils/strict-mode';
 
 const POLICY_SET_VERSION = '1.7.0';
 
@@ -83,6 +84,20 @@ export interface OGMConfig<
    */
   database?: string;
   logger?: OGMLogger;
+  /**
+   * v2.6.0 — strict mode. Default `false`; **becomes the default in 3.0.**
+   *
+   * Off (2.x default): every input compiles exactly as in v2.5.3. Input
+   * shapes whose 2.x behaviour is surprising (a typo'd connect key that
+   * widens to every target, a fulltext `score` inside `OR` that is
+   * ignored, …) log one `warn` per OGM instance and shape through
+   * `logger`, naming the problem.
+   *
+   * On: those shapes get the corrected behaviour — they throw `OGMError`
+   * or compile to what the input means. See the README "Strict mode"
+   * section for the full list.
+   */
+  strict?: boolean;
   features?: {
     filters?: { String?: { MATCHES?: boolean } };
     /**
@@ -161,9 +176,14 @@ export class OGM<
     if (config.features?.strictWhere === true) whereOptions.strictWhere = true;
     if (config.logger) whereOptions.logger = config.logger;
 
+    // v2.6.0 — one strict-mode switch + warn-once log per OGM instance,
+    // shared by every compiler (bypassed clones share it too).
+    const strictMode = new StrictMode(config.strict === true, config.logger);
+    whereOptions.strictMode = strictMode;
+
     const where = new WhereCompiler(this.schema, whereOptions);
-    const selection = new SelectionCompiler(this.schema, where);
-    const fulltext = new FulltextCompiler(this.schema);
+    const selection = new SelectionCompiler(this.schema, where, strictMode);
+    const fulltext = new FulltextCompiler(this.schema, strictMode);
     const vector = new VectorCompiler();
 
     this.modelCompilers = {
@@ -175,15 +195,18 @@ export class OGM<
         // Share the user-configured WhereCompiler so connect/disconnect
         // target policy predicates compile identically to the read paths.
         whereCompiler: where,
+        strictMode,
       }),
       fulltext,
       vector,
+      strictMode,
     };
 
     this.interfaceModelCompilers = {
       where,
       selection,
       fulltext,
+      strictMode,
     };
 
     // Build the policy registry and validate against the schema. An OGM

@@ -44,6 +44,7 @@ import {
   compileSortClause,
   orderBeforeProjection,
 } from './utils/cypher-sort-projection';
+import { lenientStrictMode, StrictMode } from './utils/strict-mode';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
@@ -322,6 +323,11 @@ export interface QueryCompilers {
   where: WhereCompiler;
   selection: SelectionCompiler;
   fulltext: FulltextCompiler;
+  /**
+   * v2.6.0 — the OGM's strict-mode switch and warn-once logger, shared by
+   * every compiler. Optional for hand-built compiler bundles (lenient).
+   */
+  strictMode?: StrictMode;
 }
 
 /** Additional compilers needed for write operations (create, update, delete). */
@@ -407,6 +413,7 @@ export class Model<
   private executor: Executor;
   private policyBinding: ModelPolicyBinding | undefined;
   private logger: OGMLogger | undefined;
+  private strictMode: StrictMode;
 
   constructor(
     private nodeDef: NodeDefinition,
@@ -429,6 +436,7 @@ export class Model<
     this.executor = new Executor(driver, logger);
     this.policyBinding = policyBinding;
     this.logger = logger;
+    this.strictMode = compilers?.strictMode ?? lenientStrictMode();
   }
 
   /**
@@ -1851,11 +1859,18 @@ export class Model<
       typeof selectionSet === 'string'
         ? selectionSet
         : (selectionSet.loc?.source?.body ?? String(selectionSet));
-    const cached = Model._selectionCache.get(selStr);
-    if (cached) return cached;
+    // v2.6.0 — strict mode parses some selectionSets differently, and this
+    // cache is shared by every OGM, so strict entries get their own key.
+    // Default-mode keys are unchanged.
+    const cacheKey = this.strictMode.strict ? `strict\u0000${selStr}` : selStr;
+    const cached = Model._selectionCache.get(cacheKey);
+    if (cached) {
+      this.selectionCompiler.replayParseWarnings(cached);
+      return cached;
+    }
     const parsed = this.selectionCompiler.parseSelectionSet(selStr);
     if (Model._selectionCache.size < 500)
-      Model._selectionCache.set(selStr, parsed);
+      Model._selectionCache.set(cacheKey, parsed);
     return parsed;
   }
 

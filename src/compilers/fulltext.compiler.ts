@@ -6,6 +6,7 @@ import {
   FulltextIndexEntry,
 } from '../model';
 import { FulltextIndex, NodeDefinition, SchemaMetadata } from '../schema/types';
+import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import {
   assertPlainObject,
   assertSafeIdentifier,
@@ -57,7 +58,11 @@ export interface FulltextResult {
  * - **NOT**: `WHERE NOT EXISTS { ... }` exclusion pattern (Neo4j 5+)
  */
 export class FulltextCompiler {
-  constructor(private schema: SchemaMetadata) {}
+  constructor(
+    private schema: SchemaMetadata,
+    /** v2.6.0 — strict mode + warn-once log, shared per OGM. */
+    private strictMode: StrictMode = lenientStrictMode(),
+  ) {}
 
   /**
    * Compile fulltext input to Cypher CALL clause(s).

@@ -28,6 +28,7 @@ import {
   mergeParams,
 } from '../utils/validation';
 import { coerceWhereValue, wrapWhereParam } from '../utils/write-coercion';
+import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 
 export interface WhereResult {
   cypher: string;
@@ -196,6 +197,8 @@ export interface WhereCompilerOptions {
    * passes its `config.logger` here.
    */
   logger?: OGMLogger;
+  /** v2.6.0 — strict mode + warn-once log, shared per OGM. */
+  strictMode?: StrictMode;
 }
 
 /**
@@ -205,6 +208,7 @@ export class WhereCompiler {
   private disabledOperators: Set<OperatorSuffix>;
   private strictWhere: boolean;
   private logger?: OGMLogger;
+  private strictMode: StrictMode;
 
   constructor(
     private schema: SchemaMetadata,
@@ -213,6 +217,7 @@ export class WhereCompiler {
     this.disabledOperators = options?.disabledOperators ?? new Set();
     this.strictWhere = options?.strictWhere ?? false;
     this.logger = options?.logger;
+    this.strictMode = options?.strictMode ?? lenientStrictMode();
   }
 
   /**
