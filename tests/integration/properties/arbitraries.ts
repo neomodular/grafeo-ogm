@@ -16,8 +16,10 @@
  * Excluded because of an OPEN FINDING (each marked at its generator, with
  * the finding id; remove the exclusion with the fix):
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
- *   update item is iterating.
- * - F5 `disconnectItem`: blanket disconnect on a shared relationship type.
+ *   update item is iterating (explosive, not a hang; see the generator).
+ * - F5 `writeOp` (default mode only): blanket disconnect on a shared
+ *   relationship type; generated with `sharedBlanketDisconnect` for a
+ *   strict OGM.
  *
  * (F7, `upsert` on an existing policy-guarded node in the policy suite, was
  * fixed in v2.6.1 and is generated again.)
@@ -586,12 +588,10 @@ function disconnectItem(
     def.kind === 'interface' ? undefined : (member ?? def.members[0]);
   if (nestedType && depth > 0 && (RELS[nestedType] ?? []).length > 0)
     parts.disconnect = disconnectInputOf(nestedType, depth - 1);
-  // EXCLUDED (finding F5): a BLANKET disconnect item (no `where`) on a
-  // field whose relationship type another field shares (`vaults` and
-  // `resources` are both ITP_RES) unlinks the other field's nodes too —
-  // the target labels are not matched. Such items always get a `where`.
-  const blanketUnsafe = SHARED_REL_TYPES.has(def.type);
-  return fc.record(parts, { requiredKeys: blanketUnsafe ? ['where'] : [] });
+  // A BLANKET item (no `where`) on a field whose relationship type another
+  // field shares is excluded in default mode by `writeOp` (finding F5,
+  // see `hasSharedBlanketDisconnect`).
+  return fc.record(parts, { requiredKeys: [] });
 }
 
 /** Relationship types used by more than one field of the same type. */
@@ -604,6 +604,55 @@ const SHARED_REL_TYPES = new Set(
       .map((d) => d.type),
   ),
 );
+
+/** Fields whose relationship type another field of their type shares. */
+const SHARED_FIELDS = new Set(
+  Object.values(RELS).flatMap((defs) =>
+    defs.filter((d) => SHARED_REL_TYPES.has(d.type)).map((d) => d.field),
+  ),
+);
+
+/**
+ * FINDING F5 (default mode only): a BLANKET disconnect item (no `where`)
+ * on a field whose relationship type another field shares (`vaults` and
+ * `resources` are both ITP_RES) also unlinks the other field's nodes — in
+ * 2.x default mode the target labels are not matched (v2.6.0 warns once;
+ * `strict: true` restricts it to the field's own target). True when `op`
+ * holds such an item anywhere: a top-level or nested disconnect input
+ * (`disconnect: { vaults: [{}] }`) or a nested update item
+ * (`vaults: [{ disconnect: [{}] }]`).
+ */
+export function hasSharedBlanketDisconnect(op: unknown): boolean {
+  const asArray = (x: unknown): unknown[] =>
+    Array.isArray(x) ? x : x == null ? [] : [x];
+  const blanket = (items: unknown) =>
+    asArray(items).some(
+      (i) => i === null || (typeof i === 'object' && !('where' in i)),
+    );
+  const walk = (v: unknown, parentKey: string | undefined): boolean => {
+    if (Array.isArray(v)) return v.some((x) => walk(x, parentKey));
+    if (!v || typeof v !== 'object') return false;
+    for (const [k, x] of Object.entries(v as Rec)) {
+      if (SHARED_FIELDS.has(k)) {
+        if (parentKey === 'disconnect' ? blanket(x) : false) return true;
+        if (
+          parentKey !== 'disconnect' &&
+          asArray(x).some(
+            (item) =>
+              !!item &&
+              typeof item === 'object' &&
+              'disconnect' in item &&
+              blanket((item as Rec).disconnect),
+          )
+        )
+          return true;
+      }
+      if (walk(x, k)) return true;
+    }
+    return false;
+  };
+  return walk(op, undefined);
+}
 
 /** `<Target>DeleteInput` — cascade below a delete item. */
 function deleteInputOf(type: string, depth: number): fc.Arbitrary<Rec> {
@@ -722,11 +771,15 @@ function updateItem(
     disconnect: items(disconnectItem(def, member, depth)),
     update: fc.record(upd, { requiredKeys: [] }),
   };
-  // EXCLUDED (finding F2): a `connect` / `create` on a relationship field
-  // that an ENCLOSING nested update item is already iterating (chart ->
-  // categories -> charts -> categories) grows the very set being iterated:
-  // the outer match sees the links and nodes the inner ops add, and the
-  // statement never terminates. Not generated until fixed.
+  // EXCLUDED (finding F2, needs a decision — not a hang): a `connect` /
+  // `create` on a relationship field that an ENCLOSING nested update item
+  // iterates (chart -> categories -> charts -> categories). Each nested
+  // MATCH is already materialised (the planner puts an Eager after it), so
+  // every statement terminates; but each ROOT row's subquery sees the links
+  // and nodes the earlier rows added, so the work grows geometrically with
+  // the matched roots (the 5-chart repro creates 7,345 nodes in ~24 s,
+  // past the 20 s case timeout). Statement-level snapshot semantics would
+  // change the results of inputs that work today. Not generated meanwhile.
   if (!path.iterated.includes(`${parent}.${def.field}`)) {
     ops.connect = connectItems(connectItem(def, member, depth));
     ops.create = items(createItem(def, member, depth));
@@ -842,6 +895,11 @@ export interface WriteOptions {
   depth?: number;
   kinds?: WriteOp['kind'][];
   roots?: readonly string[];
+  /**
+   * Also generate F5's shape (`hasSharedBlanketDisconnect`): only for an
+   * OGM with `strict: true`, which restricts it to the field's target.
+   */
+  sharedBlanketDisconnect?: boolean;
 }
 
 /** A random write: any model method, nested ops up to `depth` (≤ 3). */
@@ -940,7 +998,12 @@ export function writeOp(opts: WriteOptions = {}): fc.Arbitrary<WriteOp> {
     .chain((model) =>
       fc.constantFrom(...kinds).chain((kind) => byKind(model, kind)),
     )
-    .map(renumberCreates);
+    .map(renumberCreates)
+    .filter(
+      (op) =>
+        opts.sharedBlanketDisconnect === true ||
+        !hasSharedBlanketDisconnect(op),
+    );
 }
 
 function stripUndefined(r: Rec): Rec {

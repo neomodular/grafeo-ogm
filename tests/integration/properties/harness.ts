@@ -92,7 +92,10 @@ export async function checkProperty<T>(
         } finally {
           appendFileSync(
             trace,
-            `${name}\t${Date.now() - start}ms\t${JSON.stringify(value)}\n`,
+            `${name}\t${Date.now() - start}ms\t${JSON.stringify(
+              value,
+              (_k, x) => (typeof x === 'bigint' ? `${x}n` : x),
+            )}\n`,
           );
         }
       }
