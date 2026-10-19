@@ -1140,6 +1140,21 @@ await users.find({ select: { resources: { select: { id: true } } } });
 
 Every read path is restricted (since 2.6.2): nested lists, connection `edges` and `totalCount`, `resources_SOME` / `_NONE` / `_ALL` / `_SINGLE`, connection filters, `resources: null`, `count` and `aggregate`. Writes were restricted in 2.5.1.
 
+#### 12. Field names the type doesn't declare (since 2.6.3)
+
+```typescript
+await plans.find({ selectionSet: '{ id nmae }' });
+// default: RETURN n { .`id`, .`nmae` } — `nmae` comes back null (and warns)
+// strict: OGMError: Unknown field "nmae" in selectionSet on type "Plan".
+
+await plans.find({ selectionSet: '{ id ownersAggregate { count } }' });
+// default: the field is left out of the result (and warns)
+// strict: OGMError: Unknown field "ownersAggregate" in selectionSet on type "Plan". "ownersAggregate" fields are not
+//         supported: select "ownersConnection { totalCount }" for a count, or use Model.aggregate() on the related type.
+```
+
+A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection` or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check. The OGM has never compiled `<relationship>Aggregate` selections; 2.4.8 stopped generating the type for them.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

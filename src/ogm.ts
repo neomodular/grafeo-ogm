@@ -283,7 +283,7 @@ export class OGM<
     this.modelCompilers = {
       where,
       selection,
-      selectNormalizer: new SelectNormalizer(this.schema),
+      selectNormalizer: new SelectNormalizer(this.schema, strictMode),
       mutation: new MutationCompiler(this.schema, {
         ...(config.logger ? { logger: config.logger } : {}),
         // Share the user-configured WhereCompiler so connect/disconnect

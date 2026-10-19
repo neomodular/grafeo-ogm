@@ -17,6 +17,7 @@ import type { PolicyContextBundle } from '../policy/types';
 import type {
   NodeDefinition,
   PropertyDefinition,
+  RelationshipDefinition,
   SchemaMetadata,
 } from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
@@ -715,6 +716,82 @@ function applyFieldArguments(field: FieldNode, node: SelectionNode): void {
 }
 
 /**
+ * v2.6.3 — a selected field its type does not declare (#23). Pre-2.6.3 —
+ * and in 2.x default mode — a scalar-shaped one is projected as a raw
+ * property (`.nmae`, null) and one with a sub-selection is left out of
+ * the result without an error.
+ */
+export interface UnknownSelectedField {
+  /** What the field was looked up on: a type name or an edge description. */
+  owner: string;
+  field: string;
+  /** Selected with a sub-selection (dropped) rather than as a scalar (raw). */
+  subSelection: boolean;
+  /** Edge-properties field: projected from the relationship, not the node. */
+  edge?: boolean;
+  /**
+   * `<rel>Aggregate` on a type with relationship `<rel>`: the supported
+   * alternatives, appended to the message.
+   */
+  hint?: string;
+}
+
+/** v2.6.3 — record an unknown field once per owner + field. */
+function pushUnknown(
+  out: UnknownSelectedField[],
+  unknown: UnknownSelectedField,
+): void {
+  if (!out.some((u) => u.owner === unknown.owner && u.field === unknown.field))
+    out.push(unknown);
+}
+
+/**
+ * v2.6.3 — the hint for a `<rel>Aggregate` field. The OGM never compiled
+ * these (upstream `@neo4j/graphql` generated them; 2.4.8 stopped
+ * generating the misleading type), so point to what works.
+ */
+export function aggregateFieldHint(
+  field: string,
+  relationships: ReadonlyMap<string, unknown>,
+): string | undefined {
+  if (!field.endsWith('Aggregate')) return undefined;
+  const rel = field.slice(0, -'Aggregate'.length);
+  if (!relationships.has(rel)) return undefined;
+  return (
+    `"${field}" fields are not supported: select "${rel}Connection { totalCount }" for a count, ` +
+    `or use Model.aggregate() on the related type.`
+  );
+}
+
+/**
+ * v2.6.3 — report an unknown selected field: throw under `strict: true`,
+ * warn once per owner + field otherwise (output unchanged).
+ *
+ * @param api `selectionSet` or `select`
+ */
+export function reportUnknownSelectedField(
+  strictMode: StrictMode,
+  api: 'selectionSet' | 'select',
+  unknown: UnknownSelectedField,
+): void {
+  const { owner, field, subSelection, edge, hint } = unknown;
+  const suffix = hint ? ` ${hint}` : '';
+  if (strictMode.strict)
+    throw new OGMError(
+      `Unknown field "${field}" in ${api} on ${owner}.${suffix}`,
+    );
+  const outcome = subSelection
+    ? '2.x leaves it out of the result'
+    : `2.x projects it as a raw ${edge ? 'relationship' : 'node'} property (null unless one is stored)`;
+  strictMode.warn(
+    api === 'selectionSet' ? 'selection-unknown-field' : 'select-unknown-field',
+    `${owner}.${field}`,
+    `The ${api} selects "${field}", which is not a field of ${owner}; ${outcome}.${suffix}`,
+    `reject unknown ${api} fields`,
+  );
+}
+
+/**
  * Compiles a selection set (parsed SelectionNode[]) into a Cypher RETURN map projection.
  *
  * Handles scalar fields, relationship pattern comprehensions (array and singular),
@@ -765,6 +842,209 @@ export class SelectionCompiler {
   /** Clear the parse cache. Useful in tests to prevent cross-test pollution. */
   clearCache(): void {
     this.parseCache.clear();
+    this.unknownFieldsCache = new WeakMap();
+  }
+
+  /**
+   * v2.6.3 — the unknown fields found in each parsed selection, per root
+   * type (parsed selections are cached and reused, so the tree is walked
+   * once per selection and type).
+   */
+  private unknownFieldsCache = new WeakMap<
+    SelectionNode[],
+    Map<string, UnknownSelectedField[]>
+  >();
+
+  /**
+   * v2.6.3 — check every field name of a parsed selectionSet against the
+   * schema (#23): root fields, nested relationship selections, connection
+   * `node` and edge `properties` selections, and inline fragments (against
+   * each fragment's type condition). Known: a property (`@cypher`
+   * included), a relationship, `<rel>Connection` and `__typename`.
+   *
+   * An unknown field throws under `strict: true`; in 2.x default mode it
+   * warns once (per OGM, type and field) and the compiled Cypher is
+   * unchanged. Runs on every call, so a cached selection still warns on an
+   * OGM that has not seen it.
+   *
+   * @param mutationResponse the selection is a mutation response's node
+   *   selection: a root `info { … }` (the mutation counters) is allowed.
+   */
+  assertKnownFields(
+    selection: SelectionNode[],
+    rootDef: NodeDefinition,
+    mutationResponse = false,
+  ): void {
+    const key = `${rootDef.typeName}\u0000${mutationResponse ? 'm' : ''}`;
+    let byRoot = this.unknownFieldsCache.get(selection);
+    let found = byRoot?.get(key);
+    if (!found) {
+      found = [];
+      this.collectUnknownFields(selection, rootDef, found, mutationResponse, 0);
+      if (!byRoot) {
+        byRoot = new Map();
+        this.unknownFieldsCache.set(selection, byRoot);
+      }
+      byRoot.set(key, found);
+    }
+    for (const unknown of found)
+      reportUnknownSelectedField(this.strictMode, 'selectionSet', unknown);
+  }
+
+  /** Walk one selection level against `def` (see `assertKnownFields`). */
+  private collectUnknownFields(
+    selection: readonly SelectionNode[],
+    def: NodeDefinition,
+    out: UnknownSelectedField[],
+    allowInfo: boolean,
+    depth: number,
+  ): void {
+    // Selection trees are finite; the bound only guards a pathological one.
+    if (depth > 50) return;
+    for (const node of selection)
+      for (const variant of [node, ...(node.typeVariants ?? [])])
+        this.collectUnknownField(variant, def, out, allowInfo, depth);
+  }
+
+  private collectUnknownField(
+    node: SelectionNode,
+    def: NodeDefinition,
+    out: UnknownSelectedField[],
+    allowInfo: boolean,
+    depth: number,
+  ): void {
+    if (
+      allowInfo &&
+      node.fieldName === 'info' &&
+      !node.typeConditions &&
+      !def.properties.has('info') &&
+      !def.relationships.has('info')
+    )
+      return;
+    // A field selected through inline fragments is a field of each
+    // fragment's type condition (an interface-level field must exist on
+    // the interface; a union condition accepts any member's field, as the
+    // compiler does). Unknown condition types are not checked here.
+    const owners: { def: NodeDefinition; field: string }[] = node.typeConditions
+      ? node.typeConditions.flatMap((t) => {
+          const d = resolveTargetDef(t, this.schema);
+          return d
+            ? [{ def: d, field: node.fieldByType?.[t] ?? node.fieldName }]
+            : [];
+        })
+      : [{ def, field: node.fieldName }];
+    for (const owner of owners) {
+      const { field } = owner;
+      if (field === '__typename' || owner.def.properties.has(field)) continue;
+      const hasChildren = !node.isScalar;
+      if (node.isConnection && hasChildren) {
+        const base = field.replace(/Connection$/, '');
+        if (owner.def.relationships.has(base)) {
+          for (const rel of this.relationshipsOf(owner.def, base))
+            this.collectConnectionUnknowns(
+              node,
+              owner.def,
+              base,
+              rel,
+              out,
+              depth,
+            );
+          continue;
+        }
+      }
+      if (owner.def.relationships.has(field)) {
+        if (hasChildren && !node.isConnection)
+          for (const rel of this.relationshipsOf(owner.def, field)) {
+            const target = resolveTargetDef(rel.target, this.schema);
+            if (target)
+              this.collectUnknownFields(
+                node.children ?? [],
+                target,
+                out,
+                false,
+                depth + 1,
+              );
+          }
+        continue;
+      }
+      // A scalar-shaped `<rel>Connection` of a relationship is a known
+      // name (selected without its sub-selection).
+      if (
+        field.endsWith('Connection') &&
+        owner.def.relationships.has(field.replace(/Connection$/, ''))
+      )
+        continue;
+      pushUnknown(out, {
+        owner: `type "${owner.def.typeName}"`,
+        field,
+        subSelection: hasChildren,
+        hint: aggregateFieldHint(field, owner.def.relationships),
+      });
+    }
+  }
+
+  /**
+   * The relationship definitions `field` stands for on `def`: a union's
+   * merged definition carries one member's, but the compiler projects
+   * each member's own (`compileUnionRelationshipField`).
+   */
+  private relationshipsOf(
+    def: NodeDefinition,
+    field: string,
+  ): RelationshipDefinition[] {
+    const members = this.schema.unions?.get(def.typeName);
+    if (members && members.length > 0) {
+      const rels: RelationshipDefinition[] = [];
+      for (const m of members) {
+        const rel = this.schema.nodes.get(m)?.relationships.get(field);
+        if (rel) rels.push(rel);
+      }
+      if (rels.length > 0) return rels;
+    }
+    const rel = def.relationships.get(field);
+    return rel ? [rel] : [];
+  }
+
+  /** Check a connection's `node` and edge `properties` selections. */
+  private collectConnectionUnknowns(
+    node: SelectionNode,
+    owner: NodeDefinition,
+    base: string,
+    rel: RelationshipDefinition,
+    out: UnknownSelectedField[],
+    depth: number,
+  ): void {
+    const sets = [node, ...(node.extraEdges ?? [])];
+    const target = resolveTargetDef(rel.target, this.schema);
+    if (target)
+      for (const set of sets)
+        for (const children of [
+          set.children ?? [],
+          ...(set.extraNodes ?? []).map((e) => e.children),
+        ])
+          this.collectUnknownFields(children, target, out, false, depth + 1);
+    const props = rel.properties
+      ? this.schema.relationshipProperties.get(rel.properties)
+      : undefined;
+    const edgeOwner = props
+      ? `relationship properties type "${props.typeName}"`
+      : `the "${base}" relationship of type "${owner.typeName}" (no @relationshipProperties)`;
+    for (const set of sets)
+      for (const children of [
+        set.edgeChildren ?? [],
+        ...(set.extraProperties ?? []).map((e) => e.children),
+      ])
+        for (const child of children)
+          if (
+            child.fieldName !== '__typename' &&
+            !props?.properties.has(child.fieldName)
+          )
+            pushUnknown(out, {
+              owner: edgeOwner,
+              field: child.fieldName,
+              subSelection: !child.isScalar,
+              edge: true,
+            });
   }
 
   /**

@@ -430,7 +430,8 @@ export class Model<
     this.selectionCompiler =
       compilers?.selection ?? new SelectionCompiler(schema, this.whereCompiler);
     this.selectNormalizer =
-      compilers?.selectNormalizer ?? new SelectNormalizer(schema);
+      compilers?.selectNormalizer ??
+      new SelectNormalizer(schema, compilers?.strictMode);
     this.mutationCompiler =
       compilers?.mutation ??
       new MutationCompiler(schema, { whereCompiler: this.whereCompiler });
@@ -1915,9 +1916,15 @@ export class Model<
   }): SelectionNode[] {
     if (params.select)
       return this.selectNormalizer.normalize(params.select, this.nodeDef);
-    if (params.selectionSet)
-      return this.parseSelectionSetCached(params.selectionSet);
-    if (this._parsedSelection) return this._parsedSelection;
+    // v2.6.3 — selectionSet field names are checked against the schema
+    // (#23): strict throws on an unknown field, 2.x warns.
+    const parsed = params.selectionSet
+      ? this.parseSelectionSetCached(params.selectionSet)
+      : this._parsedSelection;
+    if (parsed) {
+      this.selectionCompiler.assertKnownFields(parsed, this.nodeDef);
+      return parsed;
+    }
     return this.defaultSelection();
   }
 
@@ -2095,6 +2102,9 @@ export class Model<
 
     if (selectionSet) {
       selection = this.parseSelectionSetCached(selectionSet);
+      // v2.6.3 — `{ info { … } }` alone selects only the mutation
+      // counters: its fields are not node fields, so they are not checked.
+      let infoOnly = false;
 
       // Mutation selectionSets use the pattern: { <pluralName> { <actual fields> } }
       // or { info { ... } <pluralName> { <actual fields> } }
@@ -2108,8 +2118,12 @@ export class Model<
         if (
           outer.fieldName === this.nodeDef.pluralName ||
           !this.nodeDef.relationships.has(outer.fieldName)
-        )
+        ) {
+          infoOnly =
+            outer.fieldName === 'info' &&
+            outer.fieldName !== this.nodeDef.pluralName;
           selection = outer.children!;
+        }
       } else if (selection.length > 1) {
         // Multi-field mutation response (e.g., { info { ... } drugs { id } })
         // Find the field matching the plural name and use its children.
@@ -2121,6 +2135,9 @@ export class Model<
         );
         if (entityField) selection = entityField.children!;
       }
+      // v2.6.3 — check the node fields (#23); a root `info` is allowed.
+      if (!infoOnly)
+        this.selectionCompiler.assertKnownFields(selection, this.nodeDef, true);
     } else
       // v1.8.4 — no selectionSet provided. Project via `defaultSelection`
       // (which now includes `__typename`) instead of bailing out and
@@ -2239,6 +2256,9 @@ export class Model<
     const selection = selectionSet
       ? this.parseSelectionSetCached(selectionSet)
       : this.defaultSelection();
+    // v2.6.3 — check selectionSet field names (#23).
+    if (selectionSet)
+      this.selectionCompiler.assertKnownFields(selection, this.nodeDef);
 
     const selectScope = new CypherFieldScope('n', [], '__sel');
     const returnClause = this.selectionCompiler.compile(

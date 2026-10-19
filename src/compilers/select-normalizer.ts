@@ -11,7 +11,12 @@ import {
   assertSortDirection,
   isPlainObject,
 } from '../utils/validation';
-import type { SelectionNode } from './selection.compiler';
+import { lenientStrictMode, type StrictMode } from '../utils/strict-mode';
+import {
+  aggregateFieldHint,
+  reportUnknownSelectedField,
+  type SelectionNode,
+} from './selection.compiler';
 
 /**
  * Converts a `select` object (used in the programmatic API) into the internal
@@ -31,7 +36,15 @@ export class SelectNormalizer {
    */
   private scalarFieldsCache = new Map<string, SelectionNode[]>();
 
-  constructor(private schema: SchemaMetadata) {}
+  /** v2.6.3 — strict mode + warn-once log, shared per OGM. */
+  private strictMode: StrictMode;
+
+  constructor(
+    private schema: SchemaMetadata,
+    strictMode?: StrictMode,
+  ) {
+    this.strictMode = strictMode ?? lenientStrictMode();
+  }
 
   /** Clear the scalar fields cache. Useful in tests to prevent cross-test pollution. */
   clearCache(): void {
@@ -84,6 +97,17 @@ export class SelectNormalizer {
 
         continue;
       }
+
+      // v2.6.3 — a key that is no field of the type (#23). Pre-2.6.3 —
+      // and in 2.x default mode — `key: true` is projected as a raw
+      // property (null) and an object value is dropped; strict throws.
+      if (fieldName !== '__typename' && !nodeDef.properties.has(fieldName))
+        reportUnknownSelectedField(this.strictMode, 'select', {
+          owner: `type "${nodeDef.typeName}"`,
+          field: fieldName,
+          subSelection: value !== true,
+          hint: aggregateFieldHint(fieldName, nodeDef.relationships),
+        });
 
       // It's a scalar field (property)
       if (value === true)
@@ -366,6 +390,9 @@ export class SelectNormalizer {
           if (propsObj.select && typeof propsObj.select === 'object')
             node.edgeChildren = this.normalizeEdgeProperties(
               propsObj.select as Record<string, unknown>,
+              relDef,
+              nodeDef.typeName,
+              baseFieldName,
             );
         }
       }
@@ -478,10 +505,33 @@ export class SelectNormalizer {
    */
   private normalizeEdgeProperties(
     select: Record<string, unknown>,
+    relDef: RelationshipDefinition,
+    typeName: string,
+    relField: string,
   ): SelectionNode[] {
     const nodes: SelectionNode[] = [];
+    const props = relDef.properties
+      ? this.schema.relationshipProperties.get(relDef.properties)
+      : undefined;
     for (const [fieldName, value] of Object.entries(select)) {
       assertSafeKey(fieldName, 'edge select input');
+      // v2.6.3 — an edge key that is no field of the relationship
+      // properties type (#23): raw relationship property in 2.x, strict
+      // throws.
+      if (
+        value != null &&
+        value !== false &&
+        fieldName !== '__typename' &&
+        !props?.properties.has(fieldName)
+      )
+        reportUnknownSelectedField(this.strictMode, 'select', {
+          owner: props
+            ? `relationship properties type "${props.typeName}"`
+            : `the "${relField}" relationship of type "${typeName}" (no @relationshipProperties)`,
+          field: fieldName,
+          subSelection: value !== true,
+          edge: true,
+        });
       if (value === true)
         nodes.push({
           fieldName,
