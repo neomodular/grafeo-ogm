@@ -293,12 +293,24 @@ export interface RelSnap {
 export interface Snapshot {
   nodes: Map<string, NodeSnap>;
   rels: RelSnap[];
+  /**
+   * `<key>|<canon>` of EVERY node, duplicate ids included, sorted: the
+   * graph's nodes as a multiset (see `createdNodes`).
+   */
+  all: string[];
 }
 
 /**
  * Every node of the run (runId), plus any `ItP*` node with no runId at all
  * (a write that dropped it must still be seen), and every relationship
  * leaving them. Nodes are keyed by `id`; a node without one by element id.
+ *
+ * A nested create that runs for several rows creates several nodes with
+ * the same input `id`. `nodes` keeps one of them per id: the greatest
+ * canonical form, so the choice depends only on the graph, never on the
+ * order the server returns the rows in (v2.7.1 — finding F9: it used to
+ * keep the last one returned, so two runs that left the same graph could
+ * report different nodes). `all` keeps every one.
  */
 export async function snapshot(
   tx: Transaction,
@@ -317,19 +329,18 @@ export async function snapshot(
   );
   const nodes = new Map<string, NodeSnap>();
   const rels: RelSnap[] = [];
+  const all: string[] = [];
   for (const rec of res.records) {
     const props = rec.get('props') as Rec;
     const key =
       typeof props.id === 'string' ? props.id : `eid:${rec.get('eid')}`;
     const labels = [...(rec.get('labels') as string[])].sort();
     const type = labels.find((l) => l.startsWith('ItP')) ?? labels[0] ?? '?';
-    nodes.set(key, {
-      key,
-      type,
-      labels,
-      props,
-      canon: `${labels.join(':')}${canonProps(props)}`,
-    });
+    const canon = `${labels.join(':')}${canonProps(props)}`;
+    all.push(`${key}|${canon}`);
+    const kept = nodes.get(key);
+    if (!kept || kept.canon < canon)
+      nodes.set(key, { key, type, labels, props, canon });
     for (const o of rec.get('out') as Array<Rec | null>) {
       if (!o) continue;
       const end =
@@ -345,7 +356,24 @@ export async function snapshot(
     }
   }
   rels.sort((a, b) => (a.canon < b.canon ? -1 : a.canon > b.canon ? 1 : 0));
-  return { nodes, rels };
+  all.sort();
+  return { nodes, rels, all };
+}
+
+/**
+ * v2.7.1 — the nodes `after` has beyond `before`, as a sorted multiset of
+ * `<key>|<canon>`: duplicate-id nodes a write created are all counted.
+ */
+export function createdNodes(before: Snapshot, after: Snapshot): string[] {
+  const left = new Map<string, number>();
+  for (const n of before.all) left.set(n, (left.get(n) ?? 0) + 1);
+  const out: string[] = [];
+  for (const n of after.all) {
+    const k = left.get(n) ?? 0;
+    if (k > 0) left.set(n, k - 1);
+    else out.push(n);
+  }
+  return out;
 }
 
 /** Type-exact canonical encoding of a stored value. */

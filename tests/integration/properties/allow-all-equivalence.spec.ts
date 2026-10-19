@@ -24,6 +24,7 @@ import {
   canonProps,
   checkProperty,
   cleanup,
+  createdNodes,
   describeLive,
   diffSnapshots,
   inRollback,
@@ -64,9 +65,15 @@ function outcomeKey(o: Outcome): string {
     : `${o.kind}: ${o.summary}`;
 }
 
-function diffKey(d: GraphDiff): string {
+/**
+ * `created` is the multiset of new nodes: a nested create that runs for
+ * several rows creates several nodes with one input id, and which of them
+ * `GraphDiff.created` holds per id says nothing about the write (v2.7.1 —
+ * finding F9).
+ */
+function diffKey(d: GraphDiff, created: string[]): string {
   return stableJson({
-    created: d.created.map((n) => n.canon).sort(),
+    created,
     deleted: d.deleted.map((n) => n.key).sort(),
     changed: d.changed
       .map((c) => `${c.after.key}${canonProps(c.after.props)}`)
@@ -188,10 +195,15 @@ describeLive(
             inRollback(driver, async (tx) => {
               const before = await snapshot(tx, runId);
               const outcome = await runWrite(ogm, op, runId, tx);
-              const diff = outcome.ok
-                ? diffSnapshots(before, await snapshot(tx, runId))
-                : undefined;
-              return { outcome, diff: diff ? diffKey(diff) : '-' };
+              if (!outcome.ok) return { outcome, diff: '-' };
+              const after = await snapshot(tx, runId);
+              return {
+                outcome,
+                diff: diffKey(
+                  diffSnapshots(before, after),
+                  createdNodes(before, after),
+                ),
+              };
             });
           const a = await runOn(plain);
           const b = await runOn(bound());
