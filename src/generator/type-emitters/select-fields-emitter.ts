@@ -110,14 +110,34 @@ function emitEdgeSelectFields(schema: SchemaMetadata): string[] {
   const blocks: string[] = [];
   const emittedEdges = new Set<string>();
 
-  // Gather all relationship definitions that carry edge properties
-  const allNodes = [...schema.nodes.values()];
+  // Gather all relationship definitions that carry edge properties.
+  // v2.6.3 — interfaces too: `emitInterfaceSelectFields` references
+  // `<Interface><Field>EdgeSelectFields` whenever a `@declareRelationship`
+  // resolves (from its implementors) to a relationship with properties.
+  // Since v2.4.8 that name was referenced but never emitted, so the
+  // generated file failed to compile (TS2552, #22). The parser requires
+  // every implementor to agree on the properties type, so the resolved
+  // `rel.properties` is the single type to build it from.
+  const owners: Array<[string, Map<string, RelationshipDefinition>]> = [
+    ...[...schema.nodes.values()].map(
+      (node): [string, Map<string, RelationshipDefinition>] => [
+        node.typeName,
+        node.relationships,
+      ],
+    ),
+    ...[...schema.interfaces.values()].map(
+      (iface): [string, Map<string, RelationshipDefinition>] => [
+        iface.name,
+        iface.relationships,
+      ],
+    ),
+  ];
 
-  for (const node of allNodes)
-    for (const [, rel] of node.relationships) {
+  for (const [ownerTypeName, relationships] of owners)
+    for (const [, rel] of relationships) {
       if (!rel.properties) continue;
 
-      const edgeTypeName = buildEdgeSelectFieldsName(node.typeName, rel);
+      const edgeTypeName = buildEdgeSelectFieldsName(ownerTypeName, rel);
       if (emittedEdges.has(edgeTypeName)) continue;
       emittedEdges.add(edgeTypeName);
 
