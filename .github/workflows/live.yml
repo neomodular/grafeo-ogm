@@ -1,0 +1,74 @@
+name: Live Neo4j suites
+
+# Reusable workflow: runs every suite under tests/integration/ against a real
+# Neo4j 5.26 (the LTS we support). Called by ci.yml and release.yml so the
+# service definition lives in one place.
+#
+# Both plugins ship inside the neo4j:5.26 image (APOC core in labs/, GenAI in
+# products/), so NEO4J_PLUGINS copies them locally rather than downloading.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live (Neo4j 5.26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      neo4j:
+        image: neo4j:5.26
+        env:
+          # Throwaway CI-only credentials for a disposable service container.
+          NEO4J_AUTH: neo4j/ci-live-pw-526
+          NEO4J_PLUGINS: '["apoc", "genai"]'
+        ports:
+          - 7687:7687
+        # Waits for bolt to accept an authenticated query, not just for the
+        # process to start. Generous: plugin install + first boot are slow.
+        options: >-
+          --health-cmd "cypher-shell -a bolt://localhost:7687 -u neo4j -p ci-live-pw-526 'RETURN 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 40
+          --health-start-period 30s
+
+    env:
+      NEO4J_URI: bolt://localhost:7687
+      NEO4J_USER: neo4j
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: ci-live-pw-526
+      NEO4J_APOC_URI: bolt://localhost:7687
+      NEO4J_APOC_USER: neo4j
+      NEO4J_APOC_PASSWORD: ci-live-pw-526
+      NEO4J_GENAI_URI: bolt://localhost:7687
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # In band: the db push suite manages global constraints and indexes.
+      - name: Live suites
+        run: npx jest tests/integration --runInBand --json --outputFile="$RUNNER_TEMP/live-results.json"
+
+      # Every live suite is opt-in on an env var; fail if any of them skipped.
+      - name: Assert no live suite skipped
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/assert-live-suites-ran.cjs "$RUNNER_TEMP/live-results.json"

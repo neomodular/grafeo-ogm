@@ -10,7 +10,13 @@ permissions:
   contents: read
 
 jobs:
+  live:
+    uses: ./.github/workflows/live.yml
+    permissions:
+      contents: read
+
   publish:
+    needs: live
     runs-on: ubuntu-latest
     environment: release
     steps:

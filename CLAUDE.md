@@ -36,6 +36,7 @@ NEO4J_URI=bolt://localhost:17687 NEO4J_USER=neo4j NEO4J_PASSWORD=livetest-pw-526
 - `tests/integration/subgraph-apoc.spec.ts` needs an APOC server: `NEO4J_APOC_URI` + `NEO4J_APOC_PASSWORD` (`-e 'NEO4J_PLUGINS=["apoc"]'`).
 - `tests/integration/vector-phrase.spec.ts` needs the GenAI plugin: `NEO4J_GENAI_URI` (`-e 'NEO4J_PLUGINS=["genai"]'`). It never contacts a provider.
 - Use a throwaway container on a non-default port. **Never point the live suites at a database you care about** — every suite tags its data with a `runId` and deletes it, but `db push` tests manage constraints and indexes.
+- CI runs all live suites in the `live (Neo4j 5.26)` job (reusable `.github/workflows/live.yml`, one `neo4j:5.26` service with APOC + GenAI), on every push/PR and before every npm publish (`release.yml` `publish` needs it). `scripts/ci/assert-live-suites-ran.cjs` fails the job if any live test skipped, so a new suite must be reachable from the env vars set there.
 
 ## Architecture
 
