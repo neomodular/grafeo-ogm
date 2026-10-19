@@ -446,6 +446,9 @@ export class SelectionCompiler {
             nodeVar,
             nodeDef,
             cypherScope,
+            params,
+            paramCounter,
+            policyContext,
           );
           if (conditional) {
             parts.push(conditional);
@@ -576,6 +579,13 @@ export class SelectionCompiler {
    * when the abstract type declares the field as `@cypher` itself, when a
    * condition isn't a concrete type, or when no fragment type declares it
    * as `@cypher`.
+   *
+   * v2.5.4 — under a policy context, each `@cypher` branch is also guarded
+   * by that member's own `read` clause (`WHEN n:B AND <B read> THEN …`),
+   * so a member's statement only projects for a node that passes the
+   * member's policy. The node filter (`compileTargetPolicyClause`) already
+   * requires every carried member's clause; this is defense in depth.
+   * Without a policy context the branches are unchanged.
    */
   private compileFragmentScalar(
     node: SelectionNode,
@@ -583,6 +593,9 @@ export class SelectionCompiler {
     nodeVar: string,
     nodeDef: NodeDefinition,
     cypherScope: CypherFieldScope | null,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string | null {
     // v2.5.3 — `fieldByType`: sibling fragments selected different fields
     // under this key, so each type projects its own field.
@@ -619,9 +632,46 @@ export class SelectionCompiler {
               `${def.typeName}.${field}`,
             );
       else expr = `${nodeVar}.${escapeIdentifier(field)}`;
-      return `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`;
+      const guard =
+        prop.isCypher && prop.cypherStatement
+          ? this.memberReadGuard(
+              def,
+              nodeVar,
+              params,
+              paramCounter,
+              policyContext,
+            )
+          : '';
+      return `WHEN ${nodeVar}:${escapeIdentifier(def.label)}${guard} THEN ${expr}`;
     });
     return `${escapeIdentifier(key)}: CASE ${branches.join(' ')} END`;
+  }
+
+  /**
+   * ` AND <member read clause>` guarding a fragment `@cypher` branch
+   * (v2.5.4); `''` without a policy context, when the member has no read
+   * clause, or when that clause needs `@cypher` preludes a projection
+   * cannot host (the node filter still enforces it).
+   */
+  private memberReadGuard(
+    def: NodeDefinition,
+    nodeVar: string,
+    params: Record<string, unknown> | undefined,
+    paramCounter: { count: number } | undefined,
+    policyContext: PolicyContextBundle | null,
+  ): string {
+    if (!policyContext || !this.whereCompiler || !params || !paramCounter)
+      return '';
+    const clause = this.whereCompiler.compileTargetPolicyClause(
+      def.typeName,
+      nodeVar,
+      'read',
+      policyContext,
+      paramCounter,
+    );
+    if (clause.cypher === null || clause.preludes.length > 0) return '';
+    mergeParams(params, clause.params);
+    return ` AND ${clause.cypher}`;
   }
 
   /**

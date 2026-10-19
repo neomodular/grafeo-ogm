@@ -652,7 +652,7 @@ const GOLDEN: Record<string, Recorded[]> = {
   'interface model find across implementers': [
     {
       cypher:
-        "MATCH (n:(`Chart`|`Drug`))\nWHERE (CASE WHEN n:`Chart` THEN ((n.`ownerId` = $param0) AND (n.`tenantId` = $param1)) WHEN n:`Drug` THEN ((n.`valid` = $param2) AND (n.`tenantId` = $param3)) ELSE false END)\nWITH n, CASE WHEN n:`Chart` THEN 'Chart' WHEN n:`Drug` THEN 'Drug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Chart', 'Drug']]), .`id`, .`tenantId` , __typename: __typename }",
+        "MATCH (n:(`Chart`|`Drug`))\nWHERE ((n:`Chart` OR n:`Drug`) AND (NOT n:`Chart` OR ((n.`ownerId` = $param0) AND (n.`tenantId` = $param1))) AND (NOT n:`Drug` OR ((n.`valid` = $param2) AND (n.`tenantId` = $param3))))\nWITH n, CASE WHEN n:`Chart` THEN 'Chart' WHEN n:`Drug` THEN 'Drug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Chart', 'Drug']]), .`id`, .`tenantId` , __typename: __typename }",
       params: {
         param0: 'u1',
         param1: 't1',

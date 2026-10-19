@@ -212,7 +212,7 @@ export class OGM<
     };
 
     // Surface a runtime warning when an interface has policies registered
-    // but one or more of its implementers do NOT. The CASE-per-label
+    // but one or more of its implementers do NOT. The per-label policy
     // emission in `InterfaceModel.find()` falls back to interface-only
     // enforcement on those branches (see CHANGELOG "Known limits"); a
     // missing implementer policy is therefore semantically meaningful

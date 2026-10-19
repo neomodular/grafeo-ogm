@@ -15,6 +15,10 @@
  * - `ItDrug`     — interface implementer whose only permissive is gated
  *                  off by `appliesWhen` (H2).
  * - `ItDoc`      — restrictive using the `_NOT: null` idiom (H3).
+ * - `ItFrag`     — interface whose members both project `@cypher` fields
+ *                  (v2.5.4 multi-label): `ItFragA` has no policies,
+ *                  `ItFragB` hides `secret`; `ItFragHolder` (no policies)
+ *                  reaches them through `res`.
  */
 import { permissive, restrictive } from '../../src/policy/types';
 
@@ -61,6 +65,26 @@ type ItDoc @node {
   id: ID! @unique
   runId: String
   approvedAt: String
+}
+interface ItFrag {
+  id: ID!
+}
+type ItFragA implements ItFrag @node {
+  id: ID! @unique
+  runId: String
+  title: String
+  shout: String @cypher(statement: "RETURN this.title + '!' AS s", columnName: "s")
+}
+type ItFragB implements ItFrag @node {
+  id: ID! @unique
+  runId: String
+  secret: Boolean
+  whisper: String @cypher(statement: "RETURN 'b-' + this.id AS s", columnName: "s")
+}
+type ItFragHolder @node {
+  id: ID! @unique
+  runId: String
+  res: [ItFrag!]! @relationship(type: "IT_HOLDS", direction: OUT)
 }
 `;
 
@@ -133,6 +157,14 @@ export const policies = {
       operations: ['read'],
       name: 'doc.approved',
       when: () => ({ approvedAt_NOT: null }),
+    }),
+  ],
+  ItFragB: [
+    permissive({ operations: ['read'], name: 'fragb.all', when: () => ({}) }),
+    restrictive({
+      operations: ['read'],
+      name: 'fragb.no-secret',
+      when: () => ({ secret: false }),
     }),
   ],
 };

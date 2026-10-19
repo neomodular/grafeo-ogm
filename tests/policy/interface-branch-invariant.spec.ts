@@ -1,6 +1,7 @@
 /**
  * Invariant (v2.3.0, fix-nls-enforcement-gaps H2): every `InterfaceModel`
- * policy branch `WHEN n:M THEN <clause>` is EXACTLY the policy clause that
+ * policy guard `(NOT n:M OR <clause>)` (v2.5.4; pre-2.5.4 a CASE branch
+ * `WHEN n:M THEN <clause>`) is EXACTLY the policy clause that
  * `Model(M)` compiles for the same context and operation — same text,
  * same parameter values in the same order. `true` when `Model(M)` emits no
  * clause (no policy for the operation, or a firing override).
@@ -186,15 +187,20 @@ function whereOf({ cypher }: Recorded): string {
   return line ? line.slice('WHERE '.length) : '';
 }
 
-/** Branch `M` of an interface statement's CASE (`'true'` when no clause). */
+/**
+ * Guard `M` of an interface statement's member conjunction
+ * `((n:M1 OR …) AND (NOT n:M OR <clause>) AND …)` (v2.5.4; pre-2.5.4 a
+ * CASE branch). `'true'` when there is no clause or no guard for `M`.
+ */
 function branchOf(rec: Recorded, member: string): string {
   const where = whereOf(rec);
   if (!where) return 'true';
+  if (!where.includes(`n:\`${member}\``))
+    throw new Error(`no label test for ${member} in: ${where}`);
   const m = new RegExp(
-    `WHEN n:\`${member}\` THEN (.*?) (?:WHEN n:\`|ELSE false END\\))`,
+    `\\(NOT n:\`${member}\` OR (.*?)\\)(?: AND \\(NOT n:\`|\\)$)`,
   ).exec(where);
-  if (!m) throw new Error(`no branch for ${member} in: ${where}`);
-  return m[1];
+  return m ? m[1] : 'true';
 }
 
 const MEMBERS = ['Chart', 'Drug'];

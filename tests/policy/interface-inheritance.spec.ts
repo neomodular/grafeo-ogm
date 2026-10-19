@@ -235,7 +235,8 @@ describe('Interface inheritance', () => {
       .withContext({})
       .interfaceModel('Resource')
       .aggregate({ aggregate: { count: true } });
-    expect(recorded[0].cypher).toContain('CASE');
+    expect(recorded[0].cypher).toContain('(NOT n:`Book` OR ');
+    expect(recorded[0].cypher).toContain('(NOT n:`Article` OR ');
     expect(recorded[0].cypher).toContain('count');
   });
 

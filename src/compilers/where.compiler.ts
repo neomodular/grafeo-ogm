@@ -329,13 +329,23 @@ export class WhereCompiler {
    *     to compiling it directly); `null` when it has no policy for `op`
    *     or an override fires.
    *   - interface / union →
-   *       `(CASE WHEN v:M1 THEN <M1 clause> WHEN v:M2 THEN … ELSE false END)`
-   *     over the concrete members, each branch being exactly that member's
+   *       `((v:M1 OR v:M2 …) AND (NOT v:M1 OR <M1 clause>) AND …)`
+   *     over the concrete members, each guard being exactly that member's
    *     own clause (`resolveForType(M, op)` already folds in M's interface
    *     policies). A member without a policy for `op`, or whose override
-   *     fires, is `true`; when EVERY member is `true` the result is `null`
-   *     (unconstrained, like a concrete type without policies). `ELSE false`
-   *     excludes a node carrying no known member label (defense in depth).
+   *     fires, contributes no guard; when NO member has a guard the result
+   *     is `null` (unconstrained, like a concrete type without policies).
+   *     The leading label disjunction excludes a node carrying no known
+   *     member label (defense in depth).
+   *
+   * v2.5.4 — the clause is a conjunction over EVERY member label the node
+   * carries: a node labelled `:M1:M2` must pass both M1's and M2's clause,
+   * so a type's policy applies wherever that type is reached. Pre-2.5.4
+   * this was `(CASE WHEN v:M1 THEN <M1> WHEN v:M2 THEN <M2> ELSE false END)`
+   * — the first matching label won, so a node carrying two implementer
+   * labels was admitted under the laxer member and the stricter member's
+   * policy (and its default-deny) was never evaluated. Single-label nodes
+   * get the same result as before.
    *
    * Pre-2.3.0 abstract targets resolved the ABSTRACT type's name, so the
    * implementers' own policies were never applied through relationships.
@@ -373,8 +383,8 @@ export class WhereCompiler {
 
     const params: Record<string, unknown> = {};
     const preludes: string[] = [];
-    const branches: string[] = [];
-    let constrained = false;
+    const labelTests: string[] = [];
+    const guards: string[] = [];
     for (const member of members) {
       if (!this.schema.nodes.has(member)) continue;
       const clause = this.compileConcreteTargetClause(
@@ -395,14 +405,14 @@ export class WhereCompiler {
             `one to stored properties.`,
         );
       preludes.push(...clause.preludes);
-      if (clause.cypher !== null) constrained = true;
-      branches.push(
-        `WHEN ${varName}:${escapeIdentifier(member)} THEN ${clause.cypher ?? 'true'}`,
-      );
+      const labelTest = `${varName}:${escapeIdentifier(member)}`;
+      labelTests.push(labelTest);
+      if (clause.cypher !== null)
+        guards.push(`(NOT ${labelTest} OR ${clause.cypher})`);
     }
-    if (!constrained) return { cypher: null, params: {}, preludes: [] };
+    if (guards.length === 0) return { cypher: null, params: {}, preludes: [] };
     return {
-      cypher: `(CASE ${branches.join(' ')} ELSE false END)`,
+      cypher: `((${labelTests.join(' OR ')}) AND ${guards.join(' AND ')})`,
       params,
       preludes,
     };
@@ -712,8 +722,8 @@ export class WhereCompiler {
    *   - concrete target → one `compileUserAndPolicy` pass (shared `@cypher`
    *     prelude scope); the bundle cascades as `NO_ROOT_POLICY` at any depth.
    *   - interface target → filter via a `NO_ROOT_POLICY` traversal bundle,
-   *     policy via `compileTargetPolicyClause` (CASE over the members'
-   *     own clauses — pre-2.3.0 only the interface's own policies ran).
+   *     policy via `compileTargetPolicyClause` (a conjunction over the
+   *     members' own clauses — pre-2.3.0 only the interface's own policies ran).
    *
    * `''` for an absent part. With `scope`, concrete-target preludes
    * register into it (caller emits); otherwise they are returned.

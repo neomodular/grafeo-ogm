@@ -258,7 +258,7 @@ describe('interface relationships inside create / update (v2.4.8)', () => {
   });
 
   describe('target policies', () => {
-    it('a flat nested connect applies every implementer policy (CASE)', async () => {
+    it('a flat nested connect applies every implementer policy', async () => {
       const recorded: Recorded[] = [];
       await policyOgm(recorded)
         .withContext({ uid: 'u1' })
@@ -271,7 +271,7 @@ describe('interface relationships inside create / update (v2.4.8)', () => {
         });
       const { cypher } = recorded[0];
       expect(cypher).toMatch(
-        /WHERE \(n_conn0:`Dog` OR n_conn0:`Cat`\) AND n_conn0\.`name` = \$param\d+ AND \(CASE WHEN n_conn0:`Dog` THEN \(n_conn0\.`ownerId` = \$param\d+\) WHEN n_conn0:`Cat` THEN \(n_conn0\.`ownerId` = \$param\d+\) ELSE false END\)/,
+        /WHERE \(n_conn0:`Dog` OR n_conn0:`Cat`\) AND n_conn0\.`name` = \$param\d+ AND \(\(n_conn0:`Dog` OR n_conn0:`Cat`\) AND \(NOT n_conn0:`Dog` OR \(n_conn0\.`ownerId` = \$param\d+\)\) AND \(NOT n_conn0:`Cat` OR \(n_conn0\.`ownerId` = \$param\d+\)\)\)/,
       );
     });
 
@@ -292,7 +292,7 @@ describe('interface relationships inside create / update (v2.4.8)', () => {
           },
         });
       expect(recorded[0].cypher).toMatch(
-        /\(CASE WHEN n_u0:`Dog` THEN \(n_u0\.`ownerId` = \$param\d+\) WHEN n_u0:`Cat` THEN \(n_u0\.`ownerId` = \$param\d+\) ELSE false END\)/,
+        /\(\(n_u0:`Dog` OR n_u0:`Cat`\) AND \(NOT n_u0:`Dog` OR \(n_u0\.`ownerId` = \$param\d+\)\) AND \(NOT n_u0:`Cat` OR \(n_u0\.`ownerId` = \$param\d+\)\)\)/,
       );
     });
 
@@ -447,7 +447,7 @@ describe('top-level connect / disconnect on abstract relationships (v2.4.8)', ()
           connect: { pets: [{ where: { node: { name: 'Rex' } } }] },
         });
       expect(recorded[0].cypher).toMatch(
-        /\(CASE WHEN target_pets_0:`Dog` THEN \(target_pets_0\.`ownerId` = \$param\d+\) WHEN target_pets_0:`Cat` THEN \(target_pets_0\.`ownerId` = \$param\d+\) ELSE false END\)/,
+        /\(\(target_pets_0:`Dog` OR target_pets_0:`Cat`\) AND \(NOT target_pets_0:`Dog` OR \(target_pets_0\.`ownerId` = \$param\d+\)\) AND \(NOT target_pets_0:`Cat` OR \(target_pets_0\.`ownerId` = \$param\d+\)\)\)/,
       );
     });
 

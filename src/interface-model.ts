@@ -152,9 +152,9 @@ export class InterfaceModel<
 
   /**
    * Resolve the policy bundle for the interface itself. Per design
-   * decision #1, the InterfaceModel uses a CASE-per-label expression
-   * that AND's each implementer's `'read'` policy with the interface's
-   * own — implemented in `compileInterfacePolicyClause`.
+   * decision #1, the InterfaceModel uses a per-label expression that
+   * AND's each implementer's `'read'` policy with the interface's own —
+   * implemented in `compileInterfacePolicyClause`.
    */
   private resolveInterfacePolicy(
     op: Operation,
@@ -226,13 +226,17 @@ export class InterfaceModel<
 
   /**
    * The interface's policy clause (v2.3.0):
-   * `(CASE WHEN n:M THEN <M clause> … ELSE false END)`, built by the shared
-   * `WhereCompiler.compileTargetPolicyClause` — the same construction that
-   * guards interface / union relationship targets. Each branch is exactly
-   * the clause `Model(M)` compiles for the same context and operation
-   * (M's resolution already folds in the interface's own policies); a
-   * member without a policy for the operation, or whose override fires, is
-   * `true`, and no clause is emitted when every member is `true`.
+   * `((n:M1 OR n:M2 …) AND (NOT n:M1 OR <M1 clause>) AND …)`, built by the
+   * shared `WhereCompiler.compileTargetPolicyClause` — the same
+   * construction that guards interface / union relationship targets. Each
+   * guard is exactly the clause `Model(M)` compiles for the same context
+   * and operation (M's resolution already folds in the interface's own
+   * policies); a member without a policy for the operation, or whose
+   * override fires, has no guard, and no clause is emitted when no member
+   * has one. v2.5.4 — a node carrying several implementer labels must pass
+   * EVERY one of their clauses (pre-2.5.4 a first-match CASE admitted it
+   * under the first member, e.g. `labels: ['Drug']` returned a node that
+   * `Model('Drug')` hides).
    * `aggregate` falls back to a member's `read` policies when it has no
    * `aggregate` policy, as `Model.aggregate` does.
    *
@@ -316,13 +320,13 @@ export class InterfaceModel<
 
     // WHERE — user where compiled against the interface's synthetic
     // NodeDefinition (interface props only). Policy is composed via
-    // the CASE-per-label clause that AND's interface + implementer.
+    // the per-label clause that AND's interface + implementer.
     //
     // v1.8.5 — When the user's where contains relationship traversals
     // (`_SOME` / `_NONE` / `_ALL` / `_SINGLE` / `*Connection { node: {...} }`),
     // the WhereCompiler needs `resolveForType` access so the TARGET type's
     // `'read'` policy AND-stitches into the EXISTS body. The interface-
-    // level CASE clause already handles SOURCE-side enforcement; this
+    // level policy clause already handles SOURCE-side enforcement; this
     // synthetic bundle is marked `overridden: true` so the WhereCompiler
     // does NOT re-apply a top-level policy clause for the synthetic source
     // (which would default-deny because `permissives: []`), while keeping
@@ -504,7 +508,7 @@ export class InterfaceModel<
     // v1.8.5 — see corresponding comment in `find()`. Synthetic bundle
     // with `overridden: true` keeps `resolveForType` reachable for
     // user-where relationship traversals while the interface-level
-    // CASE clause handles source-side enforcement.
+    // policy clause handles source-side enforcement.
     const whereInputBundle: PolicyContextBundle | undefined = policyContext
       ? {
           ctx: policyContext.ctx,

@@ -770,4 +770,170 @@ describeLive('NLS enforcement — live Neo4j', () => {
       .find({ where: { id: id('h2-drug') } });
     expect(viaInterface).toEqual([]);
   });
+
+  // --- v2.5.4: a node carrying two implementer labels -----------------------
+  // Pre-2.5.4 the per-member policy was a first-match CASE: a node labelled
+  // with two implementers was admitted under the first (laxer) member and
+  // the second member's policy was never evaluated.
+
+  describe('v2.5.4 — multi-label nodes pass every carried member policy', () => {
+    const m = (suffix: string) => id(`ml-${suffix}`);
+    const ids = (rows: unknown) =>
+      ((rows ?? []) as { id: string }[]).map((r) => r.id).sort();
+
+    beforeAll(async () => {
+      await run(
+        `CREATE (:ItResource:ItChart:ItDrug {id: $ab, runId: $runId, secret: false, tenantId: 't1'})
+         CREATE (:ItResource:ItChart {id: $chart, runId: $runId, secret: false, tenantId: 't1'})
+         CREATE (h:ItFragHolder {id: $h, runId: $runId})
+         CREATE (a:ItFragA {id: $a, runId: $runId, title: 'hey'})
+         CREATE (b:ItFragB {id: $b, runId: $runId, secret: false})
+         CREATE (bs:ItFragB {id: $bs, runId: $runId, secret: true})
+         CREATE (hidden:ItFragA:ItFragB {id: $hidden, runId: $runId, title: 'both', secret: true})
+         CREATE (both:ItFragA:ItFragB {id: $both, runId: $runId, title: 'ok', secret: false})
+         CREATE (h)-[:IT_HOLDS]->(a), (h)-[:IT_HOLDS]->(b), (h)-[:IT_HOLDS]->(bs),
+                (h)-[:IT_HOLDS]->(hidden), (h)-[:IT_HOLDS]->(both)
+         CREATE (:ItTag {id: $t, runId: $runId})
+         CREATE (tl:ItTag {id: $tl, runId: $runId})
+         CREATE (tl)-[:IT_TAGS_RES]->(:ItResource:ItChart:ItDrug {id: $ab0, runId: $runId, secret: false, tenantId: 't1'})`,
+        {
+          ab: m('ab'),
+          chart: m('chart'),
+          h: m('holder'),
+          a: m('a'),
+          b: m('b'),
+          bs: m('bs'),
+          hidden: m('hidden'),
+          both: m('both'),
+          t: m('tag'),
+          tl: m('tag-linked'),
+          ab0: m('ab0'),
+        },
+      );
+    });
+
+    it('InterfaceModel does not return a node the stricter member hides', async () => {
+      // `ItDrug` read is default-denied; `ItChart` admits `secret: false`.
+      expect(
+        await bound()
+          .model('ItDrug')
+          .find({ where: { id: m('ab') } }),
+      ).toEqual([]);
+      expect(
+        await bound()
+          .interfaceModel('ItResource')
+          .find({ where: { id: m('ab') }, labels: ['ItDrug'] }),
+      ).toEqual([]);
+      expect(
+        await bound()
+          .interfaceModel('ItResource')
+          .find({ where: { id: m('ab') } }),
+      ).toEqual([]);
+      expect(
+        await bound()
+          .interfaceModel('ItResource')
+          .count({ where: { id: m('ab') } }),
+      ).toBe(0);
+    });
+
+    it('single-label nodes are unchanged', async () => {
+      const rows = await bound()
+        .interfaceModel('ItResource')
+        .find({ where: { id_IN: [m('ab'), m('chart')] } });
+      expect(rows.map((r) => [r.id, r.__typename])).toEqual([
+        [m('chart'), 'ItChart'],
+      ]);
+    });
+
+    it('fragment @cypher through a relationship: no hidden member fields', async () => {
+      const [holder] = await bound()
+        .model('ItFragHolder')
+        .find({
+          where: { id: m('holder') },
+          selectionSet:
+            '{ id res { id ... on ItFragA { shout } ... on ItFragB { whisper secret } } }',
+        });
+      const res = holder.res as Record<string, unknown>[];
+      expect(ids(res)).toEqual([m('a'), m('b'), m('both')].sort());
+      expect(res.some((r) => r.whisper === `b-${m('hidden')}`)).toBe(false);
+      expect(res.some((r) => r.secret === true)).toBe(false);
+      // A node both members admit is returned with both members' fields.
+      expect(res.find((r) => r.id === m('both'))).toMatchObject({
+        shout: 'ok!',
+        whisper: `b-${m('both')}`,
+        secret: false,
+      });
+      expect(res.find((r) => r.id === m('a'))).toMatchObject({
+        __typename: 'ItFragA',
+        shout: 'hey!',
+        whisper: null,
+      });
+      expect(res.find((r) => r.id === m('b'))).toMatchObject({
+        __typename: 'ItFragB',
+        whisper: `b-${m('b')}`,
+      });
+    });
+
+    it('fragment @cypher at the InterfaceModel root: no hidden member fields', async () => {
+      const rows = await bound()
+        .interfaceModel('ItFrag')
+        .find({
+          where: { id_IN: [m('a'), m('b'), m('bs'), m('hidden'), m('both')] },
+          selectionSet:
+            '{ id ... on ItFragA { shout } ... on ItFragB { whisper } }',
+        });
+      expect(ids(rows)).toEqual([m('a'), m('b'), m('both')].sort());
+      expect(rows.find((r) => r.id === m('both'))).toMatchObject({
+        shout: 'ok!',
+        whisper: `b-${m('both')}`,
+      });
+    });
+
+    it('without a policy context every node is still returned', async () => {
+      const rows = await ogm.interfaceModel('ItFrag').find({
+        where: { id_IN: [m('hidden'), m('both')] },
+      });
+      expect(ids(rows)).toEqual([m('both'), m('hidden')].sort());
+    });
+
+    it('interface-target traversal cannot match the multi-label node', async () => {
+      expect(
+        await bound()
+          .model('ItTag')
+          .find({
+            where: { id: m('tag-linked'), resources_SOME: { id: m('ab0') } },
+          }),
+      ).toEqual([]);
+    });
+
+    it('interface-target connect cannot link the multi-label node', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: m('tag') },
+          connect: { resources: [{ where: { node: { id: m('ab') } } }] },
+        });
+      expect(await linked(m('tag'), 'IT_TAGS_RES', m('ab'))).toBe(false);
+    });
+
+    it('interface-target connect still links a single-label visible node', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: m('tag') },
+          connect: { resources: [{ where: { node: { id: m('chart') } } }] },
+        });
+      expect(await linked(m('tag'), 'IT_TAGS_RES', m('chart'))).toBe(true);
+    });
+
+    it('interface-target disconnect cannot unlink the multi-label node', async () => {
+      await bound()
+        .model('ItTag')
+        .update({
+          where: { id: m('tag-linked') },
+          disconnect: { resources: [{ where: { node: { id: m('ab0') } } }] },
+        });
+      expect(await linked(m('tag-linked'), 'IT_TAGS_RES', m('ab0'))).toBe(true);
+    });
+  });
 });

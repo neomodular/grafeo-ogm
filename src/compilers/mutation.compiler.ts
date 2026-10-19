@@ -179,9 +179,10 @@ export class MutationCompiler {
         });
     }
 
-    // Abstract (interface / union) targets get a CASE over their concrete
-    // members' own clauses — pre-2.3.0 only the abstract type's own
-    // policies (usually none) were applied.
+    // Abstract (interface / union) targets get a conjunction over their
+    // concrete members' own clauses — every member label the node carries
+    // must pass (v2.5.4; pre-2.5.4 a first-match CASE) — pre-2.3.0 only
+    // the abstract type's own policies (usually none) were applied.
     const clause = this.getPolicyWhereCompiler().compileTargetPolicyClause(
       targetNodeDef.typeName,
       targetVar,

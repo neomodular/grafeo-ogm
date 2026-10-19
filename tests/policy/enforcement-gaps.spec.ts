@@ -650,8 +650,10 @@ describe('Traversal filters keep the target policy outside every negation', () =
 });
 
 describe('H5 — abstract relationship targets enforce each member policy', () => {
+  // v2.5.4 — a conjunction over every carried member label (pre-2.5.4 a
+  // first-match `CASE WHEN v:ItChart THEN … WHEN v:ItDrug THEN false …`).
   const MEMBER_CASE =
-    /CASE WHEN (\w+):`ItChart` THEN \(true AND \(\1\.`secret` = \$\w+\)\) WHEN \1:`ItDrug` THEN false ELSE false END/;
+    /\(\((\w+):`ItChart` OR \1:`ItDrug`\) AND \(NOT \1:`ItChart` OR \(true AND \(\1\.`secret` = \$\w+\)\)\) AND \(NOT \1:`ItDrug` OR false\)\)/;
 
   it('interface target traversal filter', async () => {
     const { bound, recorded } = setup();
@@ -661,12 +663,13 @@ describe('H5 — abstract relationship targets enforce each member policy', () =
     expect(recorded[0].cypher).toMatch(MEMBER_CASE);
   });
 
-  it('interface target _ALL keeps the CASE outside the negation', async () => {
+  it('interface target _ALL keeps the member clause outside the negation', async () => {
     const { bound, recorded } = setup();
     await bound()
       .model('ItTag')
       .find({ where: { resources_ALL: { id: 'c1' } } });
-    expect(recorded[0].cypher).toMatch(/ELSE false END\) AND NOT \(r0\.`id`/);
+    expect(recorded[0].cypher).toMatch(MEMBER_CASE);
+    expect(recorded[0].cypher).toMatch(/OR false\)\) AND NOT \(r0\.`id`/);
   });
 
   it('interface target connection filter', async () => {
@@ -700,7 +703,7 @@ describe('H5 — abstract relationship targets enforce each member policy', () =
     await bound()
       .model('ItTag')
       .find({ selectionSet: '{ id resources { id } }' });
-    expect(recorded[0].cypher).toMatch(/CASE WHEN \w+:`ItChart` THEN/);
+    expect(recorded[0].cypher).toMatch(MEMBER_CASE);
     expect(recorded[0].cypher).toMatch(SECRET);
   });
 
@@ -738,6 +741,113 @@ describe('H2 — interface branches', () => {
   it('denies an implementer whose permissives are all gated off', async () => {
     const { bound, recorded } = setup();
     await bound().interfaceModel('ItResource').find({});
-    expect(recorded[0].cypher).toMatch(/WHEN n:`ItDrug` THEN false/);
+    expect(recorded[0].cypher).toMatch(/\(NOT n:`ItDrug` OR false\)/);
+  });
+});
+
+// v2.5.4 — a node carrying several implementer labels must pass EVERY
+// carried member's clause. Pre-2.5.4 the per-member clause was a
+// first-match `CASE WHEN v:M1 THEN … WHEN v:M2 THEN … ELSE false END`, so
+// such a node was admitted under the first (laxer) member.
+describe('v2.5.4 — multi-label nodes pass every carried member policy', () => {
+  const FRAG_CLAUSE = (v: string) =>
+    new RegExp(
+      `\\(\\(${v}:\`ItFragA\` OR ${v}:\`ItFragB\`\\) AND \\(NOT ${v}:\`ItFragB\` OR \\(true AND \\(${v}\\.\`secret\` = \\$\\w+\\)\\)\\)\\)`,
+    );
+  const FRAG_SELECTION =
+    '{ id res { id ... on ItFragA { shout } ... on ItFragB { whisper secret } } }';
+
+  it('InterfaceModel.find (with `labels`) requires every member clause, no CASE', async () => {
+    const { bound, recorded } = setup();
+    await bound()
+      .interfaceModel('ItResource')
+      .find({ labels: ['ItDrug'] });
+    const where = recorded[0].cypher.split('\n')[1];
+    expect(where).toBe(
+      'WHERE ((n:`ItChart` OR n:`ItDrug`) AND (NOT n:`ItChart` OR (true AND (n.`secret` = $param0))) AND (NOT n:`ItDrug` OR false))',
+    );
+    expect(where).not.toContain('CASE');
+  });
+
+  it('count / aggregate share the same conjunction', async () => {
+    const { bound, recorded } = setup();
+    await bound().interfaceModel('ItResource').count();
+    await bound()
+      .interfaceModel('ItResource')
+      .aggregate({ aggregate: { count: true } });
+    for (const { cypher } of recorded)
+      expect(cypher).toContain(
+        '(NOT n:`ItChart` OR (true AND (n.`secret` = $param0))) AND (NOT n:`ItDrug` OR false)',
+      );
+  });
+
+  it('a member without a policy only contributes its label test', async () => {
+    const { bound, recorded } = setup();
+    await bound().interfaceModel('ItFrag').find({});
+    expect(recorded[0].cypher).toMatch(FRAG_CLAUSE('n'));
+    expect(recorded[0].cypher).not.toContain('NOT n:`ItFragA`');
+  });
+
+  it('nested interface selection filters with the conjunction', async () => {
+    const { bound, recorded } = setup();
+    await bound().model('ItFragHolder').find({ selectionSet: FRAG_SELECTION });
+    expect(recorded[0].cypher).toMatch(FRAG_CLAUSE('n0'));
+  });
+
+  it("guards each fragment @cypher branch with that member's read clause", async () => {
+    const { bound, recorded } = setup();
+    await bound().model('ItFragHolder').find({ selectionSet: FRAG_SELECTION });
+    await bound().interfaceModel('ItFrag').find({
+      selectionSet:
+        '{ id ... on ItFragA { shout } ... on ItFragB { whisper } }',
+    });
+    const [nested, root] = recorded;
+    expect(nested.cypher).toMatch(
+      /`whisper`: CASE WHEN n0:`ItFragB` AND \(true AND \(n0\.`secret` = \$(\w+)\)\) THEN head\(COLLECT/,
+    );
+    const nestedParam =
+      /n0:`ItFragB` AND \(true AND \(n0\.`secret` = \$(\w+)\)\)/.exec(
+        nested.cypher,
+      )![1];
+    expect(nested.params[nestedParam]).toBe(false);
+    // A member without a read policy keeps its bare branch.
+    expect(nested.cypher).toContain(
+      '`shout`: CASE WHEN n0:`ItFragA` THEN head(',
+    );
+    expect(root.cypher).toMatch(
+      /`whisper`: CASE WHEN n:`ItFragB` AND \(true AND \(n\.`secret` = \$\w+\)\) THEN __sel_n_ItFragB_whisper END/,
+    );
+  });
+
+  it('connect / disconnect / nested targets use the conjunction', async () => {
+    const { bound, recorded } = setup();
+    await bound()
+      .model('ItTag')
+      .update({
+        where: { id: 't' },
+        connect: { resources: [{ where: { node: { id: 'c' } } }] },
+      });
+    await bound()
+      .model('ItTag')
+      .update({
+        where: { id: 't' },
+        disconnect: { resources: [{ where: { node: { id: 'c' } } }] },
+      });
+    for (const { cypher } of recorded) {
+      expect(cypher).toMatch(
+        /\(NOT (\w+):`ItChart` OR \(true AND \(\1\.`secret` = \$\w+\)\)\) AND \(NOT \1:`ItDrug` OR false\)/,
+      );
+      expect(cypher).not.toContain('ELSE false END');
+    }
+  });
+
+  it('without policies: no member clause and no fragment guard', async () => {
+    const { ogm, recorded } = setup(false);
+    await ogm.model('ItFragHolder').find({ selectionSet: FRAG_SELECTION });
+    await ogm.interfaceModel('ItResource').find({ labels: ['ItDrug'] });
+    for (const { cypher } of recorded) {
+      expect(cypher).not.toMatch(/NOT \w+:`/);
+      expect(cypher).not.toMatch(/WHEN \w+:`ItFragB` AND/);
+    }
   });
 });
