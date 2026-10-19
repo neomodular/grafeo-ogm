@@ -984,6 +984,9 @@ export class MutationCompiler {
         // v2.5.0 — rejected in EVERY item. Pre-2.5.0 only the first item's
         // relationship fields were; in later items the nested input was
         // skipped unwritten.
+        // v2.5.3 — a `null` relationship field means "no nested write" and
+        // is skipped, as upsert does. Pre-2.5.3 it threw.
+        if (nodeDef.relationships.has(key) && item[key] === null) continue;
         if (nodeDef.relationships.has(key))
           throw new OGMError(
             `createMany does not support relationship fields. Found: "${key}" in data[${index}]. Use create() for nested operations.`,

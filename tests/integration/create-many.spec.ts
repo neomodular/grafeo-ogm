@@ -189,4 +189,18 @@ describeLive('createMany — live Neo4j', () => {
     ).rejects.toThrow(OGMError);
     expect(await people()).toEqual([]);
   });
+
+  // v2.5.3 — a `null` relationship field (the generated input is
+  // `InputMaybe`) threw, while upsert skips it. Null means "no nested
+  // write", so it is skipped.
+  it('skips a null relationship field, as upsert does', async () => {
+    const res = await P().createMany({
+      data: [
+        { runId, email: email('p'), name: 'P', tags: null },
+        { runId, email: email('q'), name: 'Q' },
+      ],
+    });
+    expect(res.count).toBe(2);
+    expect((await people()).map((r) => r.name)).toEqual(['P', 'Q']);
+  });
 });
