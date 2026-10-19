@@ -372,7 +372,13 @@ export class InterfaceModel<
     const caseLines = this.interfaceDef.implementedBy.map(
       (typeName) => `WHEN n:${escapeIdentifier(typeName)} THEN '${typeName}'`,
     );
-    cypherParts.push(`WITH n, CASE ${caseLines.join(' ')} END AS __typename`);
+    // v2.5.3 — an interface with no implementers has no branch: emit a
+    // null `__typename` instead of `CASE  END`, a syntax error.
+    cypherParts.push(
+      caseLines.length > 0
+        ? `WITH n, CASE ${caseLines.join(' ')} END AS __typename`
+        : 'WITH n, null AS __typename',
+    );
 
     // RETURN
     let selection: SelectionNode[];
