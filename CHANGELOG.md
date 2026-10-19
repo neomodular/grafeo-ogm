@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.5.1 (2026-10-18) — regression fixes
+
+> **Patch release.** Fixes regressions introduced in **2.4.8** (writes) and a `db push --force-drop` bug. No API changes.
+
+### Writes
+
+- **`connect: { rel: null }` linked every target node.** Since 2.4.8 a `null` connect value compiled to an unfiltered `MATCH`, so `update({ connect: { tags: null } })` linked the node to **every** `Tag`. A `null` value is now a no-op, and a `null` item inside a connect list (`tags: [null]`) throws `OGMError`.
+- **Sibling nested connects shared variable and parameter names.** Two connect items that each carried a nested `connect` (two siblings, or two members of a union) reused the same prefix, so a link could go to the wrong node and edge properties were overwritten by the last sibling. Each item now gets its own prefix. Nested disconnects get the same fix.
+- **Nested writes through an interface relationship touched non-member nodes.** When an interface relationship (`pets: [Pet!]!`) shares its relationship type with another field (`toys`), a nested `update`, nested `delete` or cascade `delete` on `pets` also matched the `Toy` nodes on that type, renaming or **deleting** them. These now match implementor labels only, as connect and disconnect already did.
+
+### CLI
+
+- **`db push --force-drop` no longer drops an index it cannot recreate.** When another fulltext or vector index already held the SDL definition under a different name, push dropped the SDL-named index, the `CREATE … IF NOT EXISTS` was a silent no-op, and push still printed `✓ recreated`. Fulltext queries address the index by its SDL name, so they broke. The planner now reports the index as blocked by the equivalent one, and never drops it. A recreate that Neo4j reports as a no-op is now reported as an error rather than `✓ recreated`.
+
 ## 2.5.0 (2026-10-18) — breaking fixes from the bug scan
 
 > **Minor release. Every item below changes behaviour that callers may depend on.** Each change fixes a confirmed bug, and the old behaviour was wrong (see each entry). The non-breaking fixes from the same scan shipped in **2.4.8**.
