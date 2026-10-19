@@ -31,6 +31,7 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 - [Schema Definition](#schema-definition)
 - [Query API](#query-api)
 - [Mutation API](#mutation-api)
+- [Strict mode](#strict-mode)
 - [Advanced Features](#advanced-features)
 - [Vector Search](#vector-search)
 - [Type Generation](#type-generation)
@@ -182,6 +183,8 @@ const typeDefs = fs.readFileSync('./schema.graphql', 'utf-8');
 
 const ogm = new OGM({ typeDefs, driver });
 ```
+
+For new code, pass `strict: true` as well. It turns on the corrected behaviour for a handful of surprising input shapes and becomes the default in 3.0. See [Strict mode](#strict-mode).
 
 ### 4. Basic CRUD
 
@@ -1003,6 +1006,119 @@ await Book.update({
 - **Nested connect / disconnect** recurse: `connect: { posts: [{ where, connect: { tags: [...] } }] }` links the post *and* its tags (max 5 levels).
 - **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
 - With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
+
+---
+
+## Strict mode
+
+```typescript
+const ogm = new OGM({ typeDefs, driver, logger, strict: true });
+```
+
+Some input shapes compile to something other than what they say. A typo'd connect key widens the connect to every node. A fulltext `score` inside `OR` is ignored. Fixing these in place would change results that existing code may rely on, so 2.x keeps the old behaviour by default and adds an opt-in switch:
+
+- **`strict` off (the 2.x default).** Every input compiles exactly as in v2.5.3, byte for byte. The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log.
+- **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
+- **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
+
+Generated types are the same in both modes.
+
+#### 1. Unknown keys in connect / disconnect items
+
+A key the item is not compiled from is ignored, so a typo leaves the item with no filter.
+
+```typescript
+await users.update({ where: { id }, connect: { pets: [{ wehre: { node: { id: petId } } }] } });
+// default: links EVERY Pet (and warns) · strict: OGMError: Unknown key(s) "wehre" in a connect item on "pets"
+```
+
+Allowed keys: `where`, `edge`, `overwrite`, `connect` (connect) and `where`, `disconnect` (disconnect). Connect-all `[{}]` and the blanket disconnect `null` / `{}` are not affected.
+
+#### 2. Unknown edge-property keys
+
+```typescript
+await users.update({ where: { id }, connect: { posts: [{ where: { node: { id: postId } }, edge: { rolee: 'author' } }] } });
+// default: stores a stray `rolee` property on the relationship (and warns) · strict: OGMError: Unknown field "rolee" in the edge input …
+```
+
+Applies to `edge` on connect, nested create and nested update.
+
+#### 3. `upsert` with more than one unique key in `where`
+
+```typescript
+await users.upsert({ where: { id: 'u2', email: 'a@x.com' }, create: {}, update: { name: 'A' } });
+// default: MERGE on {id, email} misses the existing node with that email → duplicate (and warns)
+// strict: OGMError: upsert "where" must name exactly one @id / @unique field
+```
+
+#### 4. Blanket disconnect on a shared relationship type
+
+```graphql
+type User @node {
+  pets: [Pet!]! @relationship(type: "HAS", direction: OUT)
+  toys: [Toy!]! @relationship(type: "HAS", direction: OUT)
+}
+```
+
+```typescript
+await users.update({ where: { id }, disconnect: { pets: null } });
+// default: OPTIONAL MATCH (n)-[r:HAS]->()     — unlinks the toys too (warned once when the OGM is built)
+// strict:  OPTIONAL MATCH (n)-[r:HAS]->(:Pet) — only the pets
+```
+
+Abstract targets are restricted to their members' labels.
+
+#### 5. `labels` on `upsert` / `createMany({ skipDuplicates })`
+
+```typescript
+await users.upsert({ where: { email }, create: {}, update: {}, labels: ['Vip'] });
+// default: SET n:Vip after the MERGE — an existing user it matched becomes Vip too (and warns)
+// strict:  ON CREATE SET …, n:Vip    — only a newly created user gets the label
+```
+
+#### 6. Fulltext `score` inside `OR` / `AND` / `NOT`
+
+```typescript
+await books.find({ fulltext: { OR: [{ BookTitle: { phrase: 'dune', score: 2 } }, { BookBody: { phrase: 'dune' } }] } });
+// default: the branch score is ignored (and warns) · strict: only BookTitle hits scoring ≥ 2 are kept from that branch
+```
+
+#### 7. `@include` / `@skip` in a `selectionSet`
+
+```typescript
+await books.find({ selectionSet: '{ id title @include(if: false) }' });
+// default: title is returned anyway (and warns) · strict: title is omitted
+```
+
+Only a literal `if: true | false` is supported. `$variables` are still rejected.
+
+#### 8. `mode: 'insensitive'` with `_IN` / `_NOT_IN`
+
+```typescript
+await books.find({ where: { mode: 'insensitive', title_IN: ['DUNE'] } });
+// default: case-sensitive, misses "Dune" (and warns) · strict: toLower(n.title) IN [...lowered list], matches "Dune"
+```
+
+String fields only. Other fields compare as-is in both modes.
+
+#### 9. The same response key with different arguments
+
+```typescript
+await books.find({ selectionSet: '{ reviews(where: { stars: 5 }) { id } reviews(where: { stars: 1 }) { body } }' });
+// default: the first selection wins, the second is dropped (and warns)
+// strict: OGMError: Fields "reviews" conflict because they have differing arguments. Use different aliases …
+```
+
+#### 10. Two differently aliased `edges` in one connection
+
+```typescript
+await books.find({ selectionSet: '{ reviewsConnection { a: edges { node { id } } b: edges { node { body } } } }' });
+// default: only `a`, holding both selections merged (and warns) · strict: `a` and `b`, each with its own selection
+```
+
+#### Not behind the switch: `aggregate` on list fields
+
+`avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
 
 ---
 
