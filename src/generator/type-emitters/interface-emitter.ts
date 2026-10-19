@@ -4,7 +4,9 @@ import type {
   PropertyDefinition,
   RelationshipDefinition,
 } from '../../schema/types';
+import { hasRelAggregateField } from './aggregation-emitter';
 import { mapScalarType, wrapMaybe, toPascalCase } from './helpers';
+import { emitAggregateField } from './node-type-emitter';
 
 /**
  * Emits interface type declarations and their `*Implementation` enums.
@@ -63,7 +65,11 @@ function emitInterfaceType(
   }
 
   // --- Relationship fields ---
+  // v2.7.0 — with `<rel>Aggregate` (the runtime compiles it against the
+  // declared relationship; upstream had none on interfaces).
   for (const [, rel] of iface.relationships) {
+    if (hasRelAggregateField(iface, rel))
+      members.push(emitAggregateField(iface.name, rel));
     members.push(emitRelationshipField(rel));
     members.push(emitConnectionField(iface.name, rel));
   }

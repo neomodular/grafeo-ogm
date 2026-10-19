@@ -136,9 +136,11 @@ describe('emitNodeTypes', () => {
 
     const output = emitNodeTypes(schema);
 
-    // No aggregate field: relationship aggregates are not supported at
-    // runtime (through v2.4.7 this always read undefined).
-    expect(output).not.toContain('booksAggregate');
+    // v2.7.0 — the aggregate field is back (optional): the runtime
+    // populates it. 2.4.8–2.6.x left it out (it always read undefined).
+    expect(output).toContain(
+      '  booksAggregate?: Maybe<AuthorBookBooksAggregationSelection>;',
+    );
     // Array relationship field
     expect(output).toContain('  books: Array<Book>;');
     // Connection field
@@ -169,7 +171,33 @@ describe('emitNodeTypes', () => {
 
     expect(output).toContain('  hasStatus: Status;');
     expect(output).toContain('  hasStatusConnection: BookHasStatusConnection;');
-    expect(output).not.toContain('hasStatusAggregate');
+    expect(output).toContain(
+      '  hasStatusAggregate?: Maybe<BookStatusHasStatusAggregationSelection>;',
+    );
+  });
+
+  it('emits no aggregate field over a field of that name (v2.7.0)', () => {
+    const schema = makeSchema(
+      new Map([
+        [
+          'Book',
+          makeNodeDef('Book', {
+            relationships: new Map([
+              ['tags', makeRel('tags', 'Tag', { isArray: true })],
+              [
+                'tagsAggregate',
+                makeRel('tagsAggregate', 'Tag', { isArray: true }),
+              ],
+            ]),
+          }),
+        ],
+      ]),
+    );
+
+    const output = emitNodeTypes(schema);
+
+    expect(output).toContain('  tagsAggregate: Array<Tag>;');
+    expect(output).not.toContain('tagsAggregate?: Maybe<');
   });
 
   it('emits singular optional relationship with Maybe wrapper', () => {
