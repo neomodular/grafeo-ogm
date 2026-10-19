@@ -10,6 +10,8 @@
  *   `pr: properties`, aliased edge properties) were ignored.
  * - A response key selected twice (`posts { id } posts { title }`, or two
  *   `edges { node { … } }`) kept only one selection's sub-fields.
+ * - A relationship / connection field inside an inline fragment on an
+ *   interface was silently dropped, together with its arguments.
  */
 import { describeLive, liveHarness } from '../fixtures/read-paths.fixture';
 import { OGM } from '../../src/ogm';
@@ -196,6 +198,50 @@ describeLive('selectionSet merge, aliases and fragments — live Neo4j', () => {
         selectionSet: '{ posts { id } ... on ItSmUser { posts { title } } }',
       });
       expect(byId((rows as Row[])[0].posts)).toEqual(expected());
+    });
+  });
+
+  describe('relationship fields inside an interface fragment', () => {
+    it('projects them per implementer (InterfaceModel)', async () => {
+      const rows = await things('{ id ... on ItSmB { owners { name } } }');
+      expect(rows[0]).toEqual({
+        id: h.id('a'),
+        owners: [],
+        __typename: 'ItSmA',
+      });
+      expect(rows[1].id).toBe(h.id('b'));
+      expect((rows[1].owners as Row[]).map((o) => o.name).sort()).toEqual([
+        'u1',
+        'u2',
+      ]);
+    });
+
+    it('honours their arguments (nested interface relationship)', async () => {
+      const row = await u1(
+        '{ things { id ... on ItSmB { owners(where: { name: "u2" }) { name } } } }',
+      );
+      const b = (row.things as Row[]).find((t) => t.id === h.id('b'))!;
+      expect(b.owners).toEqual([{ name: 'u2' }]);
+    });
+
+    it("applies the target type's read policy", async () => {
+      const rows = await secured
+        .withContext({})
+        .interfaceModel('ItSmThing')
+        .find({
+          where: { runId: h.runId },
+          selectionSet: '{ id ... on ItSmB { owners { name } } }',
+          options: { sort: [{ id: 'ASC' }] },
+        });
+      expect((rows as Row[])[1].owners).toEqual([{ name: 'u1' }]);
+    });
+
+    it('projects a connection field per implementer', async () => {
+      const rows = await things(
+        '{ id ... on ItSmB { ownersConnection { totalCount } } }',
+      );
+      expect(rows[0].ownersConnection).toBeNull();
+      expect(rows[1].ownersConnection).toEqual({ totalCount: 2 });
     });
   });
 });

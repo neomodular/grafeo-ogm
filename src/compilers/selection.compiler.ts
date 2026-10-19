@@ -484,6 +484,34 @@ export class SelectionCompiler {
         continue;
       }
 
+      // v2.5.3 — a relationship / connection field selected through an
+      // inline fragment on an abstract type that doesn't declare it.
+      // (Union relationship fields keep their per-member CASE below.)
+      if (
+        isAbstract &&
+        node.typeConditions &&
+        (node.isConnection || !(unionMembers && unionMembers.length > 0)) &&
+        !nodeDef.relationships.has(
+          node.isConnection
+            ? node.fieldName.replace(/Connection$/, '')
+            : node.fieldName,
+        )
+      ) {
+        const fragmentCypher = this.compileFragmentRelationship(
+          node,
+          nodeVar,
+          maxDepth,
+          currentDepth,
+          params,
+          paramCounter,
+          policyContext,
+        );
+        if (fragmentCypher) {
+          parts.push(`${key}: ${fragmentCypher}`);
+          continue;
+        }
+      }
+
       if (node.isConnection) {
         const connectionCypher = this.compileConnection(
           node,
@@ -782,6 +810,65 @@ export class SelectionCompiler {
     assertSafeIdentifier(alias, 'selection alias');
     node.connectionAliases ??= {};
     node.connectionAliases[key] ??= alias;
+  }
+
+  /**
+   * Compile a relationship or connection field selected through inline
+   * fragments on an abstract type that does not declare it (v2.5.3):
+   * `CASE WHEN n:D THEN <D's projection> … END`, each branch compiled
+   * against the implementer — with its arguments and the target type's
+   * read policy. Pre-2.5.3 the field was looked up on the abstract type,
+   * not found, and silently dropped together with its arguments.
+   *
+   * Returns `null` (unchanged behaviour) when no fragment type declares it.
+   */
+  private compileFragmentRelationship(
+    node: SelectionNode,
+    nodeVar: string,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string | null {
+    const relField = node.isConnection
+      ? node.fieldName.replace(/Connection$/, '')
+      : node.fieldName;
+    const branches: string[] = [];
+    let singular = node.isConnection;
+    for (const typeName of node.typeConditions ?? []) {
+      const def = this.schema.nodes.get(typeName);
+      const relDef = def?.relationships.get(relField);
+      if (!def || !relDef) continue;
+      if (!relDef.isArray) singular = true;
+      const expr = node.isConnection
+        ? this.compileConnection(
+            node,
+            nodeVar,
+            def,
+            maxDepth,
+            currentDepth,
+            params,
+            paramCounter,
+            policyContext,
+          )
+        : this.compileRelationship(
+            node,
+            nodeVar,
+            def,
+            maxDepth,
+            currentDepth,
+            params,
+            paramCounter,
+            policyContext,
+          );
+      if (expr)
+        branches.push(
+          `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`,
+        );
+    }
+    if (branches.length === 0) return null;
+    return `CASE ${branches.join(' ')} ELSE ${singular ? 'null' : '[]'} END`;
   }
 
   /**
