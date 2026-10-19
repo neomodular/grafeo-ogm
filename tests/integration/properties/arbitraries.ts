@@ -24,7 +24,7 @@
  * fixed in v2.6.1 and is generated again.)
  *
  * Generated rarely or in the runtime shape, because the generated TYPES
- * offer a shape the runtime rejects with OGMError (F3, F4 and the
+ * offer a shape the runtime rejects with OGMError (F3 and the
  * OGMError-documented limitations: edge filters in mutation connection
  * wheres, divergent connect-item shapes, multi-level cascade delete,
  * connection-level logical operators in typed-select wheres).
@@ -652,13 +652,11 @@ export function deleteInput(type: string, depth: number): fc.Arbitrary<Rec> {
       rels.map((d) => [
         d.field,
         d.kind === 'union'
-          ? // FINDING F4 (types/runtime mismatch): the generated
-            // `ItPTagItemsDeleteInput` is keyed per member
-            // (`{ ItPChart: [...] }`), but the root cascade delete rejects it
-            // (`Unknown key "ItPChart" in a nested delete of "items"`) and
-            // wants a flat item list. Mostly the runtime shape is generated.
+          ? // Both shapes: the generated `ItPTagItemsDeleteInput`, keyed
+            // per member (`{ ItPChart: [...] }`, accepted since v2.6.2 —
+            // finding F4), and the flat item list.
             fc.oneof(
-              { weight: 4, arbitrary: items(deleteItem(d, undefined, 0)) },
+              { weight: 1, arbitrary: items(deleteItem(d, undefined, 0)) },
               {
                 weight: 1,
                 arbitrary: someKeys(

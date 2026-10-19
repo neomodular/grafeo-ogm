@@ -759,6 +759,34 @@ export class MutationCompiler {
           throw new OGMError(
             `Cannot resolve the target type "${relDef.target}" of relationship "${fieldName}".`,
           );
+        // v2.6.2 — a cascade on a union / interface field keyed by member
+        // type (`{ items: { Chart: [...] } }`, the generated
+        // `…DeleteInput` shape) deletes each member's matching targets.
+        // Pre-2.6.2 only the flat item list was accepted and the typed
+        // shape threw `Unknown key "Chart" in a nested delete`.
+        const members = perMemberDeleteEntries(
+          spec,
+          abstractTarget(relDef.target, this.schema),
+          fieldName,
+        );
+        if (members) {
+          for (const [member, memberSpec] of members)
+            lines.push(
+              ...this.buildNestedDelete({
+                spec: memberSpec,
+                relDef: this.narrowToMember(relDef, member),
+                sourceVar: 'n',
+                withClause: 'WITH n',
+                targetNodeDef: this.schema.nodes.get(member)!,
+                nextVar: () => `cascade_${varCounter++}`,
+                tag: `${fieldName}_${member}`,
+                params,
+                policyContext,
+                paramCounter: counter,
+              }),
+            );
+          continue;
+        }
         lines.push(
           ...this.buildNestedDelete({
             spec,
@@ -3257,6 +3285,33 @@ export function perMemberEntries(
   return memberKeys
     .filter((k) => value[k] !== null)
     .map((k) => [k, value[k]] as [string, unknown]);
+}
+
+/**
+ * v2.6.2 — the per-member entries of a root cascade delete on an abstract
+ * relationship (`{ Chart: [...], Doc: [...] }`, the generated union
+ * `…DeleteInput`), or `null` for the flat item list (`[{ where }]`,
+ * `{ where }`, `true`, `null`), which keeps its pre-2.6.2 handling. Member
+ * keys mixed with item keys throw.
+ */
+function perMemberDeleteEntries(
+  spec: unknown,
+  target: AbstractTarget | null,
+  fieldName: string,
+): [string, unknown][] | null {
+  if (!target || !isPlainObject(spec)) return null;
+  const keys = Object.keys(spec).filter((k) => spec[k] !== undefined);
+  if (!keys.some((k) => target.members.includes(k))) return null;
+  const other = keys.filter((k) => !target.members.includes(k));
+  if (other.length > 0)
+    throw new OGMError(
+      `Unknown key(s) ${other.map((k) => `"${k}"`).join(', ')} in the delete input of "${fieldName}" ` +
+        `(${target.kind} "${target.name}"). Key it by member type (${target.members.map((m) => `"${m}"`).join(', ')}) ` +
+        `or give the item list, not both.`,
+    );
+  return keys
+    .filter((k) => spec[k] !== null)
+    .map((k) => [k, spec[k]] as [string, unknown]);
 }
 
 /**
