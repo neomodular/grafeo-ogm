@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.7.0 (2026-10-19) — relationship aggregate selections and connection sort
+
+> **Minor release.** Two compatibility features for code carried over from `@neo4j/graphql`. First, `<rel>Aggregate` selections, as `@neo4j/graphql` 5.x generated them, now work at runtime. This closes the compatibility gap behind #23: a legacy `selectionSet` such as `{ id textFieldsAggregate { count } }` used to compile with the aggregate silently left out, so code reading `.textFieldsAggregate.count` got `undefined` (a pagination total stuck at 0). Second, connection fields in a `selectionSet` accept `sort` (#25). Selections that compiled before compile to byte-identical Cypher.
+
+### Added
+
+- **`<rel>Aggregate` selections** (closes #23), with upstream's shape: `postsAggregate(where: …, directed: …) { count node { <field> { … } } edge { <prop> { … } } }`.
+  - **Aggregates per type:** ID and String `shortest` / `longest` (plus lexicographic `min` / `max`); Int, Float and BigInt `min` / `max` / `average` / `sum`; DateTime, LocalDateTime, LocalTime, Time and Duration `min` / `max`.
+  - **Values:** `average` is a float, and BigInt aggregates are strings. On an empty set `count` and `sum` are 0 and the rest are `null`. `avg` and `sum` reproduce Neo4j's functions exactly.
+  - **Where it works:** root, nested at any depth, connection `node` selections, inline fragments, `InterfaceModel` and mutation responses, for concrete, interface and union targets.
+  - **Policies:** an aggregate measures exactly what the same relationship selected as a list returns. That means `where`, the target's `read` policy (per member for abstract targets), and under strict mode the abstract-target member restriction. A node the context cannot read never changes any aggregate.
+  - **Cypher:** pure expressions (`COUNT { }`, `reduce` over a pattern comprehension), valid on Neo4j 5.x at any depth. No APOC.
+- **Typed `select`:** `postsAggregate: true | { where?, directed?, select?: { count?, node?, edge? } }`.
+- **Generated types:**
+  - The optional `<rel>Aggregate?: Maybe<…AggregationSelection>` field is back on node types, and is new on interface types and in their `SelectFields`.
+  - The relationship aggregation selection types are no longer `@deprecated`, and their names are unchanged.
+  - New field types: `IdRelationshipAggregateSelection`, `StringRelationshipAggregateSelection`, `BigIntAggregateSelection`, `LocalDateTimeAggregateSelection`, `LocalTimeAggregateSelection`, `TimeAggregateSelection`, `DurationAggregateSelection`. Interface relationships get aggregation selection types too.
+- **Connection `sort` in a `selectionSet`** (closes #25), e.g. `chaptersConnection(sort: [{ edge: { position: ASC } }, { node: { title: DESC } }])`.
+  - **Entries:** the same `{ node }` / `{ edge }` entries as the typed connection `orderBy`.
+  - **Cypher:** the same as the typed form (`apoc.coll.sortMulti`, so it needs APOC). One implementation backs both.
+  - **Where it works:** with `where`, `totalCount`, aliases, mutation responses, the `model.selectionSet` setter and `strict: true`.
+  - **Invalid input throws `OGMError`:** unknown node or edge fields, an `edge` sort on a relationship without `@relationshipProperties`, a bad direction, `$variables`.
+- **Clearer argument errors:** an unsupported connection argument (`first`, `after`, …) now names the typed `select` alternative, and says the argument was ignored before 2.5.0.
+
+### Behavior changes
+
+- **A `<rel>Aggregate { … }` field of a relationship now returns data.** It was absent before.
+- **Connection `sort` in a `selectionSet` now sorts.** From 2.5.0 through 2.6.x it threw `Unsupported argument "sort"`, at assignment time when set through the `model.selectionSet` setter. Before 2.5.0 it was silently ignored. Remove the argument to keep the unsorted order.
+- **It is a known field for the 2.6.3 field-name check.** It no longer warns, and no longer throws under `strict: true`. A bare `ownersAggregate` with no aggregates selected, and `<x>Aggregate` where `x` is not a relationship, are still unknown. The hint for the bare form now reads `"ownersAggregate" needs a selection of aggregates, e.g. "ownersAggregate { count }"`.
+- **Generated `<…>NodeAggregateSelection` / `<…>EdgeAggregateSelection` types gain members, and none are removed.**
+  - ID and String fields use the new `…RelationshipAggregateSelection` types. These are supersets of the old member types, so `min` / `max` still compile.
+  - BigInt and the other temporal fields are added. Interface targets now list the interface's fields.
+- **The `<rel>Aggregate` where filters stay unsupported.** Their input types stay `@deprecated`.
+
+### Deprecations
+
+- **The list-field members of `<…>NodeAggregateSelection` / `<…>EdgeAggregateSelection`** (e.g. `tags: StringAggregateSelection` for `tags: [String!]`) keep their v2.6.3 names and types but are `@deprecated`, and they will be removed in 3.0. List fields are not aggregated: upstream never aggregated them, and selecting one in a `<rel>Aggregate` throws `OGMError: Field "tags" ([String]) on postsAggregate.node has no aggregates: list fields are not aggregated.`
+
 ## 2.6.3 (2026-10-19) — generated types fix and selection field checks
 
 > **Patch release.** Fixes #22 (a 2.4.8 regression) and adds the field-name check from #23 as a strict-mode item. No behaviour changes without `strict`: inputs that work today return the same results and compile to the same Cypher.
