@@ -30,7 +30,11 @@ const typeDefs = /* GraphQL */ `
     pets: [ItSmPet!]! @relationship(type: "IT_SM_HAS", direction: OUT)
     toys: [ItSmToy!]! @relationship(type: "IT_SM_HAS", direction: OUT)
     posts: [ItSmPost!]!
-      @relationship(type: "IT_SM_WROTE", direction: OUT, properties: "ItSmWrote")
+      @relationship(
+        type: "IT_SM_WROTE"
+        direction: OUT
+        properties: "ItSmWrote"
+      )
   }
   type ItSmPet @node {
     id: ID! @unique
@@ -189,6 +193,75 @@ describeLive('Strict mode, write paths — live Neo4j', () => {
         }),
       ).rejects.toThrow('in a disconnect item on "pets"');
       expect(await linked(u, 'IT_SM_HAS', 'ItSmPet')).toEqual([p1, p2].sort());
+    });
+  });
+
+  describe('item 2 — unknown edge-property keys', () => {
+    async function edgeProps(u: string, p: string): Promise<Row | null> {
+      const [row] = await run(
+        `MATCH (:ItSmUser {id: $u})-[r:IT_SM_WROTE]->(:ItSmPost {id: $p})
+         RETURN properties(r) AS props`,
+        { u, p },
+      );
+      return (row?.props ?? null) as Row | null;
+    }
+
+    async function seed(tag: string) {
+      const [u, p] = [id(`${tag}-u`), id(`${tag}-p`)];
+      await run(
+        'CREATE (:ItSmUser {id: $u, runId: $runId}), (:ItSmPost {id: $p, runId: $runId})',
+        { u, p },
+      );
+      return { u, p };
+    }
+
+    it('default: a typo’d edge key is stored as a stray property, warning once', async () => {
+      const { u, p } = await seed('e-def');
+      const { ogm, callWarnings } = makeOgm();
+      await ogm.model('ItSmUser').update({
+        where: { id: u },
+        connect: {
+          posts: [{ where: { node: { id: p } }, edge: { rolee: 'x' } }],
+        },
+      });
+      expect(await edgeProps(u, p)).toEqual({ rolee: 'x' });
+      expect(callWarnings()).toHaveLength(1);
+      expect(callWarnings()[0]).toContain(
+        'Unknown field "rolee" in the edge input of "posts"',
+      );
+    });
+
+    it('strict: a typo’d edge key throws and writes nothing', async () => {
+      const { u, p } = await seed('e-str');
+      const { ogm } = makeOgm(true);
+      await expect(
+        ogm.model('ItSmUser').update({
+          where: { id: u },
+          update: {
+            posts: [
+              {
+                create: [
+                  {
+                    node: { id: id('e-str-p2'), runId },
+                    edge: { rolee: 'x' },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(
+        'Unknown field "rolee" in the edge input (nested create)',
+      );
+      expect(await edgeProps(u, id('e-str-p2'))).toBeNull();
+      // A declared edge field still works in strict mode.
+      await ogm.model('ItSmUser').update({
+        where: { id: u },
+        connect: {
+          posts: [{ where: { node: { id: p } }, edge: { role: 'r' } }],
+        },
+      });
+      expect(await edgeProps(u, p)).toEqual({ role: 'r' });
     });
   });
 });

@@ -105,3 +105,37 @@ describe('item 1 — unknown connect / disconnect item keys', () => {
     ]);
   });
 });
+
+describe('item 2 — unknown edge-property keys', () => {
+  const cases = [
+    'edge: unknown key on connect (UNWIND path)',
+    'edge: unknown key on connect (single object)',
+    'edge: unknown key on nested create (in create)',
+    'edge: unknown key on nested create (in update)',
+    'edge: unknown key on nested update',
+  ];
+  it.each(cases)('default warns once: %s', (name) =>
+    warnsOnce(
+      badWriteShapes[name],
+      'Unknown field "rolee" in the edge input of "posts" is not a property of the relationship properties type "Wrote"; ' +
+        'it is written to the relationship as a stray property.',
+    ),
+  );
+  it.each(cases)('strict throws: %s', async (name) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+      /^Unknown field "rolee" in the edge input \((connect|nested create|nested update)\) of "posts": it is not a property of the relationship properties type "Wrote"\./,
+    );
+    expect(records).toEqual([]);
+  });
+
+  it('a relationship without @relationshipProperties has no edge fields', async () => {
+    const { ogm } = setup(true);
+    await expect(
+      ogm.model('User').update({
+        where: { id: 'u1' },
+        connect: { pets: [{ where: { node: { id: 'p1' } }, edge: { x: 1 } }] },
+      }),
+    ).rejects.toThrow('which declares no @relationshipProperties');
+  });
+});

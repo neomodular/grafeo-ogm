@@ -449,6 +449,41 @@ export class MutationCompiler {
   }
 
   /**
+   * v2.6.0 — `edge` keys that are not properties of the relationship's
+   * `@relationshipProperties` type. Pre-2.6.0 (and still by default) each
+   * is written to the relationship as a stray property. Default: one
+   * warning per OGM; strict: `OGMError` (`Unknown field …`).
+   */
+  private checkEdgeKeys(
+    relDef: RelationshipDefinition,
+    edge: unknown,
+    input: 'connect' | 'nested create' | 'nested update',
+  ): void {
+    if (!isPlainObject(edge)) return;
+    const declared = relDef.properties
+      ? this.schema.relationshipProperties.get(relDef.properties)?.properties
+      : undefined;
+    for (const key of Object.keys(edge)) {
+      if (edge[key] === undefined || declared?.has(key)) continue;
+      const owner = relDef.properties
+        ? `the relationship properties type "${relDef.properties}"`
+        : `the relationship, which declares no @relationshipProperties`;
+      if (this.strictMode.strict)
+        throw new OGMError(
+          `Unknown field "${key}" in the edge input (${input}) of "${relDef.fieldName}": it is not a property of ` +
+            `${owner}. Declare it in the schema, or fix the key.`,
+        );
+      this.strictMode.warn(
+        'edge-unknown-key',
+        `${relDef.fieldName}\u0000${key}`,
+        `Unknown field "${key}" in the edge input of "${relDef.fieldName}" is not a property of ${owner}; ` +
+          `it is written to the relationship as a stray property.`,
+        `throw an OGMError for unknown edge fields`,
+      );
+    }
+  }
+
+  /**
    * Generate CREATE Cypher for one or more nodes.
    * Handles scalar properties, nested relationship creates, and connects.
    */
@@ -1436,6 +1471,7 @@ export class MutationCompiler {
         lines.push(`CREATE ${relPattern}`);
 
         // Set edge properties if present
+        this.checkEdgeKeys(relDef, edgeInput, 'nested create');
         if (edgeInput && Object.keys(edgeInput).length > 0) {
           const relVar = `r_edge_${startCounter + counter - 1}`;
           // Re-match the relationship to set edge props
@@ -1638,6 +1674,7 @@ export class MutationCompiler {
         // Every item is a plain object here (fast-path eligibility).
         for (const item of spec as Record<string, unknown>[]) {
           this.checkLinkItemKeys(item, 'connect', relDef);
+          this.checkEdgeKeys(relDef, item.edge, 'connect');
         }
         const targetVar = `${varPrefix}target`;
         const relVar = `${varPrefix}r`;
@@ -1818,6 +1855,7 @@ export class MutationCompiler {
         }.`,
       );
     this.checkLinkItemKeys(connectSpec, 'connect', relDef);
+    this.checkEdgeKeys(relDef, connectSpec.edge, 'connect');
     const lines: string[] = [];
     const whereSpec = connectSpec.where as Record<string, unknown> | undefined;
     const edgeInput = connectSpec.edge as Record<string, unknown> | undefined;
@@ -2569,6 +2607,7 @@ export class MutationCompiler {
             const edgeInput = createSpec.edge as
               | Record<string, unknown>
               | undefined;
+            this.checkEdgeKeys(relDef, edgeInput, 'nested create');
             const edgeEntries = Object.entries(edgeInput ?? {}).filter(
               ([, v]) => v !== undefined,
             );
@@ -2660,6 +2699,7 @@ export class MutationCompiler {
           // Pre-compute SET clauses for edge (relationship) properties
           const edgeClauses: string[] = [];
           const edgeParams: Record<string, unknown> = {};
+          this.checkEdgeKeys(relDef, edgeUpdate, 'nested update');
           if (edgeUpdate)
             for (const [prop, val] of Object.entries(edgeUpdate)) {
               if (val === undefined) continue;
