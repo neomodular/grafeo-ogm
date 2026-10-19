@@ -67,7 +67,19 @@ const MAX_NESTED_LINK_DEPTH = 5;
  * bound as `targetVar`: that node becomes the source, everything in scope
  * stays carried, and its own names are prefixed by it.
  */
-function nestedScope(carryVars: string[], targetVar: string, depth: number) {
+function nestedScope(
+  carryVars: string[],
+  targetVar: string,
+  depth: number,
+  /**
+   * A token unique along the whole write path (v2.5.1). Pre-2.5.1 the
+   * prefix was `targetVar` alone, which sibling connects share (`target`)
+   * and which per-member union / interface dispatch restarts (`n_conn0`),
+   * so their nested params collided and the last writer won: links went
+   * to the wrong node and edge values were overwritten.
+   */
+  uniqueToken: string,
+) {
   if (depth >= MAX_NESTED_LINK_DEPTH)
     throw new OGMError(
       `Nested connect / disconnect deeper than ${MAX_NESTED_LINK_DEPTH} levels is not supported.`,
@@ -77,7 +89,7 @@ function nestedScope(carryVars: string[], targetVar: string, depth: number) {
     sourceVar: targetVar,
     carryVars: vars,
     withClause: `WITH ${vars.join(', ')}`,
-    varPrefix: `${targetVar}_`,
+    varPrefix: `${uniqueToken}_`,
     depth: depth + 1,
   } satisfies WriteScope;
 }
@@ -262,6 +274,8 @@ export class MutationCompiler {
     targetNodeDef: NodeDefinition,
   ): boolean {
     for (const item of items) {
+      // A non-object item takes the per-item path, which rejects it.
+      if (!isPlainObject(item)) return false;
       // A nested `connect` is per item (v2.4.8): the UNWIND cannot run it.
       if (item.connect != null) return false;
       const where = item.where;
@@ -687,6 +701,11 @@ export class MutationCompiler {
         schema: this.schema,
       });
       const conditions = [
+        // v2.5.1 — an interface / union target binds no label in the
+        // pattern, so restrict the match to its member types. Without it a
+        // nested or cascade delete also DETACH DELETEd any other node on the
+        // same relationship type (a Toy deleted through `pets`).
+        this.targetMatch(targetNodeDef, targetVar).labelPredicate,
         this.compileTargetWhere(
           item.where as Record<string, unknown> | undefined,
           targetVar,
@@ -1434,6 +1453,10 @@ export class MutationCompiler {
     for (const [fieldName, spec] of Object.entries(connect)) {
       const relDef = nodeDef.relationships.get(fieldName);
       if (!relDef) continue;
+      // v2.5.1 — `{ rel: null }` (the generated input is `InputMaybe`)
+      // connects nothing. Since 2.4.8 it reached the item compiler with no
+      // `where`, so the MATCH had no filter and EVERY target was linked.
+      if (spec == null) continue;
 
       const abstract = abstractTarget(relDef.target, this.schema);
       const memberEntries =
@@ -1697,9 +1720,18 @@ export class MutationCompiler {
     scope: WriteScope;
   }): string[] {
     const { connectSpec, relDef, targetNodeDef, sourceVar, connectVar } = a;
+    // v2.5.1 — every connect item reaches here (top-level, array, nested in
+    // create / update / connect). A null or non-object item has no filter:
+    // compiling it would MATCH, and link, every target node.
+    if (!isPlainObject(connectSpec))
+      throw new OGMError(
+        `A connect item on "${relDef.fieldName}" must be an object such as { where: { node: { … } } }; got ${
+          connectSpec === null ? 'null' : typeof connectSpec
+        }.`,
+      );
     const lines: string[] = [];
-    const whereSpec = connectSpec?.where as Record<string, unknown> | undefined;
-    const edgeInput = connectSpec?.edge as Record<string, unknown> | undefined;
+    const whereSpec = connectSpec.where as Record<string, unknown> | undefined;
+    const edgeInput = connectSpec.edge as Record<string, unknown> | undefined;
 
     lines.push(a.withClause);
     lines.push('CALL {');
@@ -1769,14 +1801,19 @@ export class MutationCompiler {
     // A `connect` nested in the item links the CONNECTED node onward
     // (`connect: { posts: [{ where, connect: { tags: [...] } }] }`), with
     // the same policy predicates at its level. Pre-2.4.8 it was ignored.
-    const nested = connectSpec?.connect;
+    const nested = connectSpec.connect;
     if (nested != null) {
       if (abstractTarget(targetNodeDef.typeName, this.schema))
         throw new OGMError(
           `A nested "connect" inside a connect on "${relDef.fieldName}" (abstract type "${targetNodeDef.typeName}") ` +
             `must be keyed by the implementing type, e.g. { ${relDef.fieldName}: { Member: [{ where, connect }] } }.`,
         );
-      const inner = nestedScope(a.scope.carryVars, connectVar, a.scope.depth);
+      const inner = nestedScope(
+        a.scope.carryVars,
+        connectVar,
+        a.scope.depth,
+        a.edgeParamPrefix,
+      );
       for (const nestedConnect of Array.isArray(nested) ? nested : [nested]) {
         if (!isPlainObject(nestedConnect))
           throw new OGMError(
@@ -1876,6 +1913,8 @@ export class MutationCompiler {
     policyContext: PolicyContextBundle | undefined,
     paramCounter: { count: number } | undefined,
     depth = 0,
+    /** Unique along the write path; see `nestedScope`. */
+    uniqueToken: string = targetVar,
   ): string[] {
     if (nested == null) return [];
     if (abstractTarget(targetNodeDef.typeName, this.schema))
@@ -1883,7 +1922,7 @@ export class MutationCompiler {
         `A nested "disconnect" inside a disconnect on "${relDef.fieldName}" (abstract type "${targetNodeDef.typeName}") ` +
           `must be keyed by the implementing type, e.g. { ${relDef.fieldName}: { Member: [{ where, disconnect }] } }.`,
       );
-    const inner = nestedScope(carryVars, targetVar, depth);
+    const inner = nestedScope(carryVars, targetVar, depth, uniqueToken);
     const lines: string[] = [];
     for (const nestedDisconnect of Array.isArray(nested) ? nested : [nested]) {
       if (!isPlainObject(nestedDisconnect))
@@ -2311,6 +2350,10 @@ export class MutationCompiler {
                   params,
                   policyContext,
                   paramCounter,
+                  0,
+                  // `discTarget` restarts per member under union dispatch;
+                  // `itemPrefix` is unique along the path.
+                  `${itemPrefix}_disc${di}`,
                 ),
               );
             }
@@ -2575,6 +2618,10 @@ export class MutationCompiler {
             // `update` policy, exactly like a direct update on that type
             // (pre-2.3.0 it enforced no target policy at all).
             const updateConditions = [
+              // v2.5.1 — restrict an interface / union target to its member
+              // types; without it the nested update also SET properties on
+              // other nodes on the same relationship type.
+              this.targetMatch(targetNodeDef, updateVar).labelPredicate,
               this.compileTargetWhere(
                 updateWhere,
                 updateVar,

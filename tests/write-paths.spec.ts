@@ -526,18 +526,18 @@ describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', 
       });
     const { cypher } = recorded[0];
     // A connect item with a nested connect never takes the UNWIND path.
-    expect(cypher).not.toContain('UNWIND $connect_posts');
+    expect(cypher).not.toContain('UNWIND $connect_posts AS');
     expect(cypher).toContain(
       [
         'MERGE (n)-[:`WROTE`]->(target_posts_0)',
         'WITH n, target_posts_0',
         'CALL {',
         'WITH n, target_posts_0',
-        'UNWIND $target_posts_0_connect_tags AS connItem',
-        'MATCH (target_posts_0_target:`Tag`)',
-        'WHERE target_posts_0_target.`name` = connItem.where.node.name',
-        'MERGE (target_posts_0)-[:`TAGGED`]->(target_posts_0_target)',
-        'RETURN count(*) AS _conn_target_posts_0_tags',
+        'UNWIND $connect_posts_0_connect_tags AS connItem',
+        'MATCH (connect_posts_0_target:`Tag`)',
+        'WHERE connect_posts_0_target.`name` = connItem.where.node.name',
+        'MERGE (target_posts_0)-[:`TAGGED`]->(connect_posts_0_target)',
+        'RETURN count(*) AS _conn_connect_posts_0_tags',
         '}',
         'RETURN count(*) AS _ccn_posts_0',
         '}',
@@ -558,10 +558,10 @@ describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', 
       update: { posts: [{ connect: [nestedConnect] }] },
     });
     expect(recorded[0].cypher).toContain(
-      'MERGE (n_cn0)-[:`TAGGED`]->(n_cn0_target)',
+      'MERGE (n_cn0)-[:`TAGGED`]->(create0_posts_conn0_target)',
     );
     expect(recorded[1].cypher).toContain(
-      'MERGE (n_conn0)-[:`TAGGED`]->(n_conn0_target)',
+      'MERGE (n_conn0)-[:`TAGGED`]->(update_posts_0_conn0_target)',
     );
   });
 
@@ -611,8 +611,37 @@ describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', 
       'OPTIONAL MATCH (n)-[r_disc_posts_0_0:`WROTE`]->(n_disc0:`Post`)',
     );
     expect(cypher).toContain(
-      'OPTIONAL MATCH (n_disc0)-[n_disc0_r_tags_0:`TAGGED`]->()',
+      'OPTIONAL MATCH (n_disc0)-[update_posts_0_disc0_r_tags_0:`TAGGED`]->()',
     );
+  });
+
+  // v2.5.1 — `{ posts: null }` linked EVERY Post since 2.4.8.
+  it('a null connect value links nothing; a null connect item throws', async () => {
+    const recorded: Recorded[] = [];
+    const Owner = plainOgm(recorded).model('Owner');
+    await Owner.update({ where: { name: 'o' }, connect: { posts: null } });
+    expect(recorded.map((r) => r.cypher).join('\n')).not.toContain('WROTE');
+    await expect(() =>
+      Owner.update({ where: { name: 'o' }, connect: { posts: [null] } }),
+    ).rejects.toThrow(OGMError);
+  });
+
+  it('sibling nested connects get distinct variables and params', async () => {
+    const recorded: Recorded[] = [];
+    await plainOgm(recorded)
+      .model('Owner')
+      .update({
+        where: { name: 'o' },
+        connect: {
+          posts: [
+            { where: { node: { title: 'a' } }, connect: [{ tags: [{}] }] },
+            { where: { node: { title: 'b' } }, connect: [{ tags: [{}] }] },
+          ],
+        },
+      });
+    const { cypher } = recorded[0];
+    expect(cypher).toContain('->(connect_posts_0_target)');
+    expect(cypher).toContain('->(connect_posts_1_target)');
   });
 
   it('a nested connect / disconnect under a flat interface relationship throws', async () => {
@@ -660,7 +689,7 @@ describe('connect / disconnect nested in a connect / disconnect item (v2.4.8)', 
         /target_pets_Dog_0\.`name` = \$param\d+ AND \(target_pets_Dog_0\.`ownerId` = \$param\d+\)/,
       );
       expect(cypher).toMatch(
-        /WHERE target_posts_0_target\.`name` = connItem\.where\.node\.name AND \(target_posts_0_target\.`ownerId` = \$param\d+\)/,
+        /WHERE connect_posts_0_target\.`name` = connItem\.where\.node\.name AND \(connect_posts_0_target\.`ownerId` = \$param\d+\)/,
       );
     });
 
