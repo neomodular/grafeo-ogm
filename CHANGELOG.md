@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.6.2 (2026-10-19) — fixes from the property suites
+
+> **Patch release.** Fixes found by the new property-based live suites. No behaviour changes without `strict`: inputs that work today return the same results and compile to the same Cypher. Only inputs that used to be rejected now work, and one new strict-mode correction is added.
+
+### Writes
+
+- **Interface nested updates keyed per member were rejected.** The generated `…UpdateInput` for an interface relationship offers `{ update: { node: { Member: { … } } } }`, but the runtime threw `Unknown field "Member"`; only the flat shape worked. The per-member shape now works, with each member's own policies and nested writes. Flat inputs are unchanged.
+- **Union cascade deletes keyed per member were rejected.** `delete({ delete: { items: { Member: [ … ] } } })`, as typed, threw `Unknown key "Member" in a nested delete`. It now deletes per member, with each member's `delete` policy. Flat inputs are unchanged.
+
+### Strict mode
+
+- **Interface / union reads now stay inside their member types under `strict: true`.** When an interface or union relationship field shares its relationship type and direction with another field (e.g. `resources: [Resource!]!` and `vaults: [Vault!]!` both on `HAS_RES`), reads through it also returned, counted and matched the other field's non-member nodes, with a `null` `__typename`. In strict mode every read path restricts the field to its members: selections, connections and `totalCount`, `_SOME` / `_NONE` / `_ALL` / `_SINGLE`, connection filters, `count` and `aggregate`. In default mode the results and Cypher are unchanged, and the OGM warns once per affected field at construction.
+
+### Deprecations
+
+- **Reads through an interface / union field that shares its relationship type with another field** will return only member nodes in 3.0 (`strict` behaviour). The construction-time warning reads: `Type.field (interface Target) shares relationship type "TYPE" (DIRECTION) with Type.other: reads through it also return, count and match the non-member nodes linked that way. Enable \`strict: true\` (default in 3.0) to restrict every read of an interface / union field to its member types.`
+
+### Tooling
+
+- **CI checks that every live suite ran, including subdirectories.** The skip guard now finds suites under `tests/integration/**`, so the property suites are covered.
+- **Every property-suite case has a client-side deadline** on top of the server-side transaction timeout, so a stuck case fails instead of hanging the run.
+
 ## 2.6.1 (2026-10-18) — security fixes
 
 > **Security patch.** Fixes two authorization bypasses in node-level security, both present since policies were introduced: `upsert` ignored the `update` row filter on an existing node, and mutation responses returned nodes the context cannot read. Both affect **1.7.0–2.6.0**. OGMs without `policies` compile the same policy-free Cypher as before. Upgrade if you use `policies`.
