@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — the nested-write fixes (F1 nested delete through a cycle, F2
+ * v2.8.0 — the nested-write fixes (F1 nested delete through a cycle, F2
  * feedback warning) change no default-mode Cypher. Every shape below is
  * compiled policy-free and policy-bound and compared to the Cypher and
  * params captured from v2.7.0 (4f6a04a, before the fixes), hard-coded here.
@@ -245,7 +245,7 @@ const V270: Record<string, { cypher: string; params: unknown }> = {
   },
 };
 
-describe('nested-write Cypher is byte-identical to v2.7.0 in default mode (v2.7.1)', () => {
+describe('nested-write Cypher is byte-identical to v2.7.0 in default mode (v2.8.0)', () => {
   const cases = Object.entries(shapes).flatMap(([name, shape]) =>
     MODES.filter((mode) => mode === 'plain' || !shape.self).map(
       (mode) => [`${mode} :: ${name}`, mode, shape] as const,

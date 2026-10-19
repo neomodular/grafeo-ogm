@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — read selections whose Cypher must stay byte-identical to v2.7.0:
+ * v2.8.0 — read selections whose Cypher must stay byte-identical to v2.7.0:
  * connections that select neither `pageInfo` nor `cursor` (Bug 1), and in
  * default mode the known-field shape mismatches (Bug 3) and the typed
  * `where` under a union parent (Bug 2), which 2.x keeps and now warns

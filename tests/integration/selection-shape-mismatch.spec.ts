@@ -1,5 +1,5 @@
 /**
- * Live: known fields selected in the wrong shape (v2.7.1).
+ * Live: known fields selected in the wrong shape (v2.8.0).
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *

@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — read selections whose compiled Cypher must not change: shapes
+ * v2.8.0 — read selections whose compiled Cypher must not change: shapes
  * next to the new connection `pageInfo` / `cursor` (which select neither),
  * and, in default mode, the shape mismatches and union-parent `where` that
  * 2.x keeps (and now warns about). Captured from v2.7.0 (4f6a04a) in

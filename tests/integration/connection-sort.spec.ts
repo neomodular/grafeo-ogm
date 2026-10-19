@@ -297,7 +297,7 @@ describeLive('selectionSet connection sort — live Neo4j with APOC', () => {
     }
   });
 
-  // v2.7.1 — cursors and pageInfo follow the sorted order (upstream:
+  // v2.8.0 — cursors and pageInfo follow the sorted order (upstream:
   // `offsetToCursor(<offset in the sorted list>)`).
   it('cursor and pageInfo on a sorted connection', async () => {
     const cursor = (i: number) =>

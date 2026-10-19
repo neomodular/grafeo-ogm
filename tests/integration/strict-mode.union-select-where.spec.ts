@@ -1,6 +1,6 @@
 /**
  * Live: typed `select` `where` / `orderBy` on a relationship selected under
- * a UNION parent (v2.7.1).
+ * a UNION parent (v2.8.0).
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
  * NEO4J_USERNAME and NEO4J_PASSWORD). Every node it creates carries this

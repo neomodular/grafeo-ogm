@@ -785,7 +785,7 @@ await Author.find({
 
 `totalCount` counts the filtered edges; the sort orders `edges` only. Other connection arguments (`first`, `after`, …) are not supported and throw.
 
-**Connection `pageInfo` and edge `cursor`** (v2.7.1) — selected in a `selectionSet` (aliases and `__typename` included) or in the typed `select` (`pageInfo: true` or `pageInfo: { select: { endCursor: true, … } }`, and `edges: { cursor: true }`). They follow `@neo4j/graphql` 5.x for a connection read without `first` / `after`: an edge's `cursor` is upstream's `offsetToCursor(offset)` (base64 of `arrayconnection:<offset>`, its position in the filtered, sorted list), `hasNextPage` and `hasPreviousPage` are `false` (every filtered edge is returned), and `startCursor` / `endCursor` are the first and last edge's cursors, `null` when there is none. They count the same list as `edges` and `totalCount`: the connection `where` and the target type's `read` policy apply.
+**Connection `pageInfo` and edge `cursor`** (v2.8.0) — selected in a `selectionSet` (aliases and `__typename` included) or in the typed `select` (`pageInfo: true` or `pageInfo: { select: { endCursor: true, … } }`, and `edges: { cursor: true }`). They follow `@neo4j/graphql` 5.x for a connection read without `first` / `after`: an edge's `cursor` is upstream's `offsetToCursor(offset)` (base64 of `arrayconnection:<offset>`, its position in the filtered, sorted list), `hasNextPage` and `hasPreviousPage` are `false` (every filtered edge is returned), and `startCursor` / `endCursor` are the first and last edge's cursors, `null` when there is none. They count the same list as `edges` and `totalCount`: the connection `where` and the target type's `read` policy apply.
 
 ```typescript
 await Author.find({
@@ -801,7 +801,7 @@ await Author.find({
 //   edges: [{ cursor: 'YXJyYXljb25uZWN0aW9uOjA=', node: … }, { cursor: 'YXJyYXljb25uZWN0aW9uOjE=', node: … }] } }
 ```
 
-Before 2.7.1 both were silently left out of the result. `pageInfo` selected without `edges` or `totalCount` keeps the `edges` key it returned before (one empty map per edge). `xConnection: true` and `edges: true` in the typed `select` still select node and edge-property scalars only, unchanged. A `pageInfo` field that `PageInfo` does not declare, `pageInfo` without a sub-selection and `cursor { … }` are left out of the result, with a warning (an `OGMError` under [strict mode](#strict-mode)).
+Before 2.8.0 both were silently left out of the result. `pageInfo` selected without `edges` or `totalCount` keeps the `edges` key it returned before (one empty map per edge). `xConnection: true` and `edges: true` in the typed `select` still select node and edge-property scalars only, unchanged. A `pageInfo` field that `PageInfo` does not declare, `pageInfo` without a sub-selection and `cursor { … }` are left out of the result, with a warning (an `OGMError` under [strict mode](#strict-mode)).
 
 ### Automatic `__typename` for Abstract Targets
 
@@ -1044,7 +1044,7 @@ await Book.update({
 - **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
 - With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
 - **Each row sees the writes of the rows before it.** The nested ops run once per matched row (each root, and each target of an enclosing nested `update`), in no guaranteed order, and each run sees what the earlier runs of the same statement wrote, as in `@neo4j/graphql`. So when two roots share a related node, a node that one root's nested `create` links to it is also matched by the other root's nested `update`.
-- **Known limitation: a `connect` / `create` on a field an enclosing nested `update` iterates** (`charts → categories → charts → categories`). Every later row's nested `update` matches the links the earlier rows added and runs its ops on them again, so the work can grow geometrically with the matched rows (5 charts: about 7,300 nodes created). Snapshot semantics, where each row matches the graph as it was before the statement, are not available in 2.x in either mode. Since 2.7.1 the OGM logs one `warn` per such shape (default mode). Split the write into separate calls, or narrow the nested `where`.
+- **Known limitation: a `connect` / `create` on a field an enclosing nested `update` iterates** (`charts → categories → charts → categories`). Every later row's nested `update` matches the links the earlier rows added and runs its ops on them again, so the work can grow geometrically with the matched rows (5 charts: about 7,300 nodes created). Snapshot semantics, where each row matches the graph as it was before the statement, are not available in 2.x in either mode. Since 2.8.0 the OGM logs one `warn` per such shape (default mode). Split the write into separate calls, or narrow the nested `where`.
 
 ---
 
@@ -1193,9 +1193,9 @@ await plans.find({ selectionSet: '{ id ownerzAggregate { count } }' }); // no re
 
 A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection`, `<relationship>Aggregate { … }` (since 2.7.0, see [Relationship aggregate selections](#relationship-aggregate-selections)) or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check, and an aggregate's own keys (`count`, `node`, `edge`, the aggregates) are validated by the aggregate itself, in both modes. In 2.6.3 every `<relationship>Aggregate` was reported unknown, because the OGM did not compile it; since 2.7.0 it returns the aggregate and does not warn. Only a bare `ownersAggregate` without a selection of aggregates is still unknown.
 
-Since 2.7.1 the fields of a connection's `pageInfo` are checked against `PageInfo` (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, `__typename`). An unknown one is left out of the result and warns, or throws under strict.
+Since 2.8.0 the fields of a connection's `pageInfo` are checked against `PageInfo` (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`, `__typename`). An unknown one is left out of the result and warns, or throws under strict.
 
-#### 13. A nested delete that reaches a node the update still holds (since 2.7.1)
+#### 13. A nested delete that reaches a node the update still holds (since 2.8.0)
 
 A nested `delete` whose target type is the type of the root, or of an enclosing nested-update target, can delete that node through a cycle: a chart's tags' charts include the chart itself.
 
@@ -1205,9 +1205,9 @@ await charts.updateMany({ where: { id_IN: ['c1', 'c4'] }, data: { tags: [{ updat
 // strict:  { count: 0 } — a deleted root is neither counted nor returned, and its remaining nested writes are skipped
 ```
 
-By default the statement compiles exactly as in 2.7.0. When a later clause reads or writes the deleted node (the `update` response, a nested `create` or `connect` from it), the server rejects the statement with `Neo.ClientError.Statement.EntityNotFound`. Since 2.7.1, when the OGM owns the transaction (auto-commit, or a caller `session`), it then re-runs the statement once with the deleted node's remaining writes skipped, so `update` returns the surviving roots. In a caller `transaction` the server has already rolled the transaction back, so the error is still thrown (and warned about once). Strict mode compiles the guard up front, in every transaction.
+By default the statement compiles exactly as in 2.7.0. When a later clause reads or writes the deleted node (the `update` response, a nested `create` or `connect` from it), the server rejects the statement with `Neo.ClientError.Statement.EntityNotFound`. Since 2.8.0, when the OGM owns the transaction (auto-commit, or a caller `session`), it then re-runs the statement once with the deleted node's remaining writes skipped, so `update` returns the surviving roots. In a caller `transaction` the server has already rolled the transaction back, so the error is still thrown (and warned about once). Strict mode compiles the guard up front, in every transaction.
 
-#### 14. Connect `overwrite: false` (since 2.7.1)
+#### 14. Connect `overwrite: false` (since 2.8.0)
 
 ```typescript
 await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: teamId } }, edge: { role: 'admin' }, overwrite: false }] } });
@@ -1217,7 +1217,7 @@ await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: te
 
 Applies to every connect: top-level, nested in `create` / `update`, per union or interface member, and inside another connect. Without `edge` values the flag changes nothing, so it does not warn. In `@neo4j/graphql`, `overwrite: false` instead made the mutation fail (through APOC) when the relationship already existed.
 
-#### 15. `@default` on relationship properties (since 2.7.1)
+#### 15. `@default` on relationship properties (since 2.8.0)
 
 ```graphql
 type Membership @relationshipProperties {
@@ -1233,7 +1233,7 @@ await users.update({ where: { id }, connect: { teams: [{ where: { node: { id: te
 
 Strict applies the default whenever a relationship is created without the property: nested `create` (in `create` and `update`) and the create branch of every connect. As with node `@default`, an explicit `null` is kept, a connect to a relationship that already exists leaves it as it is, and an edge `update` never applies defaults. The generated `<Props>CreateInput` keeps the field required, because by default an omitted value is still not written.
 
-#### 16. Pagination fields selected in the wrong shape (since 2.7.1)
+#### 16. Pagination fields selected in the wrong shape (since 2.8.0)
 
 ```typescript
 await plans.find({ selectionSet: '{ ownersConnection { pageInfo edges { cursor { x } } } }' });
@@ -1243,7 +1243,7 @@ await plans.find({ selectionSet: '{ ownersConnection { pageInfo edges { cursor {
 
 The same applies to a `PageInfo` field given a sub-selection, and in the typed `select` to `pageInfo` that is neither `true` nor `{ select: { … } }` and to `cursor` that is not `true`.
 
-#### 14. Known fields selected in the wrong shape (since 2.7.1)
+#### 17. Known fields selected in the wrong shape (since 2.8.0)
 
 ```typescript
 await users.find({ selectionSet: '{ id name { first } posts postsConnection }' });
@@ -1256,9 +1256,9 @@ await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } 
 // strict: OGMError: Field "name" in select on type "User" is a scalar field (String): select it with `name: true`.
 ```
 
-Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) selects all scalar fields of the target, as `true` does, in both modes; before 2.7.1 it was left out of the result.
+Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) selects all scalar fields of the target, as `true` does, in both modes; before 2.8.0 it was left out of the result.
 
-#### 15. Typed `select` `where` / `orderBy` under a union (since 2.7.1)
+#### 18. Typed `select` `where` / `orderBy` under a union (since 2.8.0)
 
 ```typescript
 // union Media = Post | Video, both with `tags`
@@ -1269,7 +1269,7 @@ await feeds.find({
 // strict:  each member's tags filtered (AND the Tag read policy) and sorted
 ```
 
-A relationship selected on a union type compiles to one branch per member, and before 2.7.1 the branches never read the typed `where` or `orderBy`. In strict mode each member applies them to its own relationship. The `selectionSet` form (`items { ... on Post { tags(where: …) { … } } }`) is not affected: it throws `OGMError` (since 2.5.0) rather than ignoring the arguments.
+A relationship selected on a union type compiles to one branch per member, and before 2.8.0 the branches never read the typed `where` or `orderBy`. In strict mode each member applies them to its own relationship. The `selectionSet` form (`items { ... on Post { tags(where: …) { … } } }`) is not affected: it throws `OGMError` (since 2.5.0) rather than ignoring the arguments.
 
 #### Not behind the switch: `aggregate` on list fields
 

@@ -18,7 +18,7 @@
  * The strict variant runs a `strict: true` OGM on the same writes plus the
  * shapes only strict mode keeps in scope: a blanket disconnect on a
  * relationship type two fields share (finding F5, v2.6.0 strict item 4),
- * and a nested delete reached through a cycle (finding F1, v2.7.1).
+ * and a nested delete reached through a cycle (finding F1, v2.8.0).
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
  * in afterAll; every case runs in a rolled-back transaction.

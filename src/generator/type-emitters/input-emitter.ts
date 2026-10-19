@@ -225,7 +225,7 @@ function emitCreateInput(node: NodeDefinition, schema: SchemaMetadata): string {
  * v2.4.7 it stayed required. Edge-property writes do NOT apply defaults,
  * so relationship-properties inputs keep the field required; making it
  * optional there would let an omitted value silently go unwritten.
- * v2.7.1 — `strict: true` applies edge defaults on create, but the
+ * v2.8.0 — `strict: true` applies edge defaults on create, but the
  * generated types are the same in both modes and the default mode still
  * leaves the value unwritten, so the field stays required.
  */

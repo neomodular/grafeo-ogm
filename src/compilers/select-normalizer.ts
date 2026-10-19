@@ -32,7 +32,7 @@ import {
   type SelectionNode,
 } from './selection.compiler';
 
-/** v2.7.1 — the keys of a relationship's object select. */
+/** v2.8.0 — the keys of a relationship's object select. */
 const RELATIONSHIP_SELECT_KEYS: ReadonlySet<string> = new Set([
   'select',
   'where',
@@ -147,7 +147,7 @@ export class SelectNormalizer {
           subSelection: value !== true,
           hint: aggregateFieldHint(fieldName, nodeDef.relationships),
         });
-      // v2.7.1 — a scalar given anything but `true` is left out.
+      // v2.8.0 — a scalar given anything but `true` is left out.
       else if (prop && value !== true && isScalarProperty(prop, this.schema))
         reportUnknownSelectedField(this.strictMode, 'select', {
           owner: `type "${nodeDef.typeName}"`,
@@ -280,8 +280,8 @@ export class SelectNormalizer {
         };
       }
 
-      // v2.7.1 — `{ drugs: {} }` (every key optional in the generated
-      // types) selects all scalars, as `true` does. Pre-2.7.1 it was left
+      // v2.8.0 — `{ drugs: {} }` (every key optional in the generated
+      // types) selects all scalars, as `true` does. Pre-2.8.0 it was left
       // out of the result. An object with an unknown key keeps that
       // behaviour (reported by `checkRelationshipShape`).
       if (Object.keys(obj).every((k) => RELATIONSHIP_SELECT_KEYS.has(k)))
@@ -298,7 +298,7 @@ export class SelectNormalizer {
   }
 
   /**
-   * v2.7.1 — report a relationship select value the runtime cannot honour
+   * v2.8.0 — report a relationship select value the runtime cannot honour
    * (it is left out of the result, or its unknown keys are ignored):
    * anything but `true` or an object, or an object with a key other than
    * `select`, `where` and `orderBy`. Strict throws.
@@ -615,7 +615,7 @@ export class SelectNormalizer {
           node.totalCountOnly = true;
       }
 
-      // v2.7.1 — `pageInfo` was ignored (silently undefined).
+      // v2.8.0 — `pageInfo` was ignored (silently undefined).
       if (selectObj.pageInfo != null && selectObj.pageInfo !== false)
         node.pageInfo = [this.normalizePageInfo(selectObj.pageInfo)];
 
@@ -626,7 +626,7 @@ export class SelectNormalizer {
       } else if (selectObj.edges && typeof selectObj.edges === 'object') {
         const edgesObj = selectObj.edges as Record<string, unknown>;
 
-        // v2.7.1 — `cursor` was ignored (silently undefined).
+        // v2.8.0 — `cursor` was ignored (silently undefined).
         if (edgesObj.cursor != null && edgesObj.cursor !== false)
           node.cursors = [
             {
@@ -680,7 +680,7 @@ export class SelectNormalizer {
       }
     }
 
-    // v2.7.1 — report `pageInfo` / `cursor` the runtime cannot project.
+    // v2.8.0 — report `pageInfo` / `cursor` the runtime cannot project.
     for (const issue of connectionKeyIssues(
       node,
       `${nodeDef.typeName}${baseFieldName.charAt(0).toUpperCase()}${baseFieldName.slice(1)}`,
@@ -692,7 +692,7 @@ export class SelectNormalizer {
   }
 
   /**
-   * v2.7.1 — a typed `pageInfo` select: `true` selects every `PageInfo`
+   * v2.8.0 — a typed `pageInfo` select: `true` selects every `PageInfo`
    * field, `{ select: { hasNextPage: true, … } }` the listed ones. Any
    * other value is reported as a shape mismatch (`connectionKeyIssues`).
    */
@@ -750,7 +750,7 @@ export class SelectNormalizer {
           subSelection: value !== true,
           edge: true,
         });
-      // v2.7.1 — an edge property given anything but `true` is left out.
+      // v2.8.0 — an edge property given anything but `true` is left out.
       const edgeProp = props?.properties.get(fieldName);
       if (edgeProp && value != null && value !== false && value !== true)
         reportUnknownSelectedField(this.strictMode, 'select', {

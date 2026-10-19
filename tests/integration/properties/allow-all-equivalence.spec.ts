@@ -68,7 +68,7 @@ function outcomeKey(o: Outcome): string {
 /**
  * `created` is the multiset of new nodes: a nested create that runs for
  * several rows creates several nodes with one input id, and which of them
- * `GraphDiff.created` holds per id says nothing about the write (v2.7.1 —
+ * `GraphDiff.created` holds per id says nothing about the write (v2.8.0 —
  * finding F9).
  */
 function diffKey(d: GraphDiff, created: string[]): string {

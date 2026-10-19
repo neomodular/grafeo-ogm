@@ -45,7 +45,7 @@ export class StrictMode {
   }
 
   /**
-   * v2.7.1 — log a warning, once per instance and key, for a shape whose
+   * v2.8.0 — log a warning, once per instance and key, for a shape whose
    * behaviour is a documented limitation that `strict: true` does NOT
    * change (so the message names no switch). Default mode only, like
    * {@link StrictMode.warn}: strict mode never warns.

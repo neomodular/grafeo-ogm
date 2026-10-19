@@ -1,5 +1,5 @@
 /**
- * Live connection `pageInfo` / `cursor` suite (v2.7.1).
+ * Live connection `pageInfo` / `cursor` suite (v2.8.0).
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *
@@ -235,8 +235,8 @@ describeLive('Connection pageInfo / cursor — live Neo4j', () => {
     ]);
   });
 
-  it('pageInfo alone keeps the pre-2.7.1 edges key (additive)', async () => {
-    // Pre-2.7.1 `{ pageInfo { … } }` compiled to `{ edges: [{}, …] }` (one
+  it('pageInfo alone keeps the pre-2.8.0 edges key (additive)', async () => {
+    // Pre-2.8.0 `{ pageInfo { … } }` compiled to `{ edges: [{}, …] }` (one
     // empty map per edge); the selected `pageInfo` is added next to it.
     const u = await one(h.ogm, {
       selectionSet: '{ friendsConnection { pageInfo { endCursor } } }',

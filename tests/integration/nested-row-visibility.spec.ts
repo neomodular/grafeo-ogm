@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — property-suite finding F9 (allow-all-equivalence "random
+ * v2.8.0 — property-suite finding F9 (allow-all-equivalence "random
  * writes" failing intermittently). Not an OGM bug: a nested write that runs
  * for several rows creates several nodes with the SAME input `id`, and the
  * suite's snapshot keyed nodes by `id`, so it kept whichever duplicate the

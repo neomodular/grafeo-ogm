@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — typed select `where` / `orderBy` on a relationship selected under
+ * v2.8.0 — typed select `where` / `orderBy` on a relationship selected under
  * a UNION parent. Each union member's relationship compiles to its own
  * `CASE` branch, which never read the `where` or the `orderBy`: every
  * related node came back, unsorted. Default mode keeps the v2.7.0 Cypher

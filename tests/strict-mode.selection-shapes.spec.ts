@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — a KNOWN field selected in the wrong shape: a scalar given a
+ * v2.8.0 — a KNOWN field selected in the wrong shape: a scalar given a
  * sub-selection (left out of the result) or a relationship / connection
  * without one (projected as a raw property, null). Like the 2.6.3
  * unknown-field check: default mode keeps the v2.7.0 Cypher (pinned in
@@ -204,7 +204,7 @@ describe('shapes that work never warn', () => {
   });
 });
 
-describe('typed relationship {} (v2.7.1)', () => {
+describe('typed relationship {} (v2.8.0)', () => {
   it('selects every scalar of the target, like `true`', async () => {
     const a = harness();
     await typed({ id: true, posts: {} })(a.model);

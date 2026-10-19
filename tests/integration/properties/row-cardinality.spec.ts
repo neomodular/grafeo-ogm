@@ -9,7 +9,7 @@
  * and under a policy context the mirrored `update` policy filters them
  * (and, for the rows `update` returns, the mirrored `read` policy on the
  * post-write state — v2.6.1). The strict variant also generates nested
- * deletes reached through a cycle (finding F1, v2.7.1): a root the write
+ * deletes reached through a cycle (finding F1, v2.8.0): a root the write
  * itself deleted is expected in neither.
  *
  * Opt-in on NEO4J_URI; seed graph tagged with this run's `runId`, removed
@@ -117,7 +117,7 @@ describeLive('Property 2 — row cardinality (live Neo4j)', () => {
           throw new Error(`server rejected the write: ${outcome.summary}`);
         return;
       }
-      // v2.7.1 (finding F1, strict only): a root the write itself deleted
+      // v2.8.0 (finding F1, strict only): a root the write itself deleted
       // (a nested delete reaching it through a cycle) is no longer a node,
       // so it is neither returned nor counted.
       const after = await snapshot(tx, runId);

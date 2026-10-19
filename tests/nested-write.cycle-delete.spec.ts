@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — finding F1, a nested delete reached through a cycle (chart ->
+ * v2.8.0 — finding F1, a nested delete reached through a cycle (chart ->
  * tags -> charts). Strict mode compiles the alive guard; default mode keeps
  * v2.7.0's Cypher (`nested-write.byte-identical.spec.ts`) and re-runs a
  * statement that failed with `EntityNotFound` with the guard, only when the
@@ -58,7 +58,7 @@ function ogmWith(driver: Driver, strict = false) {
   return { model: ogm.model('ItPChart') as any, warnings };
 }
 
-describe('nested delete through a cycle (v2.7.1, finding F1)', () => {
+describe('nested delete through a cycle (v2.8.0, finding F1)', () => {
   describe('strict mode compiles the alive guard', () => {
     it.each([
       [

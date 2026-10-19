@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — nested-write shapes whose default-mode Cypher must stay
+ * v2.8.0 — nested-write shapes whose default-mode Cypher must stay
  * byte-identical to v2.7.0 (see `nested-write.byte-identical.spec.ts`):
  * nested deletes reached through a cycle (F1), `connect` / `create` on a
  * field an enclosing nested update iterates (F2), and sibling update /

@@ -36,7 +36,7 @@ export interface MutationResult {
   cypher: string;
   params: Record<string, unknown>;
   /**
-   * v2.7.1 — `compileUpdate` only: the update has a nested `delete` whose
+   * v2.8.0 — `compileUpdate` only: the update has a nested `delete` whose
    * target type is the type of a node the statement still holds (the root
    * or an enclosing nested-update node), e.g. chart -> tags -> charts
    * (finding F1). Without the alive guard, a statement whose delete reaches
@@ -47,7 +47,7 @@ export interface MutationResult {
 }
 
 /**
- * v2.7.1 — state shared by one `compileUpdate`'s nested update walk.
+ * v2.8.0 — state shared by one `compileUpdate`'s nested update walk.
  */
 interface NestedUpdateState {
   /** Emit the alive guard after op blocks that may delete a held node (F1). */
@@ -539,7 +539,7 @@ export class MutationCompiler {
   }
 
   /**
-   * v2.7.1 — whether a connect item keeps an EXISTING relationship's edge
+   * v2.8.0 — whether a connect item keeps an EXISTING relationship's edge
    * properties (`overwrite: false`). Through v2.7.0 (and still by default)
    * `overwrite` is accepted but ignored: MERGE + SET overwrites the edge
    * values of a relationship that already exists. Default: one warning per
@@ -569,7 +569,7 @@ export class MutationCompiler {
   }
 
   /**
-   * v2.7.1 — `@default` values of the relationship properties that an
+   * v2.8.0 — `@default` values of the relationship properties that an
    * edge input leaves undefined, for an edge the write CREATES (nested
    * create, or the create branch of a connect's MERGE). Through v2.7.0
    * (and still by default) edge defaults were never applied, so the
@@ -735,7 +735,7 @@ export class MutationCompiler {
      */
     paramCounter?: { count: number },
     /**
-     * v2.7.1 — after a nested op block that may delete a node the statement
+     * v2.8.0 — after a nested op block that may delete a node the statement
      * still holds (a nested delete reached through a cycle, finding F1),
      * keep the row only while that node exists: its remaining writes are
      * skipped and a deleted root leaves the response and `updateMany`'s
@@ -805,7 +805,7 @@ export class MutationCompiler {
       lines.push(...relLines);
     }
 
-    // v2.7.1 (finding F2) — a known limitation in both modes; see the
+    // v2.8.0 (finding F2) — a known limitation in both modes; see the
     // `iterated` check in buildUpdateRelationships.
     for (const field of state.feedback)
       this.strictMode.notice(
@@ -818,7 +818,7 @@ export class MutationCompiler {
           `separate calls, or narrow the nested "where".`,
       );
 
-    // v2.7.1 (finding F1) — default mode keeps v2.7.0's Cypher, so a root
+    // v2.8.0 (finding F1) — default mode keeps v2.7.0's Cypher, so a root
     // a nested delete removed is still counted by `updateMany`.
     if (state.cycleDelete && !guardDeleted && returnMode === 'count')
       this.strictMode.warn(
@@ -1959,7 +1959,7 @@ export class MutationCompiler {
       // isConnectFastPathEligible). Everything else — null values,
       // logical keys, traversals, abstract targets — takes one CALL
       // subquery per item, compiled through WhereCompiler.
-      // v2.7.1 — in strict mode an `overwrite: false` item takes the
+      // v2.8.0 — in strict mode an `overwrite: false` item takes the
       // per-item path, which compiles its edge values to ON CREATE SET.
       const useFastPath =
         !abstractTarget(targetNodeDef.typeName, this.schema) &&
@@ -2704,7 +2704,7 @@ export class MutationCompiler {
     policyContext?: PolicyContextBundle,
     paramCounter?: { count: number },
     /**
-     * v2.7.1 — collects the concrete types a nested `delete` at or below
+     * v2.8.0 — collects the concrete types a nested `delete` at or below
      * this level may delete, for the enclosing level's guard (F1).
      */
     deleted: Set<string> = new Set<string>(),
@@ -2714,7 +2714,7 @@ export class MutationCompiler {
       feedback: new Set<string>(),
     },
     /**
-     * v2.7.1 — `Type.field` of every relationship an enclosing nested
+     * v2.8.0 — `Type.field` of every relationship an enclosing nested
      * update item iterates (F2).
      */
     iterated: readonly string[] = [],
@@ -2731,7 +2731,7 @@ export class MutationCompiler {
     const allVars = [...new Set([...ancestorVars, sourceVar])];
     const withClause = `WITH ${allVars.join(', ')}`;
 
-    // v2.7.1 — finding F1. A nested delete reached through a cycle
+    // v2.8.0 — finding F1. A nested delete reached through a cycle
     // (chart -> tags -> charts) can delete `sourceVar` itself. A later
     // clause that reads or writes it — the root's response projection or
     // read-policy filter, a CREATE from it — then fails with
@@ -2793,7 +2793,7 @@ export class MutationCompiler {
       // Past the dispatch, `abstract` is set only for a flat INTERFACE
       // input (a flat union input threw in perMemberEntries).
 
-      // v2.7.1 — finding F2. A `connect` / `create` on a field an ENCLOSING
+      // v2.8.0 — finding F2. A `connect` / `create` on a field an ENCLOSING
       // nested update item iterates (chart -> categories -> charts ->
       // categories) adds links that the enclosing item's MATCH sees again
       // for every later row (the statement's own writes are visible to its
@@ -3426,11 +3426,11 @@ export class MutationCompiler {
 }
 
 /**
- * v2.7.1 — the SET clauses after a connect's `MERGE` of the relationship.
+ * v2.8.0 — the SET clauses after a connect's `MERGE` of the relationship.
  * `defaults` (strict-mode edge `@default`s) apply only when the MERGE
  * creates it; `explicit` edge values too when `keepExisting`
  * (`overwrite: false` in strict mode), otherwise on every match. With no
- * defaults and `keepExisting` false this is the pre-2.7.1 `SET …`.
+ * defaults and `keepExisting` false this is the pre-2.8.0 `SET …`.
  */
 function edgeMergeSets(
   explicit: string[],
@@ -3457,7 +3457,7 @@ function edgeMergeSets(
 /**
  * v2.6.0 — the keys a connect / disconnect item is compiled from. `overwrite`
  * is offered by the generated `ConnectFieldInput` and accepted as before
- * (MERGE + SET always overwrites the edge properties it is given; v2.7.1 —
+ * (MERGE + SET always overwrites the edge properties it is given; v2.8.0 —
  * strict mode honours `overwrite: false`, see connectKeepsExistingEdge).
  */
 const CONNECT_ITEM_KEYS: ReadonlySet<string> = new Set([
@@ -3823,7 +3823,7 @@ function isBlanketSpec(spec: unknown): boolean {
 }
 
 /**
- * v2.7.1 — true while `nodeVar` still exists in this transaction (finding
+ * v2.8.0 — true while `nodeVar` still exists in this transaction (finding
  * F1). A node DETACH DELETEd earlier in the statement is no longer found by
  * its element id (an id seek), while reading its properties throws
  * `EntityNotFound`.

@@ -1,6 +1,6 @@
 /**
- * v2.7.1 — connection `pageInfo` and edge `cursor` (selectionSet and typed
- * select). Pre-2.7.1 both were silently dropped although the generated
+ * v2.8.0 — connection `pageInfo` and edge `cursor` (selectionSet and typed
+ * select). Pre-2.8.0 both were silently dropped although the generated
  * connection types declare them. Semantics follow upstream `@neo4j/graphql`
  * 5.x for a connection read without `first` / `after`: `cursor` =
  * base64(`arrayconnection:<offset>`), `hasNextPage` / `hasPreviousPage`

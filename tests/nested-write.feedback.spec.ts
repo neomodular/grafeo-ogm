@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — finding F2: a nested `connect` / `create` on a field that an
+ * v2.8.0 — finding F2: a nested `connect` / `create` on a field that an
  * ENCLOSING nested update item iterates (chart -> categories -> charts ->
  * categories). Every row of the enclosing nested update also sees the links
  * and nodes the statement's earlier rows added (as in @neo4j/graphql 5.x),
@@ -31,7 +31,7 @@ const F2 =
     'updateMany: connect / create on a field an enclosing update iterates (F2)'
   ].run;
 
-describe('nested connect / create on a field an enclosing update iterates (v2.7.1, finding F2)', () => {
+describe('nested connect / create on a field an enclosing update iterates (v2.8.0, finding F2)', () => {
   it('warns in default mode, naming the field', async () => {
     expect(await warningsOf(F2)).toEqual([
       '[OGM] updateMany on ItPChart has a nested connect / create on "ItPChart.categories" inside a nested ' +

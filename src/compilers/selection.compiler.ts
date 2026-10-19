@@ -156,20 +156,20 @@ export interface SelectionNode {
    */
   directed?: boolean;
   /**
-   * Connection only (v2.7.1): the `pageInfo` selections, one per response
-   * key. Pre-2.7.1 `pageInfo` was silently dropped although the generated
+   * Connection only (v2.8.0): the `pageInfo` selections, one per response
+   * key. Pre-2.8.0 `pageInfo` was silently dropped although the generated
    * connection type declares it.
    */
   pageInfo?: PageInfoSelection[];
   /**
-   * Connection edge set only (v2.7.1): the `cursor` selections of `edges`,
-   * one per response key. Pre-2.7.1 `cursor` was silently dropped.
+   * Connection edge set only (v2.8.0): the `cursor` selections of `edges`,
+   * one per response key. Pre-2.8.0 `cursor` was silently dropped.
    */
   cursors?: ConnectionKeySelection[];
 }
 
 /**
- * v2.7.1 — one selected key inside a connection (`cursor` of `edges`, or a
+ * v2.8.0 — one selected key inside a connection (`cursor` of `edges`, or a
  * field of `pageInfo`): its response key, the field it selects and whether
  * it was given a sub-selection (a shape mismatch: reported, never projected).
  */
@@ -180,7 +180,7 @@ export interface ConnectionKeySelection {
 }
 
 /**
- * v2.7.1 — a connection's `pageInfo` under one response key. `fields` is
+ * v2.8.0 — a connection's `pageInfo` under one response key. `fields` is
  * absent when `pageInfo` was selected without a sub-selection (a shape
  * mismatch: reported, never projected).
  */
@@ -189,7 +189,7 @@ export interface PageInfoSelection {
   fields?: ConnectionKeySelection[];
 }
 
-/** v2.7.1 — the fields of the generated `PageInfo` type. */
+/** v2.8.0 — the fields of the generated `PageInfo` type. */
 export const PAGE_INFO_FIELDS: ReadonlySet<string> = new Set([
   'hasNextPage',
   'hasPreviousPage',
@@ -197,7 +197,7 @@ export const PAGE_INFO_FIELDS: ReadonlySet<string> = new Set([
   'endCursor',
 ]);
 
-/** v2.7.1 — merge selections by response key (first one wins). */
+/** v2.8.0 — merge selections by response key (first one wins). */
 function mergeKeySelections(
   base: ConnectionKeySelection[] | undefined,
   extra: ConnectionKeySelection[] | undefined,
@@ -209,7 +209,7 @@ function mergeKeySelections(
   return out;
 }
 
-/** v2.7.1 — merge `pageInfo` selections by response key, fields unioned. */
+/** v2.8.0 — merge `pageInfo` selections by response key, fields unioned. */
 function mergePageInfo(
   base: PageInfoSelection[] | undefined,
   extra: PageInfoSelection[] | undefined,
@@ -435,7 +435,7 @@ function mergeSameArguments(
     );
   if (existing.isConnection) {
     if (incoming.totalCount) existing.totalCount = true;
-    // v2.7.1 — `pageInfo` / `cursor` merge by response key.
+    // v2.8.0 — `pageInfo` / `cursor` merge by response key.
     const pageInfo = mergePageInfo(existing.pageInfo, incoming.pageInfo);
     if (pageInfo) existing.pageInfo = pageInfo;
     const cursors = mergeKeySelections(existing.cursors, incoming.cursors);
@@ -547,7 +547,7 @@ function mergeEdgeKeys(
     }
     setEdgeKeyEntries(into, which, merged);
   }
-  // v2.7.1 — `cursor` keys merge by response key too.
+  // v2.8.0 — `cursor` keys merge by response key too.
   const cursors = mergeKeySelections(into.cursors, from.cursors);
   if (cursors) into.cursors = cursors;
 }
@@ -757,16 +757,16 @@ function outputKey(node: SelectionNode): string {
   return escapeIdentifier(node.fieldName);
 }
 
-/** v2.7.1 — the base64 alphabet, for {@link cursorExpr}. */
+/** v2.8.0 — the base64 alphabet, for {@link cursorExpr}. */
 const BASE64_ALPHABET =
   'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-/** v2.7.1 — base64 of `arrayconnection` (15 bytes: no padding). */
+/** v2.8.0 — base64 of `arrayconnection` (15 bytes: no padding). */
 const CURSOR_PREFIX_B64 = 'YXJyYXljb25uZWN0aW9u';
-/** v2.7.1 — the cursor of offset 0: base64 of `arrayconnection:0`. */
+/** v2.8.0 — the cursor of offset 0: base64 of `arrayconnection:0`. */
 const FIRST_CURSOR = 'YXJyYXljb25uZWN0aW9uOjA=';
 
 /**
- * v2.7.1 — a Cypher expression for upstream `@neo4j/graphql`'s connection
+ * v2.8.0 — a Cypher expression for upstream `@neo4j/graphql`'s connection
  * cursor of the integer offset `index`: `offsetToCursor(index)` from
  * `graphql-relay`, i.e. base64 of `arrayconnection:<index>`.
  *
@@ -932,25 +932,25 @@ export interface UnknownSelectedField {
    */
   hint?: string;
   /**
-   * v2.7.1 — what 2.x does with it, when not the default unknown-field
+   * v2.8.0 — what 2.x does with it, when not the default unknown-field
    * outcome (fields inside a connection's `pageInfo`).
    */
   outcome?: string;
   /**
-   * v2.7.1 — the field is KNOWN but selected in the wrong shape (a scalar
+   * v2.8.0 — the field is KNOWN but selected in the wrong shape (a scalar
    * with a sub-selection, a relationship without one): `expected` says
    * what the field is and how to select it, `outcome` what 2.x does.
    */
   shape?: { expected: string; outcome: string };
 }
 
-/** v2.7.1 — 2.x outcome of a selection the compiler drops. */
+/** v2.8.0 — 2.x outcome of a selection the compiler drops. */
 export const LEFT_OUT = '2.x leaves it out of the result';
-/** v2.7.1 — 2.x outcome of a selection projected as a raw property. */
+/** v2.8.0 — 2.x outcome of a selection projected as a raw property. */
 export const RAW_PROPERTY =
   '2.x projects it as a raw node property (null unless one is stored)';
 
-/** v2.7.1 — whether a property holds a scalar / enum, not a node type. */
+/** v2.8.0 — whether a property holds a scalar / enum, not a node type. */
 export function isScalarProperty(
   prop: PropertyDefinition,
   schema: SchemaMetadata,
@@ -962,13 +962,13 @@ export function isScalarProperty(
   );
 }
 
-/** v2.7.1 — `String`, `[String]` … as the schema declares a property. */
+/** v2.8.0 — `String`, `[String]` … as the schema declares a property. */
 export function propertyTypeName(prop: PropertyDefinition): string {
   return prop.isArray ? `[${prop.type}]` : prop.type;
 }
 
 /**
- * v2.7.1 — the problems of a connection's `pageInfo` and `cursor`
+ * v2.8.0 — the problems of a connection's `pageInfo` and `cursor`
  * selections (`node` and its strict-mode extra edge sets): `pageInfo`
  * without fields, a field `PageInfo` does not declare, a scalar given a
  * sub-selection. The compiler leaves each of them out of the result.
@@ -1077,7 +1077,7 @@ export function reportUnknownSelectedField(
   unknown: UnknownSelectedField,
 ): void {
   const { owner, field, subSelection, edge, hint, shape } = unknown;
-  // v2.7.1 — a known field in the wrong shape (Bug 3).
+  // v2.8.0 — a known field in the wrong shape (Bug 3).
   if (shape) {
     if (strictMode.strict)
       throw new OGMError(
@@ -1257,7 +1257,7 @@ export class SelectionCompiler {
       const hasChildren = !node.isScalar;
       const prop = owner.def.properties.get(field);
       if (prop) {
-        // v2.7.1 — a scalar given a sub-selection is left out of the result.
+        // v2.8.0 — a scalar given a sub-selection is left out of the result.
         if (hasChildren && isScalarProperty(prop, this.schema))
           pushUnknown(out, {
             owner: `type "${owner.def.typeName}"`,
@@ -1298,7 +1298,7 @@ export class SelectionCompiler {
                 depth + 1,
               );
           }
-        // v2.7.1 — a relationship without a sub-selection is projected
+        // v2.8.0 — a relationship without a sub-selection is projected
         // as a raw property (null).
         else if (!hasChildren)
           pushUnknown(out, {
@@ -1313,7 +1313,7 @@ export class SelectionCompiler {
         continue;
       }
       // A scalar-shaped `<rel>Connection` of a relationship is a known
-      // name; v2.7.1 — selected without its sub-selection it is projected
+      // name; v2.8.0 — selected without its sub-selection it is projected
       // as a raw property (null), so it is reported.
       if (
         field.endsWith('Connection') &&
@@ -1398,7 +1398,7 @@ export class SelectionCompiler {
       ])
         for (const child of children) {
           const edgeProp = props?.properties.get(child.fieldName);
-          // v2.7.1 — an edge property given a sub-selection is left out.
+          // v2.8.0 — an edge property given a sub-selection is left out.
           if (edgeProp && !child.isScalar)
             pushUnknown(out, {
               owner: edgeOwner,
@@ -1421,7 +1421,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * v2.7.1 — check a connection's `pageInfo` and `cursor` selections:
+   * v2.8.0 — check a connection's `pageInfo` and `cursor` selections:
    * `pageInfo` without a sub-selection, a field `PageInfo` does not declare
    * and a sub-selection on a scalar are reported (the compiler leaves them
    * out of the result).
@@ -2042,7 +2042,7 @@ export class SelectionCompiler {
         parentNode.totalCount = true;
         this.recordConnectionAlias(parentNode, 'totalCount', field);
       }
-      // v2.7.1 — `pageInfo { … }`; pre-2.7.1 it was silently dropped.
+      // v2.8.0 — `pageInfo { … }`; pre-2.8.0 it was silently dropped.
       if (field.name.value === 'pageInfo') {
         const key = field.alias?.value ?? 'pageInfo';
         if (key !== 'pageInfo') assertSafeIdentifier(key, 'selection alias');
@@ -2106,7 +2106,7 @@ export class SelectionCompiler {
           )
             continue;
 
-          // v2.7.1 — `cursor`; pre-2.7.1 it was silently dropped.
+          // v2.8.0 — `cursor`; pre-2.8.0 it was silently dropped.
           if (edgeField.name.value === 'cursor') {
             const key = edgeField.alias?.value ?? 'cursor';
             if (key !== 'cursor') assertSafeIdentifier(key, 'selection alias');
@@ -2190,7 +2190,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * v2.7.1 — the fields of a `pageInfo { … }` selection (inline fragments
+   * v2.8.0 — the fields of a `pageInfo { … }` selection (inline fragments
    * flattened), each with its response key. Whether a field exists is
    * checked by `assertKnownFields`, not here.
    */
@@ -2811,8 +2811,8 @@ export class SelectionCompiler {
         `selectionSet arguments on "${node.fieldName}" are not supported when selected through a union type.`,
       );
 
-    // v2.7.1 — the typed select `where` / `orderBy` of a relationship under
-    // a union parent. Pre-2.7.1 (and in 2.x default mode) neither reached
+    // v2.8.0 — the typed select `where` / `orderBy` of a relationship under
+    // a union parent. Pre-2.8.0 (and in 2.x default mode) neither reached
     // the per-member branches: every related node came back, unsorted.
     // Honouring them changes rows, so 2.x warns; strict applies them per
     // member (the `where` AND the target's `read` policy).
@@ -2887,12 +2887,12 @@ export class SelectionCompiler {
         paramCounter,
         policyContext,
         contextLabel: `union member "${memberName}" of "${node.fieldName}"`,
-        // v2.7.1 — strict: the typed select `where`, compiled against
+        // v2.8.0 — strict: the typed select `where`, compiled against
         // this member's target. 2.x: the policy alone (unchanged).
         userWhere: strict && hasWhere ? node.relationshipWhere : undefined,
       });
 
-      // v2.7.1 — strict: the typed select `orderBy`, per member.
+      // v2.8.0 — strict: the typed select `orderBy`, per member.
       if (strict && hasOrderBy && relDef.isArray) {
         branches.push(
           `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN ${this.compileSortedComprehension(
@@ -3209,7 +3209,7 @@ export class SelectionCompiler {
     const totalCount = node.totalCount
       ? `${totalCountKey}: size([${pattern}${whereClause} | 1])`
       : '';
-    // v2.7.1 — `pageInfo`, over the same filtered list (`''` unselected).
+    // v2.8.0 — `pageInfo`, over the same filtered list (`''` unselected).
     const pageInfo = this.compilePageInfo(
       node.pageInfo,
       `size([${pattern}${whereClause} | 1])`,
@@ -3255,7 +3255,7 @@ export class SelectionCompiler {
         : `[x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
             ', ',
           )}]) | ${outerProjection}]`;
-    // v2.7.1 — `cursor`: each edge's offset in the (sorted) list.
+    // v2.8.0 — `cursor`: each edge's offset in the (sorted) list.
     return `{ ${edgesKey}: ${this.withCursors(
       edgesList,
       projectionKeys,
@@ -3265,7 +3265,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * v2.7.1 — add each selected `cursor` key to the edges of `list`, with
+   * v2.8.0 — add each selected `cursor` key to the edges of `list`, with
    * upstream `@neo4j/graphql` 5.x semantics: the cursor of an edge is
    * `offsetToCursor(<its offset in the list>)`. Without `first` / `after`
    * (unsupported) the list is the whole filtered, sorted connection, so the
@@ -3299,7 +3299,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * v2.7.1 — the `, <key>: { … }` entries of a connection's `pageInfo`
+   * v2.8.0 — the `, <key>: { … }` entries of a connection's `pageInfo`
    * selections (`''` when none), with upstream `@neo4j/graphql` 5.x
    * semantics for a connection read without `first` / `after`: every
    * filtered edge is on the page, so `hasNextPage` and `hasPreviousPage`
@@ -3359,7 +3359,7 @@ export class SelectionCompiler {
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
-    /** v2.7.1 — receives the (escaped) keys of the map, for `cursor`. */
+    /** v2.8.0 — receives the (escaped) keys of the map, for `cursor`. */
     keysOut: string[] = [],
   ): string {
     const parts: string[] = [];

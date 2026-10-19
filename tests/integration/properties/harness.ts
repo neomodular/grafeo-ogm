@@ -308,7 +308,7 @@ export interface Snapshot {
  * A nested create that runs for several rows creates several nodes with
  * the same input `id`. `nodes` keeps one of them per id: the greatest
  * canonical form, so the choice depends only on the graph, never on the
- * order the server returns the rows in (v2.7.1 — finding F9: it used to
+ * order the server returns the rows in (v2.8.0 — finding F9: it used to
  * keep the last one returned, so two runs that left the same graph could
  * report different nodes). `all` keeps every one.
  */
@@ -361,7 +361,7 @@ export async function snapshot(
 }
 
 /**
- * v2.7.1 — the nodes `after` has beyond `before`, as a sorted multiset of
+ * v2.8.0 — the nodes `after` has beyond `before`, as a sorted multiset of
  * `<key>|<canon>`: duplicate-id nodes a write created are all counted.
  */
 export function createdNodes(before: Snapshot, after: Snapshot): string[] {

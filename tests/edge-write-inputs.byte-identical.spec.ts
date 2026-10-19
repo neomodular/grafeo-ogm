@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — connect `overwrite: false` and edge-property `@default` are
+ * v2.8.0 — connect `overwrite: false` and edge-property `@default` are
  * honoured only in strict mode. In default mode every connect and edge
  * write must compile exactly as before: the Cypher and params below were
  * captured from v2.7.0 (4f6a04a). The cases cover every connect site
@@ -487,7 +487,7 @@ const V270: Record<string, { cypher: string; params: unknown }> = {
   },
 };
 
-describe('connect / edge writes compile as in v2.7.0 by default (v2.7.1)', () => {
+describe('connect / edge writes compile as in v2.7.0 by default (v2.8.0)', () => {
   it.each(CASES)('%s', async (name, call) => {
     const h = harness();
     await call(h.user);

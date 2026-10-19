@@ -1,5 +1,5 @@
 /**
- * v2.7.1 — property-suite finding F1: a nested `delete` reached through a
+ * v2.8.0 — property-suite finding F1: a nested `delete` reached through a
  * cycle (chart -> tags -> charts) can delete a node the update still holds,
  * the root or an intermediate nested-update target. A later clause that
  * reads or writes it (the root's response projection, a CREATE from it)

@@ -1,5 +1,5 @@
 /**
- * Live suite (v2.7.1): connect `overwrite: false` and edge-property
+ * Live suite (v2.8.0): connect `overwrite: false` and edge-property
  * `@default`, both honoured only in strict mode.
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
@@ -62,7 +62,7 @@ type Model = ReturnType<OGM['model']>;
 const OVERWRITE_WARNING = '"overwrite: false" on a connect item of';
 const DEFAULT_WARNING = '"ItEwRole.role" declares @default';
 
-describeLive('Edge write inputs — live Neo4j (v2.7.1)', () => {
+describeLive('Edge write inputs — live Neo4j (v2.8.0)', () => {
   const runId = `it-${randomUUID()}`;
   let seq = 0;
   const id = (s: string) => `${runId}-${s}-${seq++}`;

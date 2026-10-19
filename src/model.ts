@@ -520,7 +520,7 @@ export class Model<
   /**
    * Run an `update` / `updateMany` statement built by `compile`.
    *
-   * v2.7.1 — finding F1. A nested delete reached through a cycle (chart ->
+   * v2.8.0 — finding F1. A nested delete reached through a cycle (chart ->
    * tags -> charts) can delete a node the statement still holds, and a
    * later clause that reads or writes it fails with `EntityNotFound`.
    * Strict mode compiles the alive guard up front. Default mode runs the

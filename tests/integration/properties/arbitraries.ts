@@ -16,10 +16,10 @@
  * Excluded because of an OPEN FINDING (each marked at its generator, with
  * the finding id; remove the exclusion with the fix):
  * - F1 `writeOp` (default mode only): nested `delete` whose target type is
- *   an ancestor; generated with `cycleDelete` for a strict OGM (v2.7.1).
+ *   an ancestor; generated with `cycleDelete` for a strict OGM (v2.8.0).
  * - F2 `updateItem`: `connect` / `create` on a field an enclosing nested
  *   update item is iterating (explosive, not a hang; a documented
- *   limitation in both modes since v2.7.1, see the generator).
+ *   limitation in both modes since v2.8.0, see the generator).
  * - F5 `writeOp` (default mode only): blanket disconnect on a shared
  *   relationship type; generated with `sharedBlanketDisconnect` for a
  *   strict OGM.
@@ -664,7 +664,7 @@ export function hasSharedBlanketDisconnect(op: unknown): boolean {
  * it deletes that node, default mode keeps v2.7.0's statement: a later
  * clause that touches the node fails with `EntityNotFound` (re-run with the
  * guard only outside a caller transaction, and the suites run in one) and
- * `updateMany` counts a deleted root. `strict: true` (v2.7.1) skips the
+ * `updateMany` counts a deleted root. `strict: true` (v2.8.0) skips the
  * deleted node's remaining writes and leaves a deleted root out.
  */
 export function hasCycleDelete(op: unknown): boolean {
@@ -831,7 +831,7 @@ function updateItem(
   // past the 20 s case timeout). Statement-level snapshot semantics would
   // change the results of inputs that work today, and are not offered in
   // either mode (@neo4j/graphql 5.x has the same per-row semantics): a
-  // documented limitation that default mode warns about since v2.7.1. Not
+  // documented limitation that default mode warns about since v2.8.0. Not
   // generated, in either mode.
   if (!path.iterated.includes(`${parent}.${def.field}`)) {
     ops.connect = connectItems(connectItem(def, member, depth));
@@ -955,7 +955,7 @@ export interface WriteOptions {
   sharedBlanketDisconnect?: boolean;
   /**
    * Also generate F1's shape (`hasCycleDelete`): only for an OGM with
-   * `strict: true`, which skips a deleted node's remaining writes (v2.7.1).
+   * `strict: true`, which skips a deleted node's remaining writes (v2.8.0).
    */
   cycleDelete?: boolean;
 }
@@ -1351,7 +1351,7 @@ export function selectionSet(
         fc.boolean(),
         nodeSel,
         fc.boolean(),
-        // v2.7.1 — `pageInfo` and the edge `cursor`.
+        // v2.8.0 — `pageInfo` and the edge `cursor`.
         fc.constantFrom(
           '',
           'pageInfo { hasNextPage hasPreviousPage startCursor endCursor } ',
@@ -1433,13 +1433,13 @@ export function select(type: string, depth: number): fc.Arbitrary<Rec> {
                 ...(def.edge
                   ? { properties: fc.constant(true as unknown) }
                   : {}),
-                // v2.7.1 — the edge `cursor`.
+                // v2.8.0 — the edge `cursor`.
                 cursor: fc.constant(true as unknown),
               },
               { requiredKeys: [] },
             ),
           ),
-          // v2.7.1 — `pageInfo`.
+          // v2.8.0 — `pageInfo`.
           fc.option(
             fc.constantFrom(true as unknown, {
               select: { endCursor: true, hasNextPage: true },
