@@ -194,7 +194,6 @@ describe('shapes that work never warn', () => {
     ],
     ['typed connection true', typed({ postsConnection: true })],
     ['typed scalar false / null', typed({ id: true, name: false, big: null })],
-    ['typed relationship {}', typed({ posts: {} })],
   ] as const)('%s', async (_label, run) => {
     for (const strict of [false, true]) {
       const h = harness({ strict });
@@ -205,11 +204,25 @@ describe('shapes that work never warn', () => {
 });
 
 describe('typed relationship {} (v2.8.0)', () => {
-  it('selects every scalar of the target, like `true`', async () => {
+  it('default: left out as in v2.7.0, warned once', async () => {
     const a = harness();
     await typed({ id: true, posts: {} })(a.model);
+    await typed({ id: true, posts: {} })(a.model);
     const b = harness();
+    await typed({ id: true })(b.model);
+    expect(a.last().cypher).toBe(b.last().cypher);
+    expect(a.logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(a.logger.warn.mock.calls[0][0])).toContain(
+      'Typed select `posts: {}` (a relationship to LbPost) is left out of the result.',
+    );
+  });
+
+  it('strict: selects every scalar of the target, like `true`', async () => {
+    const a = harness({ strict: true });
+    await typed({ id: true, posts: {} })(a.model);
+    const b = harness({ strict: true });
     await typed({ id: true, posts: true })(b.model);
     expect(a.last().cypher).toBe(b.last().cypher);
+    expect(a.logger.warn).not.toHaveBeenCalled();
   });
 });

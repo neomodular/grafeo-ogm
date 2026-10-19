@@ -281,10 +281,19 @@ export class SelectNormalizer {
       }
 
       // v2.8.0 — `{ drugs: {} }` (every key optional in the generated
-      // types) selects all scalars, as `true` does. Pre-2.8.0 it was left
-      // out of the result. An object with an unknown key keeps that
-      // behaviour (reported by `checkRelationshipShape`).
-      if (Object.keys(obj).every((k) => RELATIONSHIP_SELECT_KEYS.has(k)))
+      // types) is left out of the result in 2.x default mode, as before
+      // (warned); `strict: true` selects all scalars, as `true` does. An
+      // object with an unknown key is reported by `checkRelationshipShape`.
+      if (Object.keys(obj).every((k) => RELATIONSHIP_SELECT_KEYS.has(k))) {
+        if (!this.strictMode.strict) {
+          this.strictMode.warn(
+            'select-empty-relationship',
+            `${relDef.target}.${fieldName}`,
+            `Typed select \`${fieldName}: {}\` (a relationship to ${relDef.target}) is left out of the result.`,
+            `select every scalar field of ${relDef.target}, as \`${fieldName}: true\` does`,
+          );
+          return null;
+        }
         return {
           fieldName,
           isScalar: false,
@@ -292,6 +301,7 @@ export class SelectNormalizer {
           isConnection: false,
           children: [...this.allScalarFields(targetDef)],
         };
+      }
     }
 
     return null;

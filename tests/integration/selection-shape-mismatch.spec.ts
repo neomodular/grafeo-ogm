@@ -7,8 +7,9 @@
  * and a relationship without one (`posts`) came back as a raw property,
  * null, with no error. Default mode keeps that result and warns once;
  * `strict: true` throws before anything runs. A typed relationship given
- * `{}` (offered by the generated types) was left out; it now selects every
- * scalar of the target, as `true` does.
+ * `{}` (offered by the generated types) is still left out by default
+ * (warned); under `strict: true` it selects every scalar of the target, as
+ * `true` does.
  */
 import { Model } from '../../src/model';
 import { OGM } from '../../src/ogm';
@@ -98,9 +99,19 @@ describeLive('selection shape mismatches — live Neo4j', () => {
     ).rejects.toThrow(OGMError);
   });
 
-  it('typed relationship {} selects every scalar, in both modes', async () => {
-    for (const strict of [false, true]) {
-      const { user, logger } = make(strict);
+  it('default: typed relationship {} is left out, with a warning', async () => {
+    const { user, logger } = make(false);
+    const rows = (await user.find({
+      where: where(),
+      select: { id: true, posts: {} },
+    } as never)) as Row[];
+    expect(rows).toEqual([{ id: h.id('u') }]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('strict: typed relationship {} selects every scalar', async () => {
+    {
+      const { user, logger } = make(true);
       const rows = (await user.find({
         where: where(),
         select: { id: true, posts: {} },
