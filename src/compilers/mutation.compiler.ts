@@ -912,6 +912,27 @@ export class MutationCompiler {
           `an @id or @unique field of ${nodeDef.typeName}.`,
       );
 
+    // v2.6.0 — MERGE matches ALL its keys together, so `{ id, email }`
+    // misses a node that has the email under another id and creates a
+    // duplicate beside it (or fails on the unique constraint). Default:
+    // compiled as before, with one warning; strict: exactly one key.
+    if (mergeKeyNames.length > 1) {
+      const keys = mergeKeyNames.map((k) => `"${k}"`).join(', ');
+      if (this.strictMode.strict)
+        throw new OGMError(
+          `upsert "where" must name exactly one @id / @unique field of ${nodeDef.typeName}; got ${keys}. ` +
+            `MERGE matches all of them together, so a node that has one but not the others is not found ` +
+            `and a duplicate is created. Pass a single unique key.`,
+        );
+      this.strictMode.warn(
+        'upsert-multiple-unique-keys',
+        `${nodeDef.typeName}\u0000${mergeKeyNames.join(',')}`,
+        `upsert on ${nodeDef.typeName} with several unique keys in "where" (${keys}) MERGEs on all of them ` +
+          `together: a node that has one but not the others is not matched and a duplicate is created.`,
+        'require exactly one unique key in an upsert "where"',
+      );
+    }
+
     lines.push(`MERGE (n:${labelStr} { ${mergeProps.join(', ')} })`);
 
     // ON CREATE SET — all properties from create input (scalar only)

@@ -139,3 +139,19 @@ describe('item 2 — unknown edge-property keys', () => {
     ).rejects.toThrow('which declares no @relationshipProperties');
   });
 });
+
+describe('item 3 — upsert where with several unique keys', () => {
+  const run = badWriteShapes['upsert: two unique keys in where'];
+  it('default warns once', () =>
+    warnsOnce(
+      run,
+      'upsert on User with several unique keys in "where" ("id", "email") MERGEs on all of them together',
+    ));
+  it('strict throws before running anything', async () => {
+    const { ogm, records } = setup(true);
+    await expect(run(ogm)).rejects.toThrow(
+      'upsert "where" must name exactly one @id / @unique field of User; got "id", "email".',
+    );
+    expect(records).toEqual([]);
+  });
+});

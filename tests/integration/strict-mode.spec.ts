@@ -264,4 +264,59 @@ describeLive('Strict mode, write paths — live Neo4j', () => {
       expect(await edgeProps(u, p)).toEqual({ role: 'r' });
     });
   });
+
+  describe('item 3 — upsert where with several unique keys', () => {
+    const usersWithEmail = async (email: string) =>
+      (
+        await run(
+          'MATCH (u:ItSmUser {email: $email}) RETURN u.id AS id ORDER BY id',
+          { email },
+        )
+      ).map((r) => r.id as string);
+
+    it('default: { id, email } misses the node with that email and creates a duplicate, warning once', async () => {
+      const email = `${runId}-dup@x`;
+      await run('CREATE (:ItSmUser {id: $u, email: $email, runId: $runId})', {
+        u: id('up-def-a'),
+        email,
+      });
+      const { ogm, callWarnings } = makeOgm();
+      await ogm.model('ItSmUser').upsert({
+        where: { id: id('up-def-b'), email },
+        create: { runId },
+        update: { name: 'updated' },
+      });
+      expect(await usersWithEmail(email)).toEqual(
+        [id('up-def-a'), id('up-def-b')].sort(),
+      );
+      expect(callWarnings()).toHaveLength(1);
+      expect(callWarnings()[0]).toContain(
+        'with several unique keys in "where" ("id", "email")',
+      );
+    });
+
+    it('strict: two unique keys throw; one key matches the existing node', async () => {
+      const email = `${runId}-one@x`;
+      await run('CREATE (:ItSmUser {id: $u, email: $email, runId: $runId})', {
+        u: id('up-str-a'),
+        email,
+      });
+      const { ogm } = makeOgm(true);
+      await expect(
+        ogm.model('ItSmUser').upsert({
+          where: { id: id('up-str-b'), email },
+          create: { runId },
+          update: { name: 'updated' },
+        }),
+      ).rejects.toThrow('must name exactly one @id / @unique field');
+      const res = (await ogm.model('ItSmUser').upsert({
+        where: { email },
+        create: { id: id('up-str-b'), runId },
+        update: { name: 'updated' },
+        selectionSet: '{ id name }',
+      })) as Row;
+      expect(res).toEqual({ id: id('up-str-a'), name: 'updated' });
+      expect(await usersWithEmail(email)).toEqual([id('up-str-a')]);
+    });
+  });
 });
