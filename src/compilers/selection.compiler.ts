@@ -1,6 +1,7 @@
 import {
   Kind,
   parse,
+  print,
   valueFromASTUntyped,
   type ValueNode,
   type DocumentNode,
@@ -88,6 +89,76 @@ export interface SelectionNode {
    * can't honour them throw instead of dropping them.
    */
   hasArguments?: boolean;
+}
+
+/**
+ * v2.5.3 — the printed arguments of a parsed selectionSet field, so a
+ * response key selected twice merges its sub-selections only when both
+ * selections carry the same arguments.
+ */
+const argumentKeys = new WeakMap<SelectionNode, string>();
+
+function sameArguments(a: SelectionNode, b: SelectionNode): boolean {
+  return (argumentKeys.get(a) ?? '') === (argumentKeys.get(b) ?? '');
+}
+
+/**
+ * Merge `incoming` into `list` by response key (v2.5.3), as GraphQL merges
+ * a field selected more than once: sub-selections are unioned. Pre-2.5.3
+ * the second selection of a key was dropped with its sub-fields.
+ *
+ * - Same field, same arguments: children, edge children and `totalCount`
+ *   merge recursively.
+ * - Same field, different arguments: the first selection wins (unchanged).
+ * - Different fields under one key: the first selection wins (unchanged).
+ * - A selection outside any fragment makes the field unconditional.
+ */
+function mergeSelection(
+  list: SelectionNode[],
+  seen: Map<string, SelectionNode>,
+  incoming: SelectionNode,
+): void {
+  const key = incoming.alias ?? incoming.fieldName;
+  const existing = seen.get(key);
+  if (!existing) {
+    seen.set(key, incoming);
+    list.push(incoming);
+    return;
+  }
+  if (existing.fieldName !== incoming.fieldName) return;
+  if (existing.typeConditions && incoming.typeConditions)
+    existing.typeConditions = [
+      ...new Set([...existing.typeConditions, ...incoming.typeConditions]),
+    ];
+  // Also selected outside any fragment → unconditional.
+  else delete existing.typeConditions;
+  if (!sameArguments(existing, incoming)) return;
+  if (incoming.children)
+    existing.children = mergeSelectionLists(
+      existing.children,
+      incoming.children,
+    );
+  if (incoming.edgeChildren)
+    existing.edgeChildren = mergeSelectionLists(
+      existing.edgeChildren,
+      incoming.edgeChildren,
+    );
+  if (existing.isConnection) {
+    if (incoming.totalCount) existing.totalCount = true;
+    if (existing.totalCountOnly && !incoming.totalCountOnly)
+      delete existing.totalCountOnly;
+  }
+}
+
+function mergeSelectionLists(
+  base: SelectionNode[] | undefined,
+  extra: SelectionNode[],
+): SelectionNode[] {
+  const list: SelectionNode[] = [];
+  const seen = new Map<string, SelectionNode>();
+  for (const node of [...(base ?? []), ...extra])
+    mergeSelection(list, seen, node);
+  return list;
 }
 
 /** selectionSet field arguments the OGM honours, by field kind (v2.5.0). */
@@ -534,22 +605,8 @@ export class SelectionCompiler {
           for (const merged of this.convertSelectionSet(
             fragment.selectionSet,
             condition,
-          )) {
-            const mergedKey = merged.alias ?? merged.fieldName;
-            const existing = seen.get(mergedKey);
-            if (!existing) {
-              seen.set(mergedKey, merged);
-              nodes.push(merged);
-            } else if (existing.typeConditions)
-              existing.typeConditions = merged.typeConditions
-                ? [
-                    ...new Set([
-                      ...existing.typeConditions,
-                      ...merged.typeConditions,
-                    ]),
-                  ]
-                : undefined;
-          }
+          ))
+            mergeSelection(nodes, seen, merged);
 
         continue;
       }
@@ -560,14 +617,9 @@ export class SelectionCompiler {
       // v2.5.0 — fields are keyed by their OUTPUT name, so the same field
       // under two aliases (`a: kids { .. } b: kids { .. }`) stays two
       // selections. Pre-2.5.0 they collapsed into one.
-      const outputKey = field.alias?.value ?? fieldName;
-
-      const existing = seen.get(outputKey);
-      if (existing) {
-        // Also selected outside any fragment → unconditional.
-        if (typeCondition === undefined) delete existing.typeConditions;
-        continue;
-      }
+      // v2.5.3 — a key selected twice is merged (see `mergeSelection`);
+      // the repeat's arguments are compared, not re-validated.
+      const existing = seen.get(field.alias?.value ?? fieldName);
 
       const hasChildren = !!field.selectionSet;
       const isConnection = fieldName.endsWith('Connection');
@@ -581,9 +633,10 @@ export class SelectionCompiler {
       };
 
       if (typeCondition !== undefined) node.typeConditions = [typeCondition];
-      seen.set(outputKey, node);
-      if (field.arguments && field.arguments.length > 0)
-        applyFieldArguments(field, node);
+      if (field.arguments && field.arguments.length > 0) {
+        argumentKeys.set(node, field.arguments.map((a) => print(a)).join(','));
+        if (!existing) applyFieldArguments(field, node);
+      }
 
       if (hasChildren && field.selectionSet)
         if (isConnection)
@@ -591,7 +644,7 @@ export class SelectionCompiler {
           this.parseConnectionChildren(field.selectionSet, node);
         else node.children = this.convertSelectionSet(field.selectionSet);
 
-      nodes.push(node);
+      mergeSelection(nodes, seen, node);
     }
 
     return nodes;
@@ -622,14 +675,18 @@ export class SelectionCompiler {
             `${parentNode.fieldName}.edges.${edgeField.name.value}`,
           );
 
+          // v2.5.3 — a repeated `edges { node { … } }` merges its
+          // sub-selections; pre-2.5.3 the last one replaced the others.
           if (edgeField.name.value === 'node' && edgeField.selectionSet)
-            parentNode.children = this.convertSelectionSet(
-              edgeField.selectionSet,
+            parentNode.children = mergeSelectionLists(
+              parentNode.children,
+              this.convertSelectionSet(edgeField.selectionSet),
             );
 
           if (edgeField.name.value === 'properties' && edgeField.selectionSet)
-            parentNode.edgeChildren = this.convertSelectionSet(
-              edgeField.selectionSet,
+            parentNode.edgeChildren = mergeSelectionLists(
+              parentNode.edgeChildren,
+              this.convertSelectionSet(edgeField.selectionSet),
             );
         }
     }
