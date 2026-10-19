@@ -111,6 +111,7 @@ Each of these was a shipped bug. Keep them true, and pin new code paths with a l
 
 - Reproduce first on a live 5.26 (see Commands), write the failing test, then fix. A mock-only test that checks Cypher strings cannot see a server-side rejection.
 - Show the test failing without the fix using a **throwaway `git worktree`** of the pre-fix commit — not `git stash`, whose stack is shared across worktrees and parallel sessions.
+- The property suites (`tests/integration/properties/`, fast-check, fixed seed) check the compiler invariants on generated reads and writes; a failure prints the seed, path and shrunk input — replay it with `PROPERTY_SEED=<seed> PROPERTY_PATH=<path>`, go deeper with `PROPERTY_RUNS=<n>` or another seed, and remove the generator exclusion named after a finding when you fix it.
 - Never cast with `as never` / `as any` to get a bug repro to compile: check the real method signature first (e.g. `updateMany` takes `data`, not `update`; transaction `context` goes *inside* the params object).
 
 ## Releases
