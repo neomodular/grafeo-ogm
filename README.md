@@ -1147,13 +1147,12 @@ await plans.find({ selectionSet: '{ id nmae }' });
 // default: RETURN n { .`id`, .`nmae` } — `nmae` comes back null (and warns)
 // strict: OGMError: Unknown field "nmae" in selectionSet on type "Plan".
 
-await plans.find({ selectionSet: '{ id ownersAggregate { count } }' });
+await plans.find({ selectionSet: '{ id ownerzAggregate { count } }' }); // no relationship "ownerz"
 // default: the field is left out of the result (and warns)
-// strict: OGMError: Unknown field "ownersAggregate" in selectionSet on type "Plan". "ownersAggregate" fields are not
-//         supported: select "ownersConnection { totalCount }" for a count, or use Model.aggregate() on the related type.
+// strict: OGMError: Unknown field "ownerzAggregate" in selectionSet on type "Plan".
 ```
 
-A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection` or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check. The OGM has never compiled `<relationship>Aggregate` selections; 2.4.8 stopped generating the type for them.
+A known field is a property (`@cypher` fields included), a relationship, `<relationship>Connection`, `<relationship>Aggregate { … }` (since 2.7.0, see [Relationship aggregate selections](#relationship-aggregate-selections)) or `__typename`. Every selection is checked: root fields, nested relationship selections, connection `node` selections, edge `properties` (against the `@relationshipProperties` type), `create` / `update` / `upsert` response selections (`info { … }` is allowed) and `InterfaceModel`. A field inside an inline fragment is checked against the fragment's type; a field selected on an interface without a fragment must be declared on the interface. The typed `select` API gets the same check for its keys, edge `properties` included. A connection's own keys (`edges`, `node`, `properties`, `totalCount`) are not part of this check, and an aggregate's own keys (`count`, `node`, `edge`, the aggregates) are validated by the aggregate itself, in both modes. In 2.6.3 every `<relationship>Aggregate` was reported unknown, because the OGM did not compile it; since 2.7.0 it returns the aggregate and does not warn. Only a bare `ownersAggregate` without a selection of aggregates is still unknown.
 
 #### Not behind the switch: `aggregate` on list fields
 
@@ -1751,6 +1750,60 @@ const publishedStats = await Book.aggregate({
 });
 ```
 
+### Relationship aggregate selections
+
+Since 2.7.0, every relationship `posts` has a `postsAggregate` field you can select next to the others, in a `selectionSet` or the typed `select`. It has the shape and the semantics of `@neo4j/graphql` 5.x:
+
+```typescript
+const [author] = await Author.find({
+  where: { id },
+  selectionSet: `{
+    id
+    postsAggregate(where: { published: true }) {
+      count
+      node { title { shortest longest } views { min max average sum } }
+      edge { weight { max } }
+    }
+  }`,
+});
+// author.postsAggregate.count → 3
+// author.postsAggregate.node.views → { min: 10, max: 950, average: 326.66…, sum: 980 }
+
+await Author.find({
+  select: {
+    id: true,
+    postsAggregate: {
+      where: { published: true },
+      select: { count: true, node: { select: { views: { select: { sum: true } } } } },
+    },
+    friendsAggregate: true, // count and every aggregate of every field
+  },
+});
+```
+
+| Field type | Aggregates | Result |
+|---|---|---|
+| `count` | | `Int`: matched relationships (0 for none) |
+| `ID` | `shortest`, `longest` (lexicographic min / max, as upstream), `min`, `max` | string |
+| `String` | `shortest`, `longest` (by length; nulls ignored), `min`, `max` (lexicographic) | string |
+| `Int` | `min`, `max`, `sum`; `average` (a float) | number |
+| `Float` | `min`, `max`, `average`, `sum` | number |
+| `BigInt` | `min`, `max`, `average`, `sum` | **string**, as upstream's `BigInt` scalar (exact past 2^53) |
+| `DateTime`, `LocalDateTime`, `LocalTime`, `Time`, `Duration` | `min`, `max` | ISO string, as the node fields |
+| `Boolean`, `Date`, enums, points, lists, `@cypher` fields | none (selecting one throws) | |
+
+The generated aggregate types still declare v2.6.3's list-field members (e.g. `tags: StringAggregateSelection`) so existing code keeps compiling; they are `@deprecated` and go in 3.0.
+
+On an empty set `count` and `sum` are `0` (`"0"` for BigInt) and every other aggregate is `null`. `average` and `sum` follow Neo4j's own `avg()` / `sum()` exactly. That includes the incremental mean and an integer sum that overflows into a float.
+
+- **Arguments:** `where` (the target type's where input, compiled like any relationship filter) and `directed` (`false` matches the relationship in either direction). Selection `options` are rejected.
+- **Targets:** concrete, interface (node aggregates over the interface's fields) and union (`count` and `edge` only; a union has no common node fields). `edge { … }` needs `@relationshipProperties`.
+- **Everywhere:** root, nested at any depth, connection `node` selections, inline fragments, `InterfaceModel` (including relationships declared on the interface) and mutation response selections.
+- **Policies:** an aggregate measures exactly what the same relationship selected as a list returns under the same context: `where` AND the target's `read` policy (per member for an interface / union target), and, under `strict: true`, the member restriction of an abstract target. A node the context cannot read never changes `count`, `min`, `max` or any other aggregate, and edge aggregates only measure edges to readable nodes.
+- **Cypher:** everything is an expression (`COUNT { … }` and `reduce(…)` over a pattern comprehension), valid at any depth on Neo4j 5.x. There is no aggregating function, no `CALL` and no APOC.
+
+The generated types carry `<relationship>Aggregate?: Maybe<…AggregationSelection>` on node and interface types and in the `SelectFields`. The `<relationship>Aggregate` **where** filters (`postsAggregate: { count_GT: 1 }` in `where`) are still not supported.
+
 ---
 
 ## Vector Search
@@ -2135,6 +2188,14 @@ These are incremental improvements you can adopt at your own pace:
 - `selectionSet` -- fully supported
 - `init()` -- still works (now a no-op since schema parsing is synchronous)
 - `assertIndexesAndConstraints()` -- same behavior
+
+### `<relationship>Aggregate` selections (since 2.7.0)
+
+`selectionSet`s written for `@neo4j/graphql-ogm` that select `postsAggregate { count node { … } edge { … } }` work unchanged: same arguments (`where`, `directed`), same aggregates per type, same `null` / `0` on an empty set, BigInt aggregates as strings. Before 2.7.0 grafeo-ogm left the field out of the result (2.6.3 warned, or threw under `strict: true`), so a count read through it came back `undefined`. Differences from upstream, all documented in [Relationship aggregate selections](#relationship-aggregate-selections):
+
+- `DateTime` `min` / `max` come back in grafeo's ISO form for DateTime fields. Upstream reformatted them with an APOC call, which grafeo does not need.
+- grafeo also accepts aggregates upstream did not generate: on union targets (`count` and `edge`), on relationships declared on an interface, and lexicographic `min` / `max` on ID and String fields.
+- The `<relationship>Aggregate` where filters remain unsupported.
 
 ### What Changed (Under the Hood)
 
