@@ -165,6 +165,31 @@ describeLive('grafeo db push — live Neo4j', () => {
     expect((await push(v2)).out).toContain('No changes');
   });
 
+  // v2.5.1 — Neo4j treats a fulltext/vector index with the same entity,
+  // labels and properties as EQUIVALENT regardless of name, so when a DBA
+  // index already covers the SDL definition the recreate's
+  // `CREATE … IF NOT EXISTS` is a silent no-op. Pre-2.5.1 --force-drop
+  // dropped the SDL-named index anyway and printed "✓ recreated", leaving
+  // fulltext queries (which address the index by SDL name) broken.
+  it('never drops an index it cannot recreate under its SDL name', async () => {
+    const v1 = `type LaPushEq @node @fulltext(indexes: [{ name: "LaPushEqSearch", fields: ["title"] }]) {
+      id: ID!
+      title: String
+      summary: String
+    }`;
+    const v2 = v1.replace('fields: ["title"]', 'fields: ["title", "summary"]');
+    expect((await push(v1)).code).toBe(0);
+    await run(
+      'CREATE FULLTEXT INDEX la_dba_eq IF NOT EXISTS FOR (n:LaPushEq) ON EACH [n.title, n.summary]',
+    );
+
+    const forced = await push(v2, ['--force-drop', '--yes']);
+    expect(forced.out).not.toContain('✓ recreated LaPushEqSearch');
+    expect(`${forced.out}\n${forced.err}`).toMatch(/la_dba_eq/);
+    // The SDL-named index must still exist — fulltext queries use it.
+    expect((await indexRow('LaPushEqSearch'))?.properties).toEqual(['title']);
+  });
+
   it('reports a changed vector dimension / similarity', async () => {
     const schema = `type LaPushVec @node @vector(indexes: [{ indexName: "LaPushVecIdx", queryName: "laPushVecQ", embeddingProperty: "emb" }]) {
       id: ID!

@@ -218,8 +218,15 @@ async function applyDrops(
     // no-op while the old definition still holds the name.
     for (const change of plan.changed) {
       await session.run(change.dropCypher);
-      await session.run(change.statement.cypher);
-      io.out(`✓ recreated ${change.statement.name}`);
+      const result = await session.run(change.statement.cypher);
+      // v2.5.1 — never claim "recreated" when the CREATE was a no-op.
+      const updates = result?.summary?.counters?.updates?.();
+      if (updates && (updates.indexesAdded ?? 0) === 0)
+        io.err(
+          `error: ${change.statement.name} was dropped but NOT recreated — Neo4j reports ` +
+            `an equivalent index already exists. Schema is NOT in sync.`,
+        );
+      else io.out(`✓ recreated ${change.statement.name}`);
     }
     for (const orphan of plan.orphans) {
       await session.run(orphan.dropCypher);
@@ -260,11 +267,17 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
     // v2.4.8 — Neo4j refuses a unique constraint over a property a plain
     // RANGE index already covers. Report it (the index is not grafeo's to
     // drop) instead of letting the CREATE crash the whole push.
+    // v2.5.1 — same for a fulltext/vector index whose definition another
+    // index already holds under a different name.
     for (const block of plan.blocked)
       io.err(
-        `warning: ${block.statement.name} not created — index "${safeDisplay(block.by)}" ` +
-          `already covers the same label and property, and Neo4j will not add a ` +
-          `unique constraint until that index is dropped. Schema is NOT in sync.`,
+        block.reason === 'range-index'
+          ? `warning: ${block.statement.name} not created — index "${safeDisplay(block.by)}" ` +
+              `already covers the same label and property, and Neo4j will not add a ` +
+              `unique constraint until that index is dropped. Schema is NOT in sync.`
+          : `warning: ${block.statement.name} not created or updated — index "${safeDisplay(block.by)}" ` +
+              `already has the SDL definition, and Neo4j will not create an equivalent ` +
+              `index under another name. Drop it, or name the SDL index after it. Schema is NOT in sync.`,
       );
 
     for (const needs of plan.needsConfig)

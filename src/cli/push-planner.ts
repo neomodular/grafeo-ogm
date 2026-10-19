@@ -99,6 +99,12 @@ export interface PushPlanBlocked {
   statement: SchemaStatement;
   /** Live index name (from introspection — sanitize before printing). */
   by: string;
+  /**
+   * `range-index` — a plain RANGE index blocks a unique constraint.
+   * `equivalent-index` — a fulltext/vector index with the same definition
+   * exists under another name, so Neo4j will not create the SDL-named one.
+   */
+  reason: 'range-index' | 'equivalent-index';
 }
 
 export interface PushPlan {
@@ -166,6 +172,14 @@ export function planSchemaSync(
   const changed: PushPlanChange[] = [];
   const covered: PushPlanCovered[] = [];
   const blocked: PushPlanBlocked[] = [];
+  const equivalentIndex = (name: string, definition: DesiredDefinition) =>
+    live.indexes.find(
+      (i) =>
+        i.name !== name &&
+        !i.owningConstraint &&
+        i.type === definition.type &&
+        sameSchema(definition, i, definition.unorderedProperties),
+    );
   for (const statement of desired) {
     const isConstraint = statement.kind === 'unique-constraint';
     const present = isConstraint
@@ -191,9 +205,17 @@ export function planSchemaSync(
             sameSchema(definition, i),
         );
         if (blocker) {
-          blocked.push({ statement, by: blocker.name });
+          blocked.push({ statement, by: blocker.name, reason: 'range-index' });
           continue;
         }
+      }
+      const twin =
+        !isConstraint &&
+        definition &&
+        equivalentIndex(statement.name, definition);
+      if (twin) {
+        blocked.push({ statement, by: twin.name, reason: 'equivalent-index' });
+        continue;
       }
       create.push(statement);
       continue;
@@ -207,7 +229,16 @@ export function planSchemaSync(
     const liveItem = liveIndexesByName.get(statement.name);
     const differences =
       liveItem && definition ? diffDefinition(definition, liveItem) : [];
-    if (differences.length === 0) inSync.push(statement);
+    if (differences.length === 0) {
+      inSync.push(statement);
+      continue;
+    }
+    // v2.5.1 — Neo4j will not create a fulltext/vector index equivalent to
+    // one that exists under another name, so a drop + recreate would leave
+    // the SDL name missing (and fulltext queries address it by that name).
+    const twin = definition && equivalentIndex(statement.name, definition);
+    if (twin)
+      blocked.push({ statement, by: twin.name, reason: 'equivalent-index' });
     else
       changed.push({
         statement,
@@ -417,12 +448,16 @@ function diffDefinition(
  * Same entity, labels and properties? Requires the live row to report its
  * definition columns — without them nothing is ever called equivalent.
  */
-function sameSchema(want: DesiredDefinition, live: LiveSchemaItem): boolean {
+function sameSchema(
+  want: DesiredDefinition,
+  live: LiveSchemaItem,
+  unorderedProperties = false,
+): boolean {
   if (!live.labelsOrTypes || !live.properties) return false;
   if (live.entityType && live.entityType !== want.entityType) return false;
   return (
-    sameList(live.labelsOrTypes, want.labelsOrTypes) &&
-    sameList(live.properties, want.properties)
+    sameList(live.labelsOrTypes, want.labelsOrTypes, unorderedProperties) &&
+    sameList(live.properties, want.properties, unorderedProperties)
   );
 }
 

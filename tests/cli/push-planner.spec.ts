@@ -459,6 +459,41 @@ describe('planSchemaSync (cli-db-push spec)', () => {
         ['Book_id_unique', 'dba_book_id_range'],
       ]);
     });
+
+    // v2.5.1 — Neo4j will not create a fulltext/vector index equivalent to
+    // one under another name; drop + recreate used to lose the SDL name.
+    const dbaBookSearch = (properties: string[]): LiveSchemaItem => ({
+      name: 'dba_book_ft',
+      type: 'FULLTEXT',
+      entityType: 'NODE',
+      labelsOrTypes: ['Book'],
+      properties,
+    });
+
+    it('blocks (never drops) a changed index whose new definition another index holds', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [uniq('Book', 'id'), uniq('Author', 'id')],
+        indexes: [
+          { ...dbaBookSearch(['nope']), name: 'BookSearch' },
+          dbaBookSearch(['title']),
+        ],
+      });
+      expect(plan.changed).toEqual([]);
+      expect(
+        plan.blocked.map((b) => [b.statement.name, b.by, b.reason]),
+      ).toEqual([['BookSearch', 'dba_book_ft', 'equivalent-index']]);
+    });
+
+    it('blocks a missing index whose definition another index holds', () => {
+      const plan = planSchemaSync(parseSchema(BOOK_AUTHOR), {
+        constraints: [uniq('Book', 'id'), uniq('Author', 'id')],
+        indexes: [dbaBookSearch(['title'])],
+      });
+      expect(plan.create.map((s) => s.name)).not.toContain('BookSearch');
+      expect(plan.blocked.map((b) => [b.statement.name, b.by])).toEqual([
+        ['BookSearch', 'dba_book_ft'],
+      ]);
+    });
   });
 
   // v2.4.8 README fix: the docs claimed `@id` creates a unique constraint.
