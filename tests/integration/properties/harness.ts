@@ -123,6 +123,9 @@ export function makeDriver(): Driver {
       process.env.NEO4J_USER ?? process.env.NEO4J_USERNAME ?? 'neo4j',
       process.env.NEO4J_PASSWORD ?? 'password',
     ),
+    // Fail fast instead of waiting on a server that went away: a lost
+    // connection must surface as an error, never as a pending promise.
+    { connectionTimeout: 10_000, connectionAcquisitionTimeout: 20_000 },
   );
 }
 
@@ -224,28 +227,48 @@ export async function cleanup(driver: Driver, runId: string): Promise<void> {
 }
 
 const TX_TIMEOUT_MS = Number(process.env.PROPERTY_TX_TIMEOUT_MS ?? 20_000);
+/** Client-side backstop past the server timeout (see `inRollback`). */
+const CASE_DEADLINE_MS = TX_TIMEOUT_MS + 15_000;
+
+/** Reject when `p` has not settled after `ms`; never leaves a timer behind. */
+function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${what} did not settle within ${ms} ms`)),
+      ms,
+    );
+  });
+  return Promise.race([p, deadline]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Run `fn` inside one explicit transaction and always roll it back. A
  * failed statement poisons the transaction; rolling back is still valid.
+ *
+ * Two timeouts: the server-side transaction timeout stops a statement that
+ * runs away, and a client-side deadline stops a case whose promise never
+ * settles (a connection lost mid-statement leaves the driver waiting on a
+ * dead socket, which the server timeout cannot reach). Either surfaces as
+ * a failure of that case instead of blocking the suite.
  */
 export async function inRollback<T>(
   driver: Driver,
   fn: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
   const session = driver.session();
-  // A server-side timeout: a statement that runs away (rather than failing)
-  // must not hang the suite; the timeout surfaces as a failure.
   const tx = session.beginTransaction({ timeout: TX_TIMEOUT_MS });
   try {
-    return await fn(tx);
+    return await withDeadline(fn(tx), CASE_DEADLINE_MS, 'property case');
   } finally {
     try {
-      await tx.rollback();
+      await withDeadline(tx.rollback(), 10_000, 'rollback');
     } catch {
-      // already closed by a failed statement
+      // already closed by a failed statement, or the connection is gone
     }
-    await session.close();
+    await withDeadline(session.close(), 10_000, 'session close').catch(
+      () => undefined,
+    );
   }
 }
 
