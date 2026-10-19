@@ -43,6 +43,7 @@ const typeDefs = /* GraphQL */ `
     title: String
     body: String
     pages: Int
+    tags: [String!]
     scores: [Int!]
     ratings: [Float!]
     reviews: [ItSmReview!]!
@@ -120,7 +121,8 @@ describeLive('strict mode (reads) — live Neo4j', () => {
     // body:  title=delta body=beta
     await run(
       `CREATE (b:ItSmDoc {id: $both, runId: $runId, title: $alpha, body: $beta,
-                          pages: 10, scores: [1, 2], ratings: [0.5, 1.5]})
+                          pages: 10, tags: ['Red', 'Blue'],
+                          scores: [1, 2], ratings: [0.5, 1.5]})
        CREATE (:ItSmDoc {id: $title, runId: $runId, title: $alpha, body: $gamma,
                          pages: 20, scores: [5], ratings: [2.5]})
        CREATE (:ItSmDoc {id: $body, runId: $runId, title: $delta, body: $beta})
@@ -215,6 +217,41 @@ describeLive('strict mode (reads) — live Neo4j', () => {
           }),
         ),
       ).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("item 8 — mode: 'insensitive' with _IN / _NOT_IN", () => {
+    const where = (extra: Record<string, unknown>) =>
+      ({ runId, mode: 'insensitive', ...extra }) as never;
+
+    it('default: compares case-sensitively, one warning', async () => {
+      const { doc, logger } = make();
+      const find = (extra: Record<string, unknown>) =>
+        doc.find({ where: where(extra), selectionSet: '{ id }' });
+      expect(ids(await find({ title_IN: [word('ALPHA')] }))).toEqual([]);
+      expect(ids(await find({ title_IN: [word('ALPHA')] }))).toEqual([]);
+      expectOneWarning(
+        logger,
+        "`mode: 'insensitive'` does not apply to `title_IN`",
+      );
+    });
+
+    it('strict: _IN, _NOT_IN and a String list _IN ignore case', async () => {
+      const { doc, logger } = make(true);
+      const find = (extra: Record<string, unknown>) =>
+        doc.find({ where: where(extra), selectionSet: '{ id }' });
+      expect(ids(await find({ title_IN: [word('ALPHA')] }))).toEqual(
+        [id('both'), id('title')].sort(),
+      );
+      expect(ids(await find({ title_NOT_IN: [word('ALPHA')] }))).toEqual([
+        id('body'),
+      ]);
+      expect(ids(await find({ tags_IN: [['RED', 'blue']] }))).toEqual([
+        id('both'),
+      ]);
+      // Non-string fields are unaffected (no toLower on an Int).
+      expect(ids(await find({ pages_IN: [10] }))).toEqual([id('both')]);
       expect(logger.warn).not.toHaveBeenCalled();
     });
   });

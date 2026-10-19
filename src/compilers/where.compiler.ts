@@ -1977,6 +1977,35 @@ export class WhereCompiler {
     if (operator === '_MATCHES' && typeof value === 'string')
       assertSafeRegexPattern(value, 'where clause');
 
+    // v2.6.0 — `_IN` / `_NOT_IN` under `mode: 'insensitive'` compared
+    // case-sensitively (they are not `ciAware`). Strict lowers both the
+    // field and each list element; default keeps the v2.5.3 Cypher and
+    // warns. Declared string fields only (non-string fields already dropped
+    // `caseInsensitive` above). On a String LIST field the operand is a
+    // list of lists, lowered element-wise on both sides.
+    if (
+      caseInsensitive &&
+      (operator === '_IN' || operator === '_NOT_IN') &&
+      !temporalWrapped &&
+      propDef !== undefined
+    ) {
+      if (this.strictMode.strict) {
+        const lowered = isListField
+          ? `${lower(rawFieldRef)} IN [wc_l IN ${rawParamRef} | [wc_s IN wc_l | toLower(wc_s)]]`
+          : `toLower(${rawFieldRef}) IN [wc_s IN ${rawParamRef} | toLower(wc_s)]`;
+        return {
+          cypher: operator === '_NOT_IN' ? `NOT ${lowered}` : lowered,
+          params: { [paramName]: bound },
+        };
+      }
+      this.strictMode.warn(
+        'insensitive-in',
+        `${fieldName}${operator}`,
+        `\`mode: 'insensitive'\` does not apply to \`${fieldName}${operator}\`: _IN / _NOT_IN compare case-sensitively in 2.x.`,
+        `compare _IN / _NOT_IN case-insensitively`,
+      );
+    }
+
     const ci =
       caseInsensitive && opDef.ciAware && !temporalWrapped && listCiAllowed;
     const fieldRef = ci ? lower(rawFieldRef) : rawFieldRef;

@@ -306,3 +306,60 @@ describe('item 6 — fulltext score inside OR / AND / NOT (v2.6.0)', () => {
     expect(cypher).not.toContain('$ft_score\n');
   });
 });
+
+describe("item 8 — mode: 'insensitive' with _IN / _NOT_IN (v2.6.0)", () => {
+  const where = (w: Record<string, unknown>): Case => ({
+    label: 'w',
+    expected: '',
+    run: (ogm) =>
+      ogm.model('Book').find({ selectionSet: '{ id }', where: w as never }),
+  });
+
+  it('default: warns once per field + operator', async () => {
+    const { logger } = await runCase(
+      undefined,
+      where({ mode: 'insensitive', title_IN: ['Dune'] }),
+      3,
+    );
+    expectOneWarning(
+      logger,
+      "`mode: 'insensitive'` does not apply to `title_IN`: _IN / _NOT_IN compare case-sensitively in 2.x.",
+    );
+  });
+
+  it('no warning without insensitive mode, or on a non-string field', async () => {
+    const { logger } = await runCase(
+      undefined,
+      where({
+        title_IN: ['Dune'],
+        AND: [{ mode: 'insensitive', pages_IN: [1] }],
+      }),
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('strict: lowers the field and each element', async () => {
+    const { cypher, logger } = await runCase(
+      true,
+      caseNamed("mode: 'insensitive' with _IN / _NOT_IN"),
+    );
+    expect(cypher).toBe(
+      'MATCH (n:`Book`)\n' +
+        'WHERE toLower(n.`title`) IN [wc_s IN $param0 | toLower(wc_s)] AND ' +
+        'NOT toLower(n.`blurb`) IN [wc_s IN $param1 | toLower(wc_s)]\n' +
+        'RETURN n { .`id` }',
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('strict: a String list _IN lowers element-wise; Int fields stay raw', async () => {
+    const { cypher } = await runCase(
+      true,
+      where({ mode: 'insensitive', tags_IN: [['A']], pages_IN: [1] }),
+    );
+    expect(cypher).toContain(
+      '[wc_s IN n.`tags` | toLower(wc_s)] IN [wc_l IN $param0 | [wc_s IN wc_l | toLower(wc_s)]]',
+    );
+    expect(cypher).toContain('n.`pages` IN $param1');
+  });
+});
