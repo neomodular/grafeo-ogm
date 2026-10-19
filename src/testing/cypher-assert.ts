@@ -131,11 +131,47 @@ function isKeywordUse(sig: Token[], k: number): boolean {
   return true;
 }
 
+/** The bracket that encloses `sig[k]`, or undefined at the top level. */
+function enclosingOpener(sig: Token[], k: number): string | undefined {
+  let depth = 0;
+  for (let i = k - 1; i >= 0; i--) {
+    const t = sig[i];
+    if (t.kind !== 'punct') continue;
+    if (')]}'.includes(t.text)) depth++;
+    else if ('([{'.includes(t.text) && --depth < 0) return t.text;
+  }
+  return undefined;
+}
+
+/**
+ * Whether the `|` at `sig[j]` belongs to a label expression (`n:A|B`,
+ * `n:!A|B&C`): walking back over names joined by `|` / `&` / `!` reaches
+ * a `:`.
+ */
+function isLabelExpressionBar(sig: Token[], j: number): boolean {
+  let i = j - 1;
+  for (;;) {
+    if (sig[i]?.kind !== 'word' && sig[i]?.kind !== 'quoted') return false;
+    i--;
+    while (sig[i]?.kind === 'punct' && sig[i].text === '!') i--;
+    const t = sig[i];
+    if (t?.kind !== 'punct') return false;
+    if (t.text === ':') return true;
+    if (t.text !== '|' && t.text !== '&') return false;
+    i--;
+  }
+}
+
 /**
  * The source text of every occurrence of `clauseType` used as a keyword:
  * from the keyword to the next clause keyword at the same bracket depth,
- * a `|` at that depth (list and pattern comprehensions), or the bracket
- * that closes the enclosing one — whichever comes first.
+ * the `|` that ends a list or pattern comprehension's predicate, or the
+ * bracket that closes the enclosing one — whichever comes first.
+ *
+ * v2.5.3 — `|` ends the clause only inside `[ … ]` (a comprehension), and
+ * never as part of a label expression (`n:A|B`) or `||`. Pre-2.5.3 any `|`
+ * at the clause's depth ended it, so `WHERE n:A|B AND n.x = $p` was cut
+ * at the label expression.
  */
 function clauseSegments(cypher: string, clauseType: string): string[] {
   const words = clauseType.trim().toUpperCase().split(/\s+/);
@@ -151,6 +187,7 @@ function clauseSegments(cypher: string, clauseType: string): string[] {
 
     let depth = 0;
     let end = cypher.length;
+    const inComprehension = enclosingOpener(sig, k) === '[';
     for (let j = k + words.length; j < sig.length; j++) {
       const t = sig[j];
       if (t.kind === 'punct' && '([{'.includes(t.text)) depth++;
@@ -160,8 +197,13 @@ function clauseSegments(cypher: string, clauseType: string): string[] {
           break;
         }
       } else if (depth === 0 && t.kind === 'punct' && t.text === '|') {
-        end = t.start;
-        break;
+        const next = sig[j + 1];
+        if (next?.kind === 'punct' && next.text === '|' && next.start === t.end)
+          j++; // `||` concatenation
+        else if (inComprehension && !isLabelExpressionBar(sig, j)) {
+          end = t.start;
+          break;
+        }
       } else if (
         depth === 0 &&
         t.kind === 'word' &&
@@ -232,8 +274,8 @@ export class CypherAssert {
    * words, e.g. 'ORDER BY', 'ON CREATE SET'), never inside a name, a
    * parameter, a string or a comment. A clause runs from its keyword to the
    * next clause keyword at the same bracket depth (WHERE, ORDER BY, SKIP and
-   * LIMIT each count as their own clause), a `|` at that depth, or the
-   * bracket closing the enclosing one. The assertion passes when any
+   * LIMIT each count as their own clause), the `|` ending a comprehension's
+   * predicate, or the bracket closing the enclosing one. The assertion passes when any
    * occurrence of the clause contains `pattern`.
    *
    * Before v2.5.0 the clause was a raw substring (`'SET'` matched

@@ -234,6 +234,29 @@ describe('CypherAssert', () => {
         notInClause(sub, 'MATCH', 'count(m)');
         ok(sub, 'CALL', 'count(m) AS c');
       });
+
+      // v2.5.3 — any top-level `|` ended the clause, so a label expression
+      // or `||` concatenation cut a WHERE short.
+      it('ends a clause at `|` only for a comprehension body', () => {
+        ok('MATCH (n) WHERE n:A|B AND n.x = $p RETURN n', 'WHERE', 'n.x = $p');
+        ok(
+          "MATCH (n) WHERE n.a || 'x' = $p AND n.y = 1 RETURN n",
+          'WHERE',
+          'n.y = 1',
+        );
+        ok('MATCH (n) WHERE n:A|B|C AND n.x = 1 RETURN n', 'WHERE', 'n.x = 1');
+        // A comprehension still ends at its `|` — including one whose
+        // predicate holds a label expression or a concatenation.
+        const comp =
+          "RETURN [x IN $l WHERE x:A|B AND x.a || 'y' = 'z' | x.name] AS r";
+        ok(comp, 'WHERE', "x.a || 'y' = 'z'");
+        notInClause(comp, 'WHERE', 'x.name');
+        notInClause(
+          'RETURN [(n)-->(m) WHERE m.x = 1 | m.name] AS r',
+          'WHERE',
+          'm.name',
+        );
+      });
     });
   });
 
