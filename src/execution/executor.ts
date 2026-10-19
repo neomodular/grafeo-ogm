@@ -71,7 +71,8 @@ export interface ExecutionContext {
    * the executor's own auto-commit session and a caller `session` (both
    * via `session.run(q, p, { metadata })`). A caller-supplied
    * `transaction` has already begun — the metadata cannot be attached
-   * there, and the executor logs a `warn` for each such call instead.
+   * there, and the executor logs a `warn` (once per transaction, v2.5.3)
+   * instead.
    * Pass metadata when opening the transaction
    * (`ogm.$transaction(fn, { metadata })`,
    * `session.beginTransaction({ metadata })`,
@@ -90,6 +91,14 @@ export interface ExecuteOptions {
    */
   accessMode?: 'READ' | 'WRITE';
 }
+
+/**
+ * Transactions the "metadata not attached" warning was already logged for.
+ * v2.5.3 — pre-2.5.3 it was logged on every audited call, so a transaction
+ * running N model calls logged N identical warnings. Module-level so every
+ * Executor (one per OGM / scoped OGM) shares it.
+ */
+const warnedTransactions = new WeakSet<object>();
 
 /**
  * Executes Cypher queries against Neo4j, using either a provided
@@ -167,7 +176,11 @@ export class Executor {
    * method found no setter and returned silently, so every audit field
    * (including `unsafe.bypassPolicies` audits) for a call inside a caller
    * transaction was dropped with no signal. It now logs a `warn` per call
-   * so the gap is visible. A `setMetaData` that does exist (a custom
+   * so the gap is visible — v2.5.3: once per transaction, worded so it is
+   * clear that transaction-level metadata passed at begin is unaffected
+   * (pre-2.5.3 it warned per call and advised exactly what a caller using
+   * `$transaction(fn, { metadata })` had already done). A `setMetaData`
+   * that does exist (a custom
    * transaction wrapper) is still used. Auditing never blocks the query.
    */
   private attachMetadata(
@@ -179,12 +192,17 @@ export class Executor {
       tx as unknown as { setMetaData?: (m: Record<string, unknown>) => void }
     ).setMetaData;
     if (typeof setter !== 'function') {
+      if (warnedTransactions.has(tx)) return;
+      warnedTransactions.add(tx);
       this.logger.warn?.(
         '[OGM] Transaction metadata not attached (modelType=%s, operation=%s): ' +
-          'neo4j-driver only accepts metadata when a transaction begins. ' +
-          'Pass it there instead — ogm.$transaction(fn, { metadata }), ' +
-          'session.beginTransaction({ metadata }) or ' +
-          'session.executeWrite(fn, { metadata }).',
+          'the per-call policy audit fields cannot be added to a transaction ' +
+          'that is already open, because neo4j-driver only accepts metadata ' +
+          'when a transaction begins. Metadata given when the transaction ' +
+          'began (ogm.$transaction(fn, { metadata }), ' +
+          'session.beginTransaction({ metadata }), ' +
+          'session.executeWrite(fn, { metadata })) is unaffected. ' +
+          'Logged once per transaction.',
         String(metadata.modelType ?? '-'),
         String(metadata.operation ?? '-'),
       );

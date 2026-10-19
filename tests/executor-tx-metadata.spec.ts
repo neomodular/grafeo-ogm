@@ -68,6 +68,28 @@ describe('Executor — metadata on a caller-supplied transaction', () => {
     expect(tx.run).toHaveBeenCalledWith('RETURN 1', { a: 1 });
   });
 
+  // v2.5.3 — pre-2.5.3 every call in the transaction warned again, and the
+  // advice (pass metadata at begin) did not silence it.
+  it('warns once per transaction, not once per call', async () => {
+    const tx = mockTx();
+    const other = mockTx();
+    const logger = mockLogger();
+    const { driver } = mockDriver(tx);
+    const executor = new Executor(driver, logger);
+    const metadata = { modelType: 'Book', operation: 'read' };
+
+    await executor.execute('RETURN 1', {}, { transaction: tx, metadata });
+    await executor.execute('RETURN 2', {}, { transaction: tx, metadata });
+    await executor.execute('RETURN 3', {}, { executionContext: tx, metadata });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+
+    await executor.execute('RETURN 4', {}, { transaction: other, metadata });
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn.mock.calls[0][0]).toMatch(
+      /metadata not attached.*per-call policy audit.*once per transaction/is,
+    );
+  });
+
   it('does not warn when there is no metadata to attach', async () => {
     const tx = mockTx();
     const logger = mockLogger();

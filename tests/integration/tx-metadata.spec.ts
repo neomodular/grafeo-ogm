@@ -132,4 +132,21 @@ describeLive('transaction metadata — live Neo4j', () => {
       warn.mock.calls.filter((c) => /metadata not attached/.test(String(c[0]))),
     ).toHaveLength(1);
   });
+
+  // v2.5.3 — pre-2.5.3 each call warned, even when the caller had already
+  // passed metadata to $transaction as the warning advised.
+  it('warns once per transaction however many audited calls it runs', async () => {
+    await ogm.$transaction(
+      async (ctx) => {
+        const books = ogm.withContext({ uid: 'a' }).model('LaMetaBook');
+        await books.find({ select, context: ctx });
+        await books.find({ select, context: ctx });
+        await books.count({ context: ctx });
+      },
+      { metadata: { job: 'la-nightly' } },
+    );
+    expect(
+      warn.mock.calls.filter((c) => /metadata not attached/.test(String(c[0]))),
+    ).toHaveLength(1);
+  });
 });
