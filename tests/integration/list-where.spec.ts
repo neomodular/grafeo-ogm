@@ -9,6 +9,9 @@
  *   against stored native datetimes, so they never matched.
  * - `mode: 'insensitive'` on a STRING list field emitted `toLower(list)`,
  *   a Cypher type error.
+ * - v2.5.3 — `_IN` / `_NOT_IN` on a list field coerced only the outer list,
+ *   so BigInt strings and JS `Date`s inside the inner lists were bound raw
+ *   and silently matched nothing.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -25,6 +28,7 @@ const typeDefs = /* GraphQL */ `
     runId: String
     seenAt: [DateTime!]
     tags: [String!]
+    bigs: [BigInt!]
   }
 `;
 
@@ -51,7 +55,13 @@ describeLive('List-field where filters — live Neo4j', () => {
     // Written through the OGM so seenAt is stored as native datetimes.
     await ogm.model('ItListItem').create({
       input: [
-        { id: id('a'), runId, seenAt: [T1, T2], tags: ['Red', 'Blue'] },
+        {
+          id: id('a'),
+          runId,
+          seenAt: [T1, T2],
+          tags: ['Red', 'Blue'],
+          bigs: ['1', '2'],
+        },
         { id: id('b'), runId, seenAt: [T2], tags: ['green'] },
       ],
     });
@@ -99,5 +109,14 @@ describeLive('List-field where filters — live Neo4j', () => {
     expect(
       await find({ tags_IN: [['green'], ['nope']], mode: 'insensitive' }),
     ).toEqual([id('b')]);
+  });
+
+  it('_IN / _NOT_IN on a BigInt list coerce inner string elements', async () => {
+    expect(await find({ bigs_IN: [['1', '2']] })).toEqual([id('a')]);
+    expect(await find({ bigs_NOT_IN: [['1', '2']] })).toEqual([]);
+  });
+
+  it('_IN on a DateTime list coerces inner JS Dates', async () => {
+    expect(await find({ seenAt_IN: [[new Date(T2)]] })).toEqual([id('b')]);
   });
 });

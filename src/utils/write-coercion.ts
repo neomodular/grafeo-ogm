@@ -337,8 +337,20 @@ export function coerceWhereValue(
   if (propDef === undefined || value === null || value === undefined)
     return value;
   if (!COMPARABLE_SUFFIXES.has(suffix)) return value;
-  const elementWise =
-    suffix === '_IN' || suffix === '_NOT_IN' || propDef.isArray;
+  const isIn = suffix === '_IN' || suffix === '_NOT_IN';
+  // v2.5.3 — `_IN` / `_NOT_IN` on a LIST field take a list of lists: coerce
+  // two levels deep. Pre-2.5.3 the inner lists reached coerceWhereElement,
+  // which returns arrays unchanged, so BigInt strings and Dates inside them
+  // were bound raw and silently matched nothing.
+  if (isIn && propDef.isArray)
+    return Array.isArray(value)
+      ? value.map((inner) =>
+          Array.isArray(inner)
+            ? inner.map((element) => coerceWhereElement(element, propDef))
+            : inner,
+        )
+      : value;
+  const elementWise = isIn || propDef.isArray;
   if (elementWise)
     return Array.isArray(value)
       ? value.map((element) => coerceWhereElement(element, propDef))
