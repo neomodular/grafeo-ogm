@@ -1017,7 +1017,7 @@ const ogm = new OGM({ typeDefs, driver, logger, strict: true });
 
 Some input shapes compile to something other than what they say. A typo'd connect key widens the connect to every node. A fulltext `score` inside `OR` is ignored. Fixing these in place would change results that existing code may rely on, so 2.x keeps the old behaviour by default and adds an opt-in switch:
 
-- **`strict` off (the 2.x default).** Every input compiles exactly as in v2.5.3, byte for byte. The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log.
+- **`strict` off (the 2.x default).** Every input compiles exactly as in v2.5.4, byte for byte (the one exception is the aggregate fix at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log.
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
@@ -1109,12 +1109,19 @@ await books.find({ selectionSet: '{ reviews(where: { stars: 5 }) { id } reviews(
 // strict: OGMError: Fields "reviews" conflict because they have differing arguments. Use different aliases …
 ```
 
-#### 10. Two differently aliased `edges` in one connection
+Only selections that can apply to the same object conflict. Fragments on types that can never be the same node, such as `... on Dog { pals(where: A) { id } } ... on Cat { pals(where: B) { id } }`, are valid GraphQL. They never warn. In strict mode each type gets its own arguments; by default the first selection is used for both, as in 2.5.x.
+
+#### 10. Differently aliased `edges`, `node` or `properties` in one connection
 
 ```typescript
 await books.find({ selectionSet: '{ reviewsConnection { a: edges { node { id } } b: edges { node { body } } } }' });
 // default: only `a`, holding both selections merged (and warns) · strict: `a` and `b`, each with its own selection
+
+await books.find({ selectionSet: '{ reviewsConnection { edges { a: node { id } b: node { body } } } }' });
+// default: each edge has only `a: { id, body }` (and warns) · strict: `a: { id }` and `b: { body }`
 ```
+
+`properties` keys inside one `edges` work the same way.
 
 #### Not behind the switch: `aggregate` on list fields
 

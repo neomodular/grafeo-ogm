@@ -718,3 +718,108 @@ describe('item 9 — fragments on disjoint vs overlapping types (v2.6.0)', () =>
     ).rejects.toThrow('Fields "pals" conflict');
   });
 });
+
+describe('item 10 — differently aliased node / properties in one edges (v2.6.0)', () => {
+  const find = (selectionSet: string): Case => ({
+    label: selectionSet,
+    expected: '',
+    run: (ogm) => ogm.model('Book').find({ selectionSet }),
+  });
+  const NODES =
+    '{ reviewsConnection { edges { a: node { id } b: node { body } } } }';
+  const PROPS =
+    '{ reviewsConnection { edges { p: properties { at } q: properties { score } } } }';
+
+  /** v2.5.4 Cypher: the second key is merged into the first. */
+  const NODES_V254 =
+    'MATCH (n:`Book`)\n' +
+    'RETURN n { reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | { `a`: n0 { .`id`, .`body` } }] } }';
+  const PROPS_V254 =
+    'MATCH (n:`Book`)\n' +
+    'RETURN n { reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | { `p`: e0 { .`at`, .`score` } }] } }';
+
+  it.each([
+    [NODES, NODES_V254, 'node', 'a', 'b'],
+    [PROPS, PROPS_V254, 'properties', 'p', 'q'],
+  ])(
+    'default: %s keeps the first key, byte-identical, warns once',
+    async (selectionSet, v254, which, first, second) => {
+      const unset = await runCase(undefined, find(selectionSet), 3);
+      const off = await runCase(false, find(selectionSet));
+      expect(unset.cypher.split('\n;\n')[0]).toBe(v254);
+      expect(off.cypher).toBe(v254);
+      expectOneWarning(
+        unset.logger,
+        `"reviewsConnection" selects \`${which}\` under two response keys ("${first}", "${second}") in its edges; ` +
+          `2.x returns only "${first}", with both selections merged into it.`,
+      );
+    },
+  );
+
+  it('default: a connection selected twice with different node keys warns once', async () => {
+    const { logger } = await runCase(
+      undefined,
+      find(
+        '{ reviewsConnection { edges { a: node { id } } } reviewsConnection { edges { b: node { body } } } }',
+      ),
+    );
+    expectOneWarning(
+      logger,
+      '"reviewsConnection" selects `node` under two response keys ("a", "b") in its edges',
+    );
+  });
+
+  it('strict: each node / properties key gets its own selection', async () => {
+    const nodes = await runCase(true, find(NODES));
+    expect(nodes.cypher).toBe(
+      'MATCH (n:`Book`)\n' +
+        'RETURN n { reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | ' +
+        '{ `a`: n0 { .`id` }, `b`: n0 { .`body` } }] } }',
+    );
+    expect(nodes.logger.warn).not.toHaveBeenCalled();
+    const props = await runCase(true, find(PROPS));
+    expect(props.cypher).toBe(
+      'MATCH (n:`Book`)\n' +
+        'RETURN n { reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | ' +
+        '{ `p`: e0 { .`at` }, `q`: e0 { .`score` } }] } }',
+    );
+  });
+
+  it('strict: keys merge by name across repeated edges and connections', async () => {
+    const { cypher } = await runCase(
+      true,
+      find(
+        '{ reviewsConnection { edges { a: node { id } } } ' +
+          'reviewsConnection { edges { b: node { body } a: node { stars } } x: edges { node { id } c: node { body } } } }',
+      ),
+    );
+    expect(cypher).toBe(
+      'MATCH (n:`Book`)\n' +
+        'RETURN n { reviewsConnection: { edges: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | ' +
+        '{ `a`: n0 { .`id`, .`stars` }, `b`: n0 { .`body` } }], ' +
+        '`x`: [(n)-[e0:`HAS_REVIEW`]->(n0:`Review`) | { node: n0 { .`id` }, `c`: n0 { .`body` } }] } }',
+    );
+  });
+
+  it('strict: an extra node key keeps the target read policy', async () => {
+    Model.clearSelectionCache();
+    const records: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs,
+      driver: mockDriver(records),
+      strict: true,
+      policies: {
+        Review: [
+          permissive({ operations: ['read'], when: () => ({ stars_GT: 0 }) }),
+        ],
+        Book: [permissive({ operations: ['read'], when: () => ({}) })],
+      },
+    });
+    await ogm.withContext({ user: 'u' }).model('Book').find({
+      selectionSet:
+        '{ reviewsConnection { edges { a: node { id } b: node { body } } } }',
+    });
+    expect(records[0].cypher).toContain('n0.`stars` > $param');
+    expect(records[0].cypher).toContain('`b`: n0 { .`body` }');
+  });
+});

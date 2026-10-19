@@ -124,6 +124,20 @@ export interface SelectionNode {
    * concrete type. 2.x keeps the first selection for every type.
    */
   typeVariants?: SelectionNode[];
+  /**
+   * Connection edge set only, strict mode (v2.6.0): `node` / `properties`
+   * selected under further response keys inside one `edges`
+   * (`edges { a: node { … } b: node { … } }`), each with its own
+   * selection. 2.x merges them into the first key.
+   */
+  extraNodes?: EdgeKeySelection[];
+  extraProperties?: EdgeKeySelection[];
+}
+
+/** One extra `node` / `properties` key of an edge set (v2.6.0, strict). */
+export interface EdgeKeySelection {
+  key: string;
+  children: SelectionNode[];
 }
 
 /**
@@ -307,6 +321,14 @@ function mergeSameArguments(
       edgesKeyOf(existing) !== edgesKeyOf(incoming)
     )
       warnAliasedEdges(ctx, key, edgesKeyOf(existing), edgesKeyOf(incoming));
+    else
+      for (const which of ['node', 'properties'] as const) {
+        const a = which === 'node' ? existing.children : existing.edgeChildren;
+        const b = which === 'node' ? incoming.children : incoming.edgeChildren;
+        const ka = existing.connectionAliases?.[which] ?? which;
+        const kb = incoming.connectionAliases?.[which] ?? which;
+        if (a && b && ka !== kb) warnAliasedEdgeKey(ctx, key, which, ka, kb);
+      }
   }
   if (incoming.children)
     existing.children = mergeSelectionLists(
@@ -354,6 +376,83 @@ function warnAliasedEdges(
   });
 }
 
+/** v2.6.0 — 2.x merges differently aliased `node` / `properties` keys. */
+function warnAliasedEdgeKey(
+  ctx: ParseContext,
+  connection: string,
+  which: 'node' | 'properties',
+  first: string,
+  second: string,
+): void {
+  parseWarn(ctx, {
+    code: 'selection-aliased-edge-key',
+    detail: `${connection}:${which}:${first}:${second}`,
+    problem:
+      `"${connection}" selects \`${which}\` under two response keys ("${first}", "${second}") in its edges; ` +
+      `2.x returns only "${first}", with both selections merged into it.`,
+    fix: `return each \`${which}\` alias with its own selection`,
+  });
+}
+
+/** The `node` (or `properties`) keys of an edge set, main key first. */
+function edgeKeyEntries(
+  set: SelectionNode,
+  which: 'node' | 'properties',
+): EdgeKeySelection[] {
+  const main = which === 'node' ? set.children : set.edgeChildren;
+  const extras =
+    (which === 'node' ? set.extraNodes : set.extraProperties) ?? [];
+  return [
+    ...(main
+      ? [{ key: set.connectionAliases?.[which] ?? which, children: main }]
+      : []),
+    ...extras,
+  ];
+}
+
+/** Store `entries` (main key first) back on an edge set (strict). */
+function setEdgeKeyEntries(
+  set: SelectionNode,
+  which: 'node' | 'properties',
+  entries: EdgeKeySelection[],
+): void {
+  const [main, ...rest] = entries;
+  const extrasProp = which === 'node' ? 'extraNodes' : 'extraProperties';
+  if (which === 'node') set.children = main?.children;
+  else set.edgeChildren = main?.children;
+  if (!main)
+    if (which === 'node') delete set.children;
+    else delete set.edgeChildren;
+
+  if (main && main.key !== which)
+    set.connectionAliases = { ...set.connectionAliases, [which]: main.key };
+  else if (set.connectionAliases) {
+    delete set.connectionAliases[which];
+    if (Object.keys(set.connectionAliases).length === 0)
+      delete set.connectionAliases;
+  }
+  if (rest.length > 0) set[extrasProp] = rest;
+  else delete set[extrasProp];
+}
+
+/** Merge two edge sets' `node` / `properties` keys by response key (strict). */
+function mergeEdgeKeys(
+  into: SelectionNode,
+  from: SelectionNode,
+  ctx: ParseContext,
+): void {
+  for (const which of ['node', 'properties'] as const) {
+    const merged = edgeKeyEntries(into, which).map((e) => ({ ...e }));
+    for (const entry of edgeKeyEntries(from, which)) {
+      const same = merged.find((m) => m.key === entry.key);
+      if (same)
+        same.children = mergeSelectionLists(same.children, entry.children, ctx);
+      else merged.push({ ...entry });
+    }
+    setEdgeKeyEntries(into, which, merged);
+  }
+}
+
 /** A connection's edges selection as a standalone edge set (strict). */
 function asEdgeSet(node: SelectionNode): SelectionNode | null {
   if (node.totalCountOnly) return null;
@@ -365,6 +464,8 @@ function asEdgeSet(node: SelectionNode): SelectionNode | null {
   };
   if (node.children) set.children = node.children;
   if (node.edgeChildren) set.edgeChildren = node.edgeChildren;
+  if (node.extraNodes) set.extraNodes = node.extraNodes;
+  if (node.extraProperties) set.extraProperties = node.extraProperties;
   const { totalCount: _total, ...aliases } = node.connectionAliases ?? {};
   if (Object.keys(aliases).length > 0) set.connectionAliases = aliases;
   return set;
@@ -384,22 +485,16 @@ function mergeConnectionEdgeSets(
     const k = edgesKeyOf(set);
     const prev = sets.get(k);
     if (!prev) {
-      sets.set(k, { ...set });
+      sets.set(k, {
+        ...set,
+        ...(set.connectionAliases
+          ? { connectionAliases: { ...set.connectionAliases } }
+          : {}),
+      });
       return;
     }
-    if (set.children)
-      prev.children = mergeSelectionLists(prev.children, set.children, ctx);
-    if (set.edgeChildren)
-      prev.edgeChildren = mergeSelectionLists(
-        prev.edgeChildren,
-        set.edgeChildren,
-        ctx,
-      );
-    if (set.connectionAliases)
-      prev.connectionAliases = {
-        ...set.connectionAliases,
-        ...prev.connectionAliases,
-      };
+    // v2.6.0 — `node` / `properties` keys merge by response key too.
+    mergeEdgeKeys(prev, set, ctx);
   };
   for (const node of [existing, incoming]) {
     const main = asEdgeSet(node);
@@ -417,6 +512,10 @@ function mergeConnectionEdgeSets(
     else delete existing.children;
     if (main.edgeChildren) existing.edgeChildren = main.edgeChildren;
     else delete existing.edgeChildren;
+    if (main.extraNodes) existing.extraNodes = main.extraNodes;
+    else delete existing.extraNodes;
+    if (main.extraProperties) existing.extraProperties = main.extraProperties;
+    else delete existing.extraProperties;
   }
   const aliases = {
     ...(main?.connectionAliases ?? {}),
@@ -1188,6 +1287,39 @@ export class SelectionCompiler {
     // sets of `edges` selected under other keys.
     let firstEdgesKey: string | undefined;
     const extras = new Map<string, SelectionNode>();
+    // v2.6.0 — the first `node` / `properties` key of each edge set.
+    const firstKeys = new Map<
+      SelectionNode,
+      { node?: string; properties?: string }
+    >();
+    const connectionName = parentNode.alias ?? parentNode.fieldName;
+    /**
+     * Where a `node` / `properties` selection under `key` goes: the edge
+     * set's own (first) key, or — strict, another key — its own entry.
+     */
+    const edgeKeyTarget = (
+      set: SelectionNode,
+      which: 'node' | 'properties',
+      key: string,
+    ): EdgeKeySelection | null => {
+      const firsts = firstKeys.get(set) ?? {};
+      firstKeys.set(set, firsts);
+      firsts[which] ??= key;
+      if (firsts[which] === key) return null;
+      if (!ctx.strict) {
+        warnAliasedEdgeKey(ctx, connectionName, which, firsts[which]!, key);
+        return null;
+      }
+      const prop = which === 'node' ? 'extraNodes' : 'extraProperties';
+      const list = (set[prop] ??= []);
+      let entry = list.find((e) => e.key === key);
+      if (!entry) {
+        assertSafeIdentifier(key, 'selection alias');
+        entry = { key, children: [] };
+        list.push(entry);
+      }
+      return entry;
+    };
     for (const sel of selectionSet.selections) {
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
@@ -1253,21 +1385,49 @@ export class SelectionCompiler {
           // v2.5.3 — a repeated `edges { node { … } }` merges its
           // sub-selections; pre-2.5.3 the last one replaced the others.
           if (edgeField.name.value === 'node' && edgeField.selectionSet) {
-            this.recordConnectionAlias(target, 'node', edgeField);
-            target.children = mergeSelectionLists(
-              target.children,
-              this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
+            const extra = edgeKeyTarget(
+              target,
+              'node',
+              edgeField.alias?.value ?? 'node',
+            );
+            const parsed = this.convertSelectionSet(
+              edgeField.selectionSet,
+              undefined,
               ctx,
             );
+            if (extra)
+              extra.children = mergeSelectionLists(extra.children, parsed, ctx);
+            else {
+              this.recordConnectionAlias(target, 'node', edgeField);
+              target.children = mergeSelectionLists(
+                target.children,
+                parsed,
+                ctx,
+              );
+            }
           }
 
           if (edgeField.name.value === 'properties' && edgeField.selectionSet) {
-            this.recordConnectionAlias(target, 'properties', edgeField);
-            target.edgeChildren = mergeSelectionLists(
-              target.edgeChildren,
-              this.convertSelectionSet(edgeField.selectionSet, undefined, ctx),
+            const extra = edgeKeyTarget(
+              target,
+              'properties',
+              edgeField.alias?.value ?? 'properties',
+            );
+            const parsed = this.convertSelectionSet(
+              edgeField.selectionSet,
+              undefined,
               ctx,
             );
+            if (extra)
+              extra.children = mergeSelectionLists(extra.children, parsed, ctx);
+            else {
+              this.recordConnectionAlias(target, 'properties', edgeField);
+              target.edgeChildren = mergeSelectionLists(
+                target.edgeChildren,
+                parsed,
+                ctx,
+              );
+            }
           }
         }
     }
@@ -1754,6 +1914,22 @@ export class SelectionCompiler {
       projectionKeys.push(propertiesKey);
     }
 
+    // v2.6.0 — strict: further `node` / `properties` keys of these edges.
+    for (const [k, expr] of this.extraEdgeKeyParts(
+      node,
+      childVar,
+      edgeVar,
+      targetDef,
+      maxDepth,
+      currentDepth,
+      params,
+      paramCounter,
+      policyContext,
+    )) {
+      mapParts.push(`${k}: ${expr}`);
+      projectionKeys.push(k);
+    }
+
     // Inject synthetic sort scalars at the top level of the edge map so
     // apoc.coll.sortMulti (which only accepts top-level keys) can order the
     // collection. The outer list comprehension strips them on the way out.
@@ -1996,7 +2172,70 @@ export class SelectionCompiler {
         `${aliases.properties ? escapeIdentifier(aliases.properties) : 'properties'}: ${edgeVar} { ${edgeFields} }`,
       );
     }
+    for (const [k, expr] of this.extraEdgeKeyParts(
+      set,
+      childVar,
+      edgeVar,
+      targetDef,
+      maxDepth,
+      currentDepth,
+      params,
+      paramCounter,
+      policyContext,
+    ))
+      parts.push(`${k}: ${expr}`);
     return `{ ${parts.join(', ')} }`;
+  }
+
+  /**
+   * v2.6.0 — strict: the projections of an edge set's further `node` /
+   * `properties` keys (`SelectionNode.extraNodes` / `extraProperties`),
+   * as `[escapedKey, expression]` pairs. Empty in 2.x default mode.
+   */
+  private extraEdgeKeyParts(
+    set: SelectionNode,
+    childVar: string,
+    edgeVar: string,
+    targetDef: NodeDefinition,
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): [string, string][] {
+    const out: [string, string][] = [];
+    for (const extra of set.extraNodes ?? [])
+      if (extra.children.length > 0)
+        out.push([
+          escapeIdentifier(extra.key),
+          this.compile(
+            extra.children,
+            childVar,
+            targetDef,
+            maxDepth,
+            currentDepth + 1,
+            params,
+            paramCounter,
+            null,
+            policyContext,
+          ),
+        ]);
+    for (const extra of set.extraProperties ?? []) {
+      const fields = extra.children
+        .filter((c) => c.isScalar)
+        .map((c) => {
+          if (c.alias === undefined || c.alias === c.fieldName)
+            return `.${escapeIdentifier(c.fieldName)}`;
+          assertSafeIdentifier(c.alias, 'selection alias');
+          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
+        });
+      if (fields.length > 0)
+        out.push([
+          escapeIdentifier(extra.key),
+          `${edgeVar} { ${fields.join(', ')} }`,
+        ]);
+    }
+    return out;
   }
 
   /**

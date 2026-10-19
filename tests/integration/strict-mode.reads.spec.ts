@@ -465,4 +465,39 @@ describeLive('strict mode (reads) — live Neo4j', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     });
   });
+
+  describe('item 10 — differently aliased node keys in one edges', () => {
+    const selectionSet =
+      '{ reviewsConnection { edges { a: node { stars } b: node { body } } } }';
+    const edgesOf = (rows: unknown) => {
+      const conn = (rows as Row[])[0].reviewsConnection as { edges: Row[] };
+      return [...conn.edges].sort(
+        (x, y) =>
+          ((x.a as Row).stars as number) - ((y.a as Row).stars as number),
+      );
+    };
+
+    it('default: only the first key, both selections merged, one warning', async () => {
+      const { doc, logger } = make();
+      const rows = await doc.find({ where: { id: id('both') }, selectionSet });
+      expect(edgesOf(rows)).toEqual([
+        { a: { stars: 1, body: 'bad' } },
+        { a: { stars: 5, body: 'great' } },
+      ]);
+      expectOneWarning(
+        logger,
+        '"reviewsConnection" selects `node` under two response keys ("a", "b") in its edges',
+      );
+    });
+
+    it('strict: each key with its own selection', async () => {
+      const { doc, logger } = make(true);
+      const rows = await doc.find({ where: { id: id('both') }, selectionSet });
+      expect(edgesOf(rows)).toEqual([
+        { a: { stars: 1 }, b: { body: 'bad' } },
+        { a: { stars: 5 }, b: { body: 'great' } },
+      ]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
 });
