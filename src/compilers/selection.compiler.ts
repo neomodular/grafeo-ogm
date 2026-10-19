@@ -89,6 +89,12 @@ export interface SelectionNode {
    * can't honour them throw instead of dropping them.
    */
   hasArguments?: boolean;
+  /**
+   * v2.5.3 — the same response key selected on DIFFERENT fields by sibling
+   * inline fragments (`... on A { x: title } ... on B { x: body }`): the
+   * field each fragment type selected. Projected as a per-type CASE.
+   */
+  fieldByType?: Record<string, string>;
 }
 
 /**
@@ -110,7 +116,8 @@ function sameArguments(a: SelectionNode, b: SelectionNode): boolean {
  * - Same field, same arguments: children, edge children and `totalCount`
  *   merge recursively.
  * - Same field, different arguments: the first selection wins (unchanged).
- * - Different fields under one key: the first selection wins (unchanged).
+ * - Different fields under one key, each selected by inline fragments on
+ *   different types: recorded in `fieldByType` for a per-type projection.
  * - A selection outside any fragment makes the field unconditional.
  */
 function mergeSelection(
@@ -125,7 +132,10 @@ function mergeSelection(
     list.push(incoming);
     return;
   }
-  if (existing.fieldName !== incoming.fieldName) return;
+  if (existing.fieldName !== incoming.fieldName || existing.fieldByType) {
+    mergeFragmentField(existing, incoming);
+    return;
+  }
   if (existing.typeConditions && incoming.typeConditions)
     existing.typeConditions = [
       ...new Set([...existing.typeConditions, ...incoming.typeConditions]),
@@ -148,6 +158,31 @@ function mergeSelection(
     if (existing.totalCountOnly && !incoming.totalCountOnly)
       delete existing.totalCountOnly;
   }
+}
+
+/** Two scalars under one key, from fragments on different types (v2.5.3). */
+function mergeFragmentField(
+  existing: SelectionNode,
+  incoming: SelectionNode,
+): void {
+  // Only scalars selected by inline fragments can differ per type; any
+  // other clash keeps the first selection (unchanged).
+  if (
+    !existing.isScalar ||
+    !incoming.isScalar ||
+    !existing.typeConditions ||
+    !incoming.typeConditions
+  )
+    return;
+  const byType: Record<string, string> = existing.fieldByType ?? {};
+  if (!existing.fieldByType)
+    for (const t of existing.typeConditions) byType[t] = existing.fieldName;
+  for (const t of incoming.typeConditions)
+    if (byType[t] === undefined) byType[t] = incoming.fieldName;
+  existing.fieldByType = byType;
+  existing.typeConditions = [
+    ...new Set([...existing.typeConditions, ...incoming.typeConditions]),
+  ];
 }
 
 function mergeSelectionLists(
@@ -505,28 +540,41 @@ export class SelectionCompiler {
     nodeDef: NodeDefinition,
     cypherScope: CypherFieldScope | null,
   ): string | null {
-    if (nodeDef.properties.get(node.fieldName)?.isCypher) return null;
-    const members: { def: NodeDefinition; prop: PropertyDefinition }[] = [];
+    // v2.5.3 — `fieldByType`: sibling fragments selected different fields
+    // under this key, so each type projects its own field.
+    const perType = node.fieldByType;
+    if (!perType && nodeDef.properties.get(node.fieldName)?.isCypher)
+      return null;
+    const members: {
+      def: NodeDefinition;
+      prop: PropertyDefinition;
+      field: string;
+    }[] = [];
     for (const typeName of node.typeConditions ?? []) {
       const def = this.schema.nodes.get(typeName);
       if (!def) return null;
-      const prop = def.properties.get(node.fieldName);
-      if (prop) members.push({ def, prop });
+      const field = perType?.[typeName] ?? node.fieldName;
+      assertSafeIdentifier(field, 'selection field');
+      const prop = def.properties.get(field);
+      if (prop) members.push({ def, prop, field });
     }
-    if (!members.some((m) => m.prop.isCypher && m.prop.cypherStatement))
+    if (
+      !perType &&
+      !members.some((m) => m.prop.isCypher && m.prop.cypherStatement)
+    )
       return null;
 
-    const branches = members.map(({ def, prop }) => {
+    const branches = members.map(({ def, prop, field }) => {
       let expr: string;
       if (prop.isCypher && prop.cypherStatement)
         expr = cypherScope
-          ? cypherScope.register(node.fieldName, prop, def.label)
+          ? cypherScope.register(field, prop, def.label)
           : buildInlineCypherFieldExpr(
               prop.cypherStatement,
               nodeVar,
-              `${def.typeName}.${node.fieldName}`,
+              `${def.typeName}.${field}`,
             );
-      else expr = `${nodeVar}.${escapeIdentifier(node.fieldName)}`;
+      else expr = `${nodeVar}.${escapeIdentifier(field)}`;
       return `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`;
     });
     return `${escapeIdentifier(key)}: CASE ${branches.join(' ')} END`;

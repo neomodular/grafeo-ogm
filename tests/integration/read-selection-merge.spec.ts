@@ -3,6 +3,9 @@
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *
+ * - The same alias on DIFFERENT fields in sibling inline fragments
+ *   (`... on A { x: title } ... on B { x: body }`, valid GraphQL) returned
+ *   the first fragment's field for every type.
  * - A response key selected twice (`posts { id } posts { title }`, or two
  *   `edges { node { … } }`) kept only one selection's sub-fields.
  */
@@ -106,6 +109,29 @@ describeLive('selectionSet merge, aliases and fragments — live Neo4j', () => {
     [...(rows as Row[])].sort((x, y) =>
       String(x.id ?? '').localeCompare(String(y.id ?? '')),
     );
+
+  describe('same alias on different fields in sibling fragments', () => {
+    it('resolves each type its own field (InterfaceModel)', async () => {
+      expect(
+        await things(
+          '{ id ... on ItSmA { x: title } ... on ItSmB { x: body } }',
+        ),
+      ).toEqual([
+        { id: h.id('a'), x: 'tA', __typename: 'ItSmA' },
+        { id: h.id('b'), x: 'bodyB', __typename: 'ItSmB' },
+      ]);
+    });
+
+    it('resolves each type its own field (nested interface relationship)', async () => {
+      const row = await u1(
+        '{ things { id ... on ItSmA { x: title } ... on ItSmB { x: body } } }',
+      );
+      expect(byId(row.things)).toEqual([
+        { id: h.id('a'), x: 'tA', __typename: 'ItSmA' },
+        { id: h.id('b'), x: 'bodyB', __typename: 'ItSmB' },
+      ]);
+    });
+  });
 
   describe('a response key selected twice', () => {
     const P1 = { id: '', title: 'P1' };
