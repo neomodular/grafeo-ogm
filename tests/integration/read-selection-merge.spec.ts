@@ -6,6 +6,8 @@
  * - The same alias on DIFFERENT fields in sibling inline fragments
  *   (`... on A { x: title } ... on B { x: body }`, valid GraphQL) returned
  *   the first fragment's field for every type.
+ * - Aliases inside a connection (`t: totalCount`, `e: edges`, `nd: node`,
+ *   `pr: properties`, aliased edge properties) were ignored.
  * - A response key selected twice (`posts { id } posts { title }`, or two
  *   `edges { node { … } }`) kept only one selection's sub-fields.
  */
@@ -130,6 +132,32 @@ describeLive('selectionSet merge, aliases and fragments — live Neo4j', () => {
         { id: h.id('a'), x: 'tA', __typename: 'ItSmA' },
         { id: h.id('b'), x: 'bodyB', __typename: 'ItSmB' },
       ]);
+    });
+  });
+
+  describe('aliases inside a connection', () => {
+    it('honours totalCount, edges, node, properties and edge field aliases', async () => {
+      const row = await u1(
+        '{ c: postsConnection { t: totalCount e: edges { nd: node { id } pr: properties { s: stars } } } }',
+      );
+      const c = row.c as Row;
+      expect(c.t).toBe(2);
+      expect(
+        [...(c.e as Row[])].sort((x, y) =>
+          String((x.nd as Row).id).localeCompare(String((y.nd as Row).id)),
+        ),
+      ).toEqual([
+        { nd: { id: h.id('p1') }, pr: { s: 5 } },
+        { nd: { id: h.id('p2') }, pr: { s: 3 } },
+      ]);
+    });
+
+    it('leaves an unaliased connection unchanged', async () => {
+      const row = await u1(
+        '{ postsConnection { totalCount edges { node { id } properties { stars } } } }',
+      );
+      expect((row.postsConnection as Row).totalCount).toBe(2);
+      expect(((row.postsConnection as Row).edges as Row[]).length).toBe(2);
     });
   });
 

@@ -95,6 +95,17 @@ export interface SelectionNode {
    * field each fragment type selected. Projected as a per-type CASE.
    */
   fieldByType?: Record<string, string>;
+  /**
+   * Connection only (v2.5.3): selectionSet aliases of the connection's own
+   * keys. Pre-2.5.3 they were ignored and the keys always came back as
+   * `edges`, `node`, `properties` and `totalCount`.
+   */
+  connectionAliases?: {
+    totalCount?: string;
+    edges?: string;
+    node?: string;
+    properties?: string;
+  };
 }
 
 /**
@@ -157,6 +168,11 @@ function mergeSelection(
     if (incoming.totalCount) existing.totalCount = true;
     if (existing.totalCountOnly && !incoming.totalCountOnly)
       delete existing.totalCountOnly;
+    if (incoming.connectionAliases)
+      existing.connectionAliases = {
+        ...incoming.connectionAliases,
+        ...existing.connectionAliases,
+      };
   }
 }
 
@@ -711,8 +727,14 @@ export class SelectionCompiler {
       const field = sel as FieldNode;
       assertNoArguments(field, `${parentNode.fieldName}.${field.name.value}`);
 
-      if (field.name.value === 'totalCount') parentNode.totalCount = true;
-      if (field.name.value === 'edges') selectsEdges = true;
+      if (field.name.value === 'totalCount') {
+        parentNode.totalCount = true;
+        this.recordConnectionAlias(parentNode, 'totalCount', field);
+      }
+      if (field.name.value === 'edges') {
+        selectsEdges = true;
+        this.recordConnectionAlias(parentNode, 'edges', field);
+      }
 
       if (field.name.value === 'edges' && field.selectionSet)
         for (const edgeSel of field.selectionSet.selections) {
@@ -725,21 +747,41 @@ export class SelectionCompiler {
 
           // v2.5.3 — a repeated `edges { node { … } }` merges its
           // sub-selections; pre-2.5.3 the last one replaced the others.
-          if (edgeField.name.value === 'node' && edgeField.selectionSet)
+          if (edgeField.name.value === 'node' && edgeField.selectionSet) {
+            this.recordConnectionAlias(parentNode, 'node', edgeField);
             parentNode.children = mergeSelectionLists(
               parentNode.children,
               this.convertSelectionSet(edgeField.selectionSet),
             );
+          }
 
-          if (edgeField.name.value === 'properties' && edgeField.selectionSet)
+          if (edgeField.name.value === 'properties' && edgeField.selectionSet) {
+            this.recordConnectionAlias(parentNode, 'properties', edgeField);
             parentNode.edgeChildren = mergeSelectionLists(
               parentNode.edgeChildren,
               this.convertSelectionSet(edgeField.selectionSet),
             );
+          }
         }
     }
     if (parentNode.totalCount && !selectsEdges)
       parentNode.totalCountOnly = true;
+  }
+
+  /**
+   * Keep the selectionSet alias of a connection key (v2.5.3). The first
+   * alias given for a key wins.
+   */
+  private recordConnectionAlias(
+    node: SelectionNode,
+    key: 'totalCount' | 'edges' | 'node' | 'properties',
+    field: FieldNode,
+  ): void {
+    const alias = field.alias?.value;
+    if (alias === undefined || alias === key) return;
+    assertSafeIdentifier(alias, 'selection alias');
+    node.connectionAliases ??= {};
+    node.connectionAliases[key] ??= alias;
   }
 
   /**
@@ -1030,6 +1072,17 @@ export class SelectionCompiler {
 
     const mapParts: string[] = [];
     const projectionKeys: string[] = [];
+    // v2.5.3 — selectionSet aliases of the connection keys (validated when
+    // parsed); unaliased output is byte-identical.
+    const aliases = node.connectionAliases ?? {};
+    const nodeKey = aliases.node ? escapeIdentifier(aliases.node) : 'node';
+    const propertiesKey = aliases.properties
+      ? escapeIdentifier(aliases.properties)
+      : 'properties';
+    const edgesKey = aliases.edges ? escapeIdentifier(aliases.edges) : 'edges';
+    const totalCountKey = aliases.totalCount
+      ? escapeIdentifier(aliases.totalCount)
+      : 'totalCount';
 
     // Compile node projection
     if (node.children && node.children.length > 0) {
@@ -1044,18 +1097,23 @@ export class SelectionCompiler {
         null,
         policyContext,
       );
-      mapParts.push(`node: ${nodeProjection}`);
-      projectionKeys.push('node');
+      mapParts.push(`${nodeKey}: ${nodeProjection}`);
+      projectionKeys.push(nodeKey);
     }
 
     // Compile edge properties projection
     if (node.edgeChildren && node.edgeChildren.length > 0) {
       const edgeFields = node.edgeChildren
         .filter((c) => c.isScalar)
-        .map((c) => `.${escapeIdentifier(c.fieldName)}`)
+        .map((c) => {
+          if (c.alias === undefined || c.alias === c.fieldName)
+            return `.${escapeIdentifier(c.fieldName)}`;
+          assertSafeIdentifier(c.alias, 'selection alias');
+          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
+        })
         .join(', ');
-      mapParts.push(`properties: ${edgeVar} { ${edgeFields} }`);
-      projectionKeys.push('properties');
+      mapParts.push(`${propertiesKey}: ${edgeVar} { ${edgeFields} }`);
+      projectionKeys.push(propertiesKey);
     }
 
     // Inject synthetic sort scalars at the top level of the edge map so
@@ -1218,13 +1276,13 @@ export class SelectionCompiler {
     // (same pattern, same `where`, same target `read` policy), so it can
     // never count a node the caller cannot see. Pre-2.4.8 it was dropped.
     const totalCount = node.totalCount
-      ? `totalCount: size([${pattern}${whereClause} | 1])`
+      ? `${totalCountKey}: size([${pattern}${whereClause} | 1])`
       : '';
     if (node.totalCountOnly) return `{ ${totalCount} }`;
     const withTotal = totalCount ? `, ${totalCount}` : '';
 
     if (sortKeyTokens.length === 0)
-      return `{ edges: [${pattern}${whereClause} | ${innerMap}]${withTotal} }`;
+      return `{ ${edgesKey}: [${pattern}${whereClause} | ${innerMap}]${withTotal} }`;
 
     // Re-project only the user-facing keys so synthetic __skN scalars don't
     // leak out of the projection.
@@ -1232,7 +1290,7 @@ export class SelectionCompiler {
       projectionKeys.length > 0
         ? `{ ${projectionKeys.map((k) => `${k}: x.${k}`).join(', ')} }`
         : `{}`;
-    return `{ edges: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
+    return `{ ${edgesKey}: [x IN apoc.coll.sortMulti([${pattern}${whereClause} | ${innerMap}], [${sortKeyTokens.join(
       ', ',
     )}]) | ${outerProjection}]${withTotal} }`;
   }
