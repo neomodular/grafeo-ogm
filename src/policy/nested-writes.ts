@@ -28,6 +28,7 @@
 import {
   abstractTarget,
   perMemberEntries,
+  perMemberUpdateBodies,
   unwrapAbstractCreateNode,
 } from '../compilers/mutation.compiler';
 import { OGMError } from '../errors';
@@ -189,6 +190,27 @@ function walkUpdate(
             string,
             unknown
           >;
+          // v2.6.2 — a flat interface update keyed by implementing type:
+          // each body is that member's update, checked as one.
+          const memberBodies = perMemberUpdateBodies(
+            nodeUpdate,
+            abstractTarget(targetDef.typeName, schema),
+            targetDef,
+            key,
+          );
+          if (memberBodies) {
+            for (const [member, body] of memberBodies) {
+              const memberDef = schema.nodes.get(member)!;
+              evaluateWriteRestrictives(
+                targetBundle(bundle, member, 'update'),
+                member,
+                'update',
+                body,
+              );
+              walkUpdate(schema, memberDef, body, bundle, depth + 1);
+            }
+            continue;
+          }
           // A flat interface update may write any implementer: each one's
           // write restrictives must accept it.
           for (const typeName of concreteTypes(schema, targetDef))

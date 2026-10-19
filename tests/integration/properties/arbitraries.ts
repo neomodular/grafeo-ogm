@@ -24,7 +24,7 @@
  * fixed in v2.6.1 and is generated again.)
  *
  * Generated rarely or in the runtime shape, because the generated TYPES
- * offer a shape the runtime rejects with OGMError (F3 and the
+ * offer a shape the runtime rejects with OGMError (the
  * OGMError-documented limitations: edge filters in mutation connection
  * wheres, divergent connect-item shapes, multi-level cascade delete,
  * connection-level logical operators in typed-select wheres).
@@ -689,12 +689,18 @@ function updateNode(
   depth: number,
   path: UpdatePath,
 ): fc.Arbitrary<Rec> {
-  // FINDING F3 (types/runtime mismatch): the generated
-  // `ItPResourceUpdateInput` is keyed per member (`{ ItPChart: {...} }`),
-  // but the runtime rejects that shape with `Unknown field "ItPChart"` and
-  // only accepts flat interface fields. The flat runtime shape is generated
-  // so nested interface updates are still exercised.
-  if (def.kind === 'interface') return scalarBody('ItPResource', true);
+  // Both shapes: the generated `ItPResourceUpdateInput`, keyed per member
+  // (`{ ItPChart: {...} }`, accepted since v2.6.2 — finding F3), each body
+  // a full member update input; and the flat interface fields.
+  if (def.kind === 'interface')
+    return fc.oneof(
+      scalarBody('ItPResource', true),
+      someKeys(
+        Object.fromEntries(
+          def.members.map((m) => [m, updateBody(m, depth, path)]),
+        ),
+      ),
+    );
   return updateBody(member ?? def.members[0], depth, path);
 }
 

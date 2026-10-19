@@ -9,7 +9,7 @@ import { typecheckGenerated } from './helpers/generated-typecheck';
 jest.setTimeout(60_000);
 
 const usage = (body: string) => `
-import type { ItPTagDeleteInput } from './generated';
+import type { ItPTagDeleteInput, ItPTagUpdateInput } from './generated';
 ${body}
 `;
 
@@ -25,6 +25,31 @@ const del: ItPTagDeleteInput = {
   },
 };
 void del;
+`),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('F3: interface nested update with node keyed per member', async () => {
+    const { errors } = await typecheckGenerated(
+      typeDefs,
+      usage(`
+const upd: ItPTagUpdateInput = {
+  resources: [
+    {
+      update: {
+        node: {
+          ItPChart: {
+            name: 'chart',
+            categories: [{ disconnect: [{ where: { node: { id: 'k2' } } }] }],
+          },
+        },
+      },
+    },
+    { where: { node: { name: 'a' } }, update: { node: { ItPDrug: { rank: 9 } } } },
+  ],
+};
+void upd;
 `),
     );
     expect(errors).toEqual([]);

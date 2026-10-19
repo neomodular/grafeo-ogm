@@ -2872,6 +2872,49 @@ export class MutationCompiler {
                 `(e.g. { ${key}: { ${abstract.members[0] ?? 'Member'}: [{ where, update }] } }).`,
             );
 
+          // v2.6.2 — `node` keyed by implementing type: each member's body
+          // runs as that member's nested update (same `where`, same
+          // `edge`), exactly as `{ [key]: { Member: [{ where, update }] } }`.
+          const memberBodies = perMemberUpdateBodies(
+            nodeUpdate,
+            abstract,
+            targetNodeDef,
+            key,
+          );
+          if (memberBodies) {
+            lines.push(
+              ...this.dispatchUnionUpdateOps(
+                key,
+                memberBodies.map(([member, body]) => [
+                  member,
+                  [
+                    {
+                      ...(updateWhere !== undefined
+                        ? { where: updateWhere }
+                        : {}),
+                      update: {
+                        node: body,
+                        ...(edgeUpdate !== undefined
+                          ? { edge: edgeUpdate }
+                          : {}),
+                      },
+                    },
+                  ],
+                ]),
+                relDef,
+                nodeDef,
+                sourceVar,
+                `${itemPrefix}_upd`,
+                params,
+                depth,
+                ancestorVars,
+                policyContext,
+                paramCounter,
+              ),
+            );
+            continue;
+          }
+
           const updateVar = `${sourceVar}_u${varCounter}`;
           const relVar = `r_${key}_${i}`;
           varCounter++;
@@ -3312,6 +3355,49 @@ function perMemberDeleteEntries(
   return keys
     .filter((k) => spec[k] !== null)
     .map((k) => [k, spec[k]] as [string, unknown]);
+}
+
+/**
+ * v2.6.2 — the per-member bodies of a FLAT interface nested update whose
+ * `node` is keyed by implementing type (`{ node: { Chart: { … } } }`, the
+ * generated `<Interface>UpdateInput`), or `null` for the flat interface
+ * fields (`{ node: { name } }`). Pre-2.6.2 the typed shape threw
+ * `Unknown field "Chart"`. Member keys mixed with other keys throw.
+ */
+export function perMemberUpdateBodies(
+  nodeUpdate: unknown,
+  target: AbstractTarget | null,
+  targetDef: NodeDefinition,
+  fieldName: string,
+): [string, Record<string, unknown>][] | null {
+  if (!target || target.kind !== 'interface' || !isPlainObject(nodeUpdate))
+    return null;
+  const keys = Object.keys(nodeUpdate).filter(
+    (k) => nodeUpdate[k] !== undefined,
+  );
+  const isMember = (k: string) =>
+    target.members.includes(k) &&
+    !targetDef.properties.has(k) &&
+    !targetDef.relationships.has(k);
+  if (!keys.some(isMember)) return null;
+  const other = keys.filter((k) => !isMember(k));
+  if (other.length > 0)
+    throw new OGMError(
+      `Unknown key(s) ${other.map((k) => `"${k}"`).join(', ')} in the nested update of "${fieldName}" ` +
+        `(interface "${target.name}"): use either member keys (${target.members.map((m) => `"${m}"`).join(', ')}) ` +
+        `or the interface's fields, not both.`,
+    );
+  const bodies: [string, Record<string, unknown>][] = [];
+  for (const k of keys) {
+    const body = nodeUpdate[k];
+    if (body === null) continue;
+    if (!isPlainObject(body))
+      throw new OGMError(
+        `The "${k}" update of "${fieldName}" must be an object (the ${k} update input).`,
+      );
+    bodies.push([k, body]);
+  }
+  return bodies;
 }
 
 /**
