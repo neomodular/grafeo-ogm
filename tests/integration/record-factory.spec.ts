@@ -64,6 +64,27 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     '2024-07-01T10:00',
     '2024-07-01T10:00:00.987654321',
     '2024-07-01',
+    // v2.5.3 — `-00:00` is offset 0, not -0.
+    '2024-01-01T10:00:00-00:00',
+    // v2.5.3 — a wall time in a DST gap moves later by the gap.
+    '2024-03-10T02:30:00[America/New_York]',
+    '2024-03-31T02:30:00[Europe/Berlin]',
+    '2024-03-10T02:30:00.25[America/New_York]',
+    '2011-12-30T10:00:00[Pacific/Apia]',
+    // v2.5.3 — a DST overlap takes the earlier (larger) offset.
+    '2024-11-03T01:30:00[America/New_York]',
+    '2024-10-27T02:30:00[Europe/Berlin]',
+    '2024-04-07T02:30:00[Australia/Sydney]',
+    // v2.5.3 — years 0–99 and BC years with a zone id (local mean time).
+    '0050-01-01T00:00:00[Europe/London]',
+    '0001-01-01T00:00:00[Europe/Berlin]',
+    '-0001-06-01T00:00:00[Europe/Berlin]',
+    '0999-05-05T05:05:05[Asia/Tokyo]',
+    // v2.5.3 — the basic (separator-less) format.
+    '20240101T100000Z',
+    '20240101T1000Z',
+    '20240101',
+    '20240101T100000.5+0200',
   ])('matches the driver for %s', async (iso) => {
     const session = driver.session();
     let fromDriver: Record<string, unknown>;
