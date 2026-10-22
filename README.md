@@ -2254,7 +2254,7 @@ const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00.123456789+02:00');
 
 // v2.9.0 — { strict: true } (the default in 3.0) also matches Neo4j where
 // the 2.x default keeps its v2.8.0 value: it throws where Neo4j rejects the
-// string and spells zone ids as Neo4j does. See Strict mode, item 16.
+// string and spells zone ids as Neo4j does. See Strict mode, item 21.
 Neo4jRecordFactory.dateTime('2024-07-01T10:00:00[europe/berlin]', { strict: true });
 // => 2024-07-01T10:00:00+02:00[Europe/Berlin]  (default: [europe/berlin], and warns)
 Neo4jRecordFactory.dateTime('2024-07-01T10:00:00Z[Europe/Berlin]', { strict: true });
