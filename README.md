@@ -1039,7 +1039,7 @@ await Book.update({
 });
 ```
 
-- **Order within an item**: `delete`, `disconnect`, `connect`, `create`, `update`. So `disconnect: [{}]` + `create` replaces the relationship set. This is **not** the `@neo4j/graphql` 5.x order, which runs `update` before `connect` / `create` (`delete`, `disconnect`, `update`, `connect`, `create`). In 2.x an item's `update` therefore also matches the nodes its own `connect` / `create` just linked. To update only the existing relationships, put the `update` in an earlier item of the same field (items run in array order).
+- **Order within an item**: `delete`, `disconnect`, `connect`, `create`, `update`. So `disconnect: [{}]` + `create` replaces the relationship set. This is **not** the `@neo4j/graphql` 5.x order, which runs `update` before `connect` / `create` (`delete`, `disconnect`, `update`, `connect`, `create`). In 2.x an item's `update` therefore also matches the nodes its own `connect` / `create` just linked. To update only the existing relationships, put the `update` in an earlier item of the same field (items run in array order), or turn on [strict mode](#19-update-before-connect--create-in-a-nested-update-item-since-290), which takes the `@neo4j/graphql` order.
 - **Nested connect / disconnect** recurse: `connect: { posts: [{ where, connect: { tags: [...] } }] }` links the post *and* its tags (max 5 levels).
 - **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
 - With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
@@ -1270,6 +1270,20 @@ await feeds.find({
 ```
 
 A relationship selected on a union type compiles to one branch per member, and before 2.8.0 the branches never read the typed `where` or `orderBy`. In strict mode each member applies them to its own relationship. The `selectionSet` form (`items { ... on Post { tags(where: …) { … } } }`) is not affected: it throws `OGMError` (since 2.5.0) rather than ignoring the arguments.
+
+#### 19. `update` before `connect` / `create` in a nested update item (since 2.9.0)
+
+```typescript
+// the user wrote post A ("old"); post B ("old") is not linked yet
+await users.update({
+  where: { id },
+  update: { posts: [{ where: { node: { title: 'old' } }, update: { node: { title: 'new' } }, connect: [{ where: { node: { id: 'B' } } }] }] },
+});
+// default: A and B are both renamed — connect runs first, so the update also matches B (and warns)
+// strict:  only A is renamed — update runs first, on the existing relationships, as in @neo4j/graphql
+```
+
+By default the ops of one item run as `delete`, `disconnect`, `connect`, `create`, `update`. Strict mode runs `delete`, `disconnect`, `update`, `connect`, `create`, the `@neo4j/graphql` 5.x order. The warning is logged only for an item that has `update` together with `connect` or `create`. Items still run in array order in both modes.
 
 #### Not behind the switch: `aggregate` on list fields
 

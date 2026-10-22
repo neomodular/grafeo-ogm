@@ -2972,363 +2972,399 @@ export class MutationCompiler {
           }
         }
 
-        // --- connect ---
-        if (item.connect) {
-          const connectItems = Array.isArray(item.connect)
-            ? (item.connect as Record<string, unknown>[])
-            : [item.connect as Record<string, unknown>];
+        // v2.9.0 — `connect` + `create` and the nested `update` are emitted
+        // by these two closures, in an order that depends on strict mode
+        // (see the end of the item loop).
+        const emitLinks = (): void => {
+          // --- connect ---
+          if (item.connect) {
+            const connectItems = Array.isArray(item.connect)
+              ? (item.connect as Record<string, unknown>[])
+              : [item.connect as Record<string, unknown>];
 
-          for (let ci = 0; ci < connectItems.length; ci++) {
-            // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline
-            const connectVar = `${sourceVar}_conn${varCounter}`;
-            varCounter++;
-            lines.push(
-              ...this.buildConnectItem({
-                connectSpec: connectItems[ci],
-                relDef,
-                targetNodeDef,
-                sourceVar,
-                withClause,
-                connectVar,
-                relVar: `r_conn_${key}_${ci}`,
-                edgeParamPrefix: `${itemPrefix}_conn${ci}`,
-                returnAlias: `_cn_${key}_${ci}`,
+            for (let ci = 0; ci < connectItems.length; ci++) {
+              // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline
+              const connectVar = `${sourceVar}_conn${varCounter}`;
+              varCounter++;
+              lines.push(
+                ...this.buildConnectItem({
+                  connectSpec: connectItems[ci],
+                  relDef,
+                  targetNodeDef,
+                  sourceVar,
+                  withClause,
+                  connectVar,
+                  relVar: `r_conn_${key}_${ci}`,
+                  edgeParamPrefix: `${itemPrefix}_conn${ci}`,
+                  returnAlias: `_cn_${key}_${ci}`,
+                  params,
+                  policyContext,
+                  paramCounter,
+                  scope: {
+                    sourceVar,
+                    carryVars: allVars,
+                    withClause,
+                    varPrefix: '',
+                    depth: 0,
+                  },
+                }),
+              );
+            }
+          }
+
+          // --- create ---
+          // Runs after disconnect and connect (as in @neo4j/graphql), so a
+          // same-item `disconnect: [{}]` + `create` keeps the new node linked.
+          // Pre-2.4.2 create ran first and the disconnect-all removed it.
+          if (item.create) {
+            const createItems = Array.isArray(item.create)
+              ? (item.create as Record<string, unknown>[])
+              : [item.create as Record<string, unknown>];
+
+            for (let ci = 0; ci < createItems.length; ci++) {
+              const createSpec = createItems[ci];
+              let nodeSpec = (createSpec.node ?? createSpec) as Record<
+                string,
+                unknown
+              >;
+              // Flat interface input: the create names its implementer.
+              let createDef = targetNodeDef;
+              if (abstract) {
+                const [member, memberSpec] = unwrapAbstractCreateNode(
+                  nodeSpec,
+                  abstract,
+                  key,
+                );
+                createDef = this.schema.nodes.get(member)!;
+                nodeSpec = memberSpec;
+              }
+              const targetLabelStr = this.getCachedLabelString(createDef);
+
+              const createVar = `${sourceVar}_cr${varCounter}`;
+              varCounter++;
+
+              const { propString, propParams } = this.buildCreateProperties(
+                nodeSpec,
+                createDef,
+                `${itemPrefix}_create${ci}`,
+              );
+
+              // Handle nested relationship creates within the created node
+              const nestedRelLines = this.buildCreateRelationships(
+                nodeSpec,
+                createDef,
+                createVar,
+                `${itemPrefix}_create${ci}`,
                 params,
+                allVars,
                 policyContext,
                 paramCounter,
-                scope: {
-                  sourceVar,
-                  carryVars: allVars,
-                  withClause,
-                  varPrefix: '',
-                  depth: 0,
-                },
-              }),
-            );
-          }
-        }
-
-        // --- create ---
-        // Runs after disconnect and connect (as in @neo4j/graphql), so a
-        // same-item `disconnect: [{}]` + `create` keeps the new node linked.
-        // Pre-2.4.2 create ran first and the disconnect-all removed it.
-        if (item.create) {
-          const createItems = Array.isArray(item.create)
-            ? (item.create as Record<string, unknown>[])
-            : [item.create as Record<string, unknown>];
-
-          for (let ci = 0; ci < createItems.length; ci++) {
-            const createSpec = createItems[ci];
-            let nodeSpec = (createSpec.node ?? createSpec) as Record<
-              string,
-              unknown
-            >;
-            // Flat interface input: the create names its implementer.
-            let createDef = targetNodeDef;
-            if (abstract) {
-              const [member, memberSpec] = unwrapAbstractCreateNode(
-                nodeSpec,
-                abstract,
-                key,
               );
-              createDef = this.schema.nodes.get(member)!;
-              nodeSpec = memberSpec;
-            }
-            const targetLabelStr = this.getCachedLabelString(createDef);
 
-            const createVar = `${sourceVar}_cr${varCounter}`;
+              const propsClause =
+                propString.length > 0
+                  ? ` { ${propString} }`
+                  : ` { ${this.buildGeneratedIdClause(createDef)} }`;
+
+              // `edge` properties on the new relationship — the same input
+              // create() accepts. Pre-2.4.5 this path never read
+              // `createSpec.edge`, so they were silently dropped.
+              const edgeInput = createSpec.edge as
+                | Record<string, unknown>
+                | undefined;
+              this.checkEdgeKeys(relDef, edgeInput, 'nested create');
+              const edgeEntries = Object.entries(edgeInput ?? {}).filter(
+                ([, v]) => v !== undefined,
+              );
+              const defaultItems = this.edgeDefaultSetItems(
+                relDef,
+                edgeInput,
+                `${createVar}_e`,
+                `${itemPrefix}_create${ci}`,
+                params,
+              );
+              const edgeVar =
+                edgeEntries.length || defaultItems.length
+                  ? `${createVar}_e`
+                  : undefined;
+
+              const relPattern = buildRelPattern({
+                sourceVar,
+                relDef,
+                targetVar: createVar,
+                edgeVar,
+              });
+
+              // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
+              const hasNestedOps = nestedRelLines.length > 0;
+              if (hasNestedOps) {
+                lines.push(withClause);
+                lines.push(`CALL {`);
+                lines.push(withClause);
+              } else lines.push(withClause);
+
+              lines.push(
+                `CREATE (${createVar}:${targetLabelStr}${propsClause})`,
+              );
+              mergeParams(params, propParams);
+              lines.push(`CREATE ${relPattern}`);
+
+              if (edgeVar) {
+                const setItems = edgeEntries.map(([prop, val]) => {
+                  assertSafePropertyName(prop, 'edge property');
+                  const edgePropDef = this.getEdgePropDef(relDef, prop);
+                  const paramName = `${itemPrefix}_create${ci}_edge_${prop}`;
+                  params[paramName] = coerceWriteValue(val, edgePropDef);
+                  return `${edgeVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
+                    `$${paramName}`,
+                    val,
+                    edgePropDef,
+                  )}`;
+                });
+                setItems.push(...defaultItems);
+                lines.push(`SET ${setItems.join(', ')}`);
+              }
+
+              if (hasNestedOps) {
+                lines.push(...nestedRelLines);
+                lines.push(`RETURN count(*) AS _cc_${key}_${ci}`);
+                lines.push(`}`);
+              }
+            }
+          }
+        };
+
+        const emitUpdate = (): void => {
+          // --- update (nested) ---
+          if (item.update) {
+            const updateSpec = item.update as Record<string, unknown>;
+            const edgeUpdate = updateSpec.edge as
+              | Record<string, unknown>
+              | undefined;
+            const nodeUpdate = (updateSpec.node ??
+              (edgeUpdate ? {} : updateSpec)) as Record<string, unknown>;
+            const updateWhere = item.where as
+              | Record<string, unknown>
+              | undefined;
+            // A flat interface update writes the interface's own fields; the
+            // per-implementer `_on` form is not supported (v2.4.8).
+            if (abstract && isPlainObject(nodeUpdate) && '_on' in nodeUpdate)
+              throw new OGMError(
+                `"_on" in a nested update of "${key}" is not supported. Key the update by implementing type instead ` +
+                  `(e.g. { ${key}: { ${abstract.members[0] ?? 'Member'}: [{ where, update }] } }).`,
+              );
+
+            // v2.6.2 — `node` keyed by implementing type: each member's body
+            // runs as that member's nested update (same `where`, same
+            // `edge`), exactly as `{ [key]: { Member: [{ where, update }] } }`.
+            const memberBodies = perMemberUpdateBodies(
+              nodeUpdate,
+              abstract,
+              targetNodeDef,
+              key,
+            );
+            if (memberBodies) {
+              lines.push(
+                ...this.dispatchUnionUpdateOps(
+                  key,
+                  memberBodies.map(([member, body]) => [
+                    member,
+                    [
+                      {
+                        ...(updateWhere !== undefined
+                          ? { where: updateWhere }
+                          : {}),
+                        update: {
+                          node: body,
+                          ...(edgeUpdate !== undefined
+                            ? { edge: edgeUpdate }
+                            : {}),
+                        },
+                      },
+                    ],
+                  ]),
+                  relDef,
+                  nodeDef,
+                  sourceVar,
+                  `${itemPrefix}_upd`,
+                  params,
+                  depth,
+                  ancestorVars,
+                  policyContext,
+                  paramCounter,
+                  deleted,
+                  state,
+                  iterated,
+                ),
+              );
+              return;
+            }
+
+            const updateVar = `${sourceVar}_u${varCounter}`;
+            const relVar = `r_${key}_${i}`;
             varCounter++;
 
-            const { propString, propParams } = this.buildCreateProperties(
-              nodeSpec,
-              createDef,
-              `${itemPrefix}_create${ci}`,
-            );
+            // Pre-compute SET clauses for node properties
+            const setClauses: string[] = [];
+            const setParams: Record<string, unknown> = {};
+            for (const [prop, val] of Object.entries(nodeUpdate)) {
+              if (targetNodeDef.relationships.has(prop)) continue;
+              if (val === undefined) continue;
+              assertSafePropertyName(prop, 'nested update property');
+              assertKnownField(targetNodeDef, prop, 'nested update');
+              const nodePropDef = targetNodeDef.properties.get(prop);
+              const paramName = `${itemPrefix}_set_${prop}`;
+              setClauses.push(
+                `${updateVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
+                  `$${paramName}`,
+                  val,
+                  nodePropDef,
+                )}`,
+              );
+              setParams[paramName] = coerceWriteValue(val, nodePropDef);
+            }
 
-            // Handle nested relationship creates within the created node
-            const nestedRelLines = this.buildCreateRelationships(
-              nodeSpec,
-              createDef,
-              createVar,
-              `${itemPrefix}_create${ci}`,
-              params,
+            // Pre-compute SET clauses for edge (relationship) properties
+            const edgeClauses: string[] = [];
+            const edgeParams: Record<string, unknown> = {};
+            this.checkEdgeKeys(relDef, edgeUpdate, 'nested update');
+            if (edgeUpdate)
+              for (const [prop, val] of Object.entries(edgeUpdate)) {
+                if (val === undefined) continue;
+                assertSafePropertyName(prop, 'edge update property');
+                const edgePropDef = this.getEdgePropDef(relDef, prop);
+                const paramName = `${itemPrefix}_edge_${prop}`;
+                edgeClauses.push(
+                  `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
+                    `$${paramName}`,
+                    val,
+                    edgePropDef,
+                  )}`,
+                );
+                edgeParams[paramName] = coerceWriteValue(val, edgePropDef);
+              }
+
+            // Pre-compute nested relationship operations
+            const nestedParams: Record<string, unknown> = {};
+            const nestedDeleted = new Set<string>();
+            const nestedRelLines = this.buildUpdateRelationships(
+              nodeUpdate,
+              targetNodeDef,
+              updateVar,
+              itemPrefix,
+              nestedParams,
+              depth + 1,
               allVars,
               policyContext,
               paramCounter,
+              nestedDeleted,
+              state,
+              [...iterated, field],
             );
 
-            const propsClause =
-              propString.length > 0
-                ? ` { ${propString} }`
-                : ` { ${this.buildGeneratedIdClause(createDef)} }`;
-
-            // `edge` properties on the new relationship — the same input
-            // create() accepts. Pre-2.4.5 this path never read
-            // `createSpec.edge`, so they were silently dropped.
-            const edgeInput = createSpec.edge as
-              | Record<string, unknown>
-              | undefined;
-            this.checkEdgeKeys(relDef, edgeInput, 'nested create');
-            const edgeEntries = Object.entries(edgeInput ?? {}).filter(
-              ([, v]) => v !== undefined,
-            );
-            const defaultItems = this.edgeDefaultSetItems(
-              relDef,
-              edgeInput,
-              `${createVar}_e`,
-              `${itemPrefix}_create${ci}`,
-              params,
-            );
-            const edgeVar =
-              edgeEntries.length || defaultItems.length
-                ? `${createVar}_e`
-                : undefined;
-
-            const relPattern = buildRelPattern({
-              sourceVar,
-              relDef,
-              targetVar: createVar,
-              edgeVar,
-            });
-
-            // Wrap in CALL subquery so failed connect MATCHes don't kill the outer pipeline
-            const hasNestedOps = nestedRelLines.length > 0;
-            if (hasNestedOps) {
+            // Only emit the MATCH block if there's actual work to do
+            const hasWork =
+              setClauses.length > 0 ||
+              edgeClauses.length > 0 ||
+              nestedRelLines.length > 0;
+            if (hasWork) {
+              // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline.
+              // RETURN count(*) ensures exactly 1 row is returned even if MATCH finds nothing.
+              // WITH is required before CALL (Neo4j syntax rule after CREATE/DELETE/SET).
               lines.push(withClause);
               lines.push(`CALL {`);
               lines.push(withClause);
-            } else lines.push(withClause);
 
-            lines.push(`CREATE (${createVar}:${targetLabelStr}${propsClause})`);
-            mergeParams(params, propParams);
-            lines.push(`CREATE ${relPattern}`);
-
-            if (edgeVar) {
-              const setItems = edgeEntries.map(([prop, val]) => {
-                assertSafePropertyName(prop, 'edge property');
-                const edgePropDef = this.getEdgePropDef(relDef, prop);
-                const paramName = `${itemPrefix}_create${ci}_edge_${prop}`;
-                params[paramName] = coerceWriteValue(val, edgePropDef);
-                return `${edgeVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                  `$${paramName}`,
-                  val,
-                  edgePropDef,
-                )}`;
-              });
-              setItems.push(...defaultItems);
-              lines.push(`SET ${setItems.join(', ')}`);
-            }
-
-            if (hasNestedOps) {
-              lines.push(...nestedRelLines);
-              lines.push(`RETURN count(*) AS _cc_${key}_${ci}`);
-              lines.push(`}`);
-            }
-          }
-        }
-
-        // --- update (nested) ---
-        if (item.update) {
-          const updateSpec = item.update as Record<string, unknown>;
-          const edgeUpdate = updateSpec.edge as
-            | Record<string, unknown>
-            | undefined;
-          const nodeUpdate = (updateSpec.node ??
-            (edgeUpdate ? {} : updateSpec)) as Record<string, unknown>;
-          const updateWhere = item.where as Record<string, unknown> | undefined;
-          // A flat interface update writes the interface's own fields; the
-          // per-implementer `_on` form is not supported (v2.4.8).
-          if (abstract && isPlainObject(nodeUpdate) && '_on' in nodeUpdate)
-            throw new OGMError(
-              `"_on" in a nested update of "${key}" is not supported. Key the update by implementing type instead ` +
-                `(e.g. { ${key}: { ${abstract.members[0] ?? 'Member'}: [{ where, update }] } }).`,
-            );
-
-          // v2.6.2 — `node` keyed by implementing type: each member's body
-          // runs as that member's nested update (same `where`, same
-          // `edge`), exactly as `{ [key]: { Member: [{ where, update }] } }`.
-          const memberBodies = perMemberUpdateBodies(
-            nodeUpdate,
-            abstract,
-            targetNodeDef,
-            key,
-          );
-          if (memberBodies) {
-            lines.push(
-              ...this.dispatchUnionUpdateOps(
-                key,
-                memberBodies.map(([member, body]) => [
-                  member,
-                  [
-                    {
-                      ...(updateWhere !== undefined
-                        ? { where: updateWhere }
-                        : {}),
-                      update: {
-                        node: body,
-                        ...(edgeUpdate !== undefined
-                          ? { edge: edgeUpdate }
-                          : {}),
-                      },
-                    },
-                  ],
-                ]),
-                relDef,
-                nodeDef,
+              const relArrow = buildRelPattern({
                 sourceVar,
-                `${itemPrefix}_upd`,
-                params,
-                depth,
-                ancestorVars,
-                policyContext,
-                paramCounter,
-                deleted,
-                state,
-                iterated,
-              ),
-            );
-            continue;
-          }
+                relDef,
+                targetVar: updateVar,
+                edgeVar: relVar,
+                targetLabel: 'auto',
+                schema: this.schema,
+              });
+              lines.push(`MATCH ${relArrow}`);
 
-          const updateVar = `${sourceVar}_u${varCounter}`;
-          const relVar = `r_${key}_${i}`;
-          varCounter++;
+              // WHERE on the target.
+              // v1.8.7 — pre-1.8.7 this unwrapped `(updateWhere.node ??
+              // updateWhere)` and compiled EVERY key as plain equality, so
+              // operator suffixes became non-existent property lookups
+              // (`u.\`name_CONTAINS\` = $p` — matches nothing, silent
+              // no-op) and `AND`/`OR`/`NOT` became bogus property
+              // predicates. The disconnect (v1.8.1) and connect (v1.8.1)
+              // siblings were already routed through the connection-aware
+              // compiler; this was the missed third sibling. The param
+              // prefix is chosen so the legacy plain-equality case keeps
+              // byte-identical param names (`${itemPrefix}_where_${prop}`).
+              // v2.3.0 — the nested update is row-filtered by the TARGET's
+              // `update` policy, exactly like a direct update on that type
+              // (pre-2.3.0 it enforced no target policy at all).
+              const updateConditions = [
+                // v2.5.1 — restrict an interface / union target to its member
+                // types; without it the nested update also SET properties on
+                // other nodes on the same relationship type.
+                this.targetMatch(targetNodeDef, updateVar).labelPredicate,
+                this.compileTargetWhere(
+                  updateWhere,
+                  updateVar,
+                  targetNodeDef,
+                  params,
+                  policyContext,
+                  paramCounter,
+                ),
+                this.buildTargetPolicyPredicate(
+                  targetNodeDef,
+                  updateVar,
+                  params,
+                  policyContext,
+                  paramCounter,
+                  'update',
+                ),
+              ].filter((c): c is string => Boolean(c));
+              if (updateConditions.length > 0)
+                lines.push(`WHERE ${updateConditions.join(' AND ')}`);
 
-          // Pre-compute SET clauses for node properties
-          const setClauses: string[] = [];
-          const setParams: Record<string, unknown> = {};
-          for (const [prop, val] of Object.entries(nodeUpdate)) {
-            if (targetNodeDef.relationships.has(prop)) continue;
-            if (val === undefined) continue;
-            assertSafePropertyName(prop, 'nested update property');
-            assertKnownField(targetNodeDef, prop, 'nested update');
-            const nodePropDef = targetNodeDef.properties.get(prop);
-            const paramName = `${itemPrefix}_set_${prop}`;
-            setClauses.push(
-              `${updateVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                `$${paramName}`,
-                val,
-                nodePropDef,
-              )}`,
-            );
-            setParams[paramName] = coerceWriteValue(val, nodePropDef);
-          }
+              if (setClauses.length > 0)
+                lines.push(`SET ${setClauses.join(', ')}`);
+              mergeParams(params, setParams);
 
-          // Pre-compute SET clauses for edge (relationship) properties
-          const edgeClauses: string[] = [];
-          const edgeParams: Record<string, unknown> = {};
-          this.checkEdgeKeys(relDef, edgeUpdate, 'nested update');
-          if (edgeUpdate)
-            for (const [prop, val] of Object.entries(edgeUpdate)) {
-              if (val === undefined) continue;
-              assertSafePropertyName(prop, 'edge update property');
-              const edgePropDef = this.getEdgePropDef(relDef, prop);
-              const paramName = `${itemPrefix}_edge_${prop}`;
-              edgeClauses.push(
-                `${relVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(
-                  `$${paramName}`,
-                  val,
-                  edgePropDef,
-                )}`,
-              );
-              edgeParams[paramName] = coerceWriteValue(val, edgePropDef);
+              if (edgeClauses.length > 0)
+                lines.push(`SET ${edgeClauses.join(', ')}`);
+              mergeParams(params, edgeParams);
+
+              mergeParams(params, nestedParams);
+              lines.push(...nestedRelLines);
+
+              lines.push(`RETURN count(*) AS _uc_${key}_${i}`);
+              lines.push(`}`);
+              guardAfter(nestedDeleted);
             }
-
-          // Pre-compute nested relationship operations
-          const nestedParams: Record<string, unknown> = {};
-          const nestedDeleted = new Set<string>();
-          const nestedRelLines = this.buildUpdateRelationships(
-            nodeUpdate,
-            targetNodeDef,
-            updateVar,
-            itemPrefix,
-            nestedParams,
-            depth + 1,
-            allVars,
-            policyContext,
-            paramCounter,
-            nestedDeleted,
-            state,
-            [...iterated, field],
-          );
-
-          // Only emit the MATCH block if there's actual work to do
-          const hasWork =
-            setClauses.length > 0 ||
-            edgeClauses.length > 0 ||
-            nestedRelLines.length > 0;
-          if (hasWork) {
-            // Wrap in CALL subquery so a failed MATCH doesn't kill the outer pipeline.
-            // RETURN count(*) ensures exactly 1 row is returned even if MATCH finds nothing.
-            // WITH is required before CALL (Neo4j syntax rule after CREATE/DELETE/SET).
-            lines.push(withClause);
-            lines.push(`CALL {`);
-            lines.push(withClause);
-
-            const relArrow = buildRelPattern({
-              sourceVar,
-              relDef,
-              targetVar: updateVar,
-              edgeVar: relVar,
-              targetLabel: 'auto',
-              schema: this.schema,
-            });
-            lines.push(`MATCH ${relArrow}`);
-
-            // WHERE on the target.
-            // v1.8.7 — pre-1.8.7 this unwrapped `(updateWhere.node ??
-            // updateWhere)` and compiled EVERY key as plain equality, so
-            // operator suffixes became non-existent property lookups
-            // (`u.\`name_CONTAINS\` = $p` — matches nothing, silent
-            // no-op) and `AND`/`OR`/`NOT` became bogus property
-            // predicates. The disconnect (v1.8.1) and connect (v1.8.1)
-            // siblings were already routed through the connection-aware
-            // compiler; this was the missed third sibling. The param
-            // prefix is chosen so the legacy plain-equality case keeps
-            // byte-identical param names (`${itemPrefix}_where_${prop}`).
-            // v2.3.0 — the nested update is row-filtered by the TARGET's
-            // `update` policy, exactly like a direct update on that type
-            // (pre-2.3.0 it enforced no target policy at all).
-            const updateConditions = [
-              // v2.5.1 — restrict an interface / union target to its member
-              // types; without it the nested update also SET properties on
-              // other nodes on the same relationship type.
-              this.targetMatch(targetNodeDef, updateVar).labelPredicate,
-              this.compileTargetWhere(
-                updateWhere,
-                updateVar,
-                targetNodeDef,
-                params,
-                policyContext,
-                paramCounter,
-              ),
-              this.buildTargetPolicyPredicate(
-                targetNodeDef,
-                updateVar,
-                params,
-                policyContext,
-                paramCounter,
-                'update',
-              ),
-            ].filter((c): c is string => Boolean(c));
-            if (updateConditions.length > 0)
-              lines.push(`WHERE ${updateConditions.join(' AND ')}`);
-
-            if (setClauses.length > 0)
-              lines.push(`SET ${setClauses.join(', ')}`);
-            mergeParams(params, setParams);
-
-            if (edgeClauses.length > 0)
-              lines.push(`SET ${edgeClauses.join(', ')}`);
-            mergeParams(params, edgeParams);
-
-            mergeParams(params, nestedParams);
-            lines.push(...nestedRelLines);
-
-            lines.push(`RETURN count(*) AS _uc_${key}_${i}`);
-            lines.push(`}`);
-            guardAfter(nestedDeleted);
           }
+        };
+
+        // v2.9.0 — order of `update` against `connect` / `create`. 2.x runs
+        // the nested `update` last (delete, disconnect, connect, create,
+        // update), so its MATCH also reaches the nodes this item just
+        // linked. @neo4j/graphql 5.x runs it before them (delete,
+        // disconnect, update, connect, create), so it only touches the
+        // relationships that existed before. Strict mode takes the
+        // @neo4j/graphql order; default mode keeps the 2.x Cypher byte for
+        // byte and warns once per field when the item has both.
+        if (this.strictMode.strict) {
+          emitUpdate();
+          emitLinks();
+        } else {
+          if (item.update && (item.connect || item.create))
+            this.strictMode.warn(
+              'nested-update-op-order',
+              field,
+              `A nested update item on "${field}" has \`update\` together with \`connect\` / \`create\`. ` +
+                `2.x runs \`connect\` / \`create\` before \`update\`, so the update also matches the nodes ` +
+                `the same item just linked (@neo4j/graphql runs \`update\` first, on the existing relationships only).`,
+              'run the `update` before the `connect` / `create` of the same item, as @neo4j/graphql does',
+            );
+          emitLinks();
+          emitUpdate();
         }
       }
     }
