@@ -9,6 +9,9 @@
  * `create` just linked, and one warning is logged. `strict: true` takes the
  * @neo4j/graphql 5.x order (delete, disconnect, update, connect, create):
  * the `update` only touches the relationships that existed before.
+ *
+ * The same holds for the root `update()` arguments: by default the root
+ * `disconnect` runs after the `update` body, under strict mode before it.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -30,6 +33,8 @@ const typeDefs = /* GraphQL */ `
     id: ID! @unique
     runId: String
     title: String
+    authors: [ItOpOrderUser!]!
+      @relationship(type: "IT_OP_ORDER_WROTE", direction: IN)
   }
 `;
 
@@ -203,5 +208,132 @@ describeLive('Nested update item op order — live Neo4j', () => {
     expect(
       await run('MATCH (p:ItOpOrderPost {id: $d}) RETURN p', { d }),
     ).toEqual([]);
+  });
+
+  // --- root update() arguments ---------------------------------------------
+
+  const rootWarnings = (w: string[]) =>
+    w.filter((m) => m.includes('runs the root `disconnect` after'));
+
+  async function title(postId: string): Promise<string | undefined> {
+    const rows = await run(
+      'MATCH (p:ItOpOrderPost {id: $postId}) RETURN p.title AS title',
+      { postId },
+    );
+    return rows[0]?.title as string | undefined;
+  }
+
+  /** Seed, then also link post `b`, so the user has `a` and `b` ("old"). */
+  async function seedTwo() {
+    const s = await seed();
+    await run(
+      `MATCH (u:ItOpOrderUser {id: $u}), (b:ItOpOrderPost {id: $b})
+       CREATE (u)-[:IT_OP_ORDER_WROTE]->(b)`,
+      s,
+    );
+    return s;
+  }
+
+  async function rootDisconnectUpdate(strict?: boolean) {
+    const { u, a, b } = await seedTwo();
+    const { ogm, warnings } = makeOgm(strict);
+    await ogm.model('ItOpOrderUser').update({
+      where: { id: u },
+      update: { posts: [{ update: { node: { title: 'new' } } }] },
+      disconnect: { posts: [{ where: { node: { id: a } } }] },
+    });
+    return { linked: await posts(u), aTitle: await title(a), b, warnings };
+  }
+
+  it('root, default: the nested update also renames the post the root disconnect unlinks (and warns)', async () => {
+    const { linked, aTitle, b, warnings } = await rootDisconnectUpdate();
+    expect(linked).toEqual({ [b]: 'new' });
+    expect(aTitle).toBe('new');
+    expect(rootWarnings(warnings)).toHaveLength(1);
+  });
+
+  it('root, strict: the root disconnect runs first, so the unlinked post keeps its title', async () => {
+    const { linked, aTitle, b, warnings } = await rootDisconnectUpdate(true);
+    expect(linked).toEqual({ [b]: 'new' });
+    expect(aTitle).toBe('old');
+    expect(warnings).toEqual([]);
+  });
+
+  async function rootBlanketDisconnectCreate(strict?: boolean) {
+    const { u } = await seedTwo();
+    const { ogm, warnings } = makeOgm(strict);
+    const c = id('c');
+    await ogm.model('ItOpOrderUser').update({
+      where: { id: u },
+      update: { posts: [{ create: [{ node: { id: c, runId, title: 'n' } }] }] },
+      disconnect: { posts: null },
+    });
+    return { linked: await posts(u), c, warnings };
+  }
+
+  it('root, default: a blanket root disconnect also unlinks the post the nested create added (and warns)', async () => {
+    const { linked, warnings } = await rootBlanketDisconnectCreate();
+    expect(linked).toEqual({});
+    expect(rootWarnings(warnings)).toHaveLength(1);
+  });
+
+  it('root, strict: the blanket root disconnect runs first and the created post stays linked', async () => {
+    const { linked, c } = await rootBlanketDisconnectCreate(true);
+    expect(linked).toEqual({ [c]: 'n' });
+  });
+
+  async function rootDisconnectDelete(strict?: boolean) {
+    const { u, a } = await seed();
+    const { ogm } = makeOgm(strict);
+    await ogm.model('ItOpOrderUser').update({
+      where: { id: u },
+      update: { posts: [{ delete: [{ where: { node: { id: a } } }] }] },
+      disconnect: { posts: [{ where: { node: { id: a } } }] },
+    });
+    return { aTitle: await title(a), linked: await posts(u) };
+  }
+
+  it('root, default: the nested delete runs first and deletes the post', async () => {
+    expect(await rootDisconnectDelete()).toEqual({
+      aTitle: undefined,
+      linked: {},
+    });
+  });
+
+  it('root, strict: the root disconnect runs first, so the nested delete no longer reaches the post', async () => {
+    expect(await rootDisconnectDelete(true)).toEqual({
+      aTitle: 'old',
+      linked: {},
+    });
+  });
+
+  it('root, strict: a cycle delete of the root after the root disconnect is guarded (F1)', async () => {
+    const { u, a, b } = await seedTwo();
+    const { ogm } = makeOgm(true);
+    const res = await ogm.model('ItOpOrderUser').update({
+      where: { id: u },
+      update: {
+        posts: [
+          {
+            where: { node: { id: b } },
+            update: { node: { authors: [{ delete: [{}] }] } },
+          },
+        ],
+      },
+      disconnect: { posts: [{ where: { node: { id: a } } }] },
+      connect: { posts: [{ where: { node: { id: a } } }] },
+      selectionSet: '{ id }',
+    });
+    expect(res.itOpOrderUsers).toEqual([]);
+    expect(
+      await run('MATCH (n:ItOpOrderUser {id: $u}) RETURN n', { u }),
+    ).toEqual([]);
+    // The post the root disconnect unlinked was not re-linked to anything.
+    expect(
+      await run(
+        'MATCH (:ItOpOrderPost {id: $a})<-[r]-() RETURN count(r) AS c',
+        { a },
+      ),
+    ).toEqual([{ c: 0 }]);
   });
 });

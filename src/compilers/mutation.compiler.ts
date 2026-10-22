@@ -771,6 +771,25 @@ export class MutationCompiler {
 
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
+    // Disconnect relationships (top-level) — must run before connects
+    // so that blanket disconnects don't remove newly-connected relationships.
+    // v2.9.0 — strict mode emits it here, before the `update` body, as
+    // @neo4j/graphql 5.x does (delete, disconnect, update, connect,
+    // create). Default mode keeps the 2.x position, after the body.
+    const emitDisconnect = (): void => {
+      if (!disconnect) return;
+      lines.push(
+        ...this.buildDisconnects(
+          disconnect,
+          nodeDef,
+          params,
+          policyContext,
+          counter,
+        ),
+      );
+    };
+    if (this.strictMode.strict) emitDisconnect();
+
     // SET properties
     if (update && Object.keys(update).length > 0) {
       const setClauses: string[] = [];
@@ -830,17 +849,22 @@ export class MutationCompiler {
         'leave the deleted roots out of the count and skip the remaining writes of a deleted node',
       );
 
-    // Disconnect relationships (top-level) — must run before connects
-    // so that blanket disconnects don't remove newly-connected relationships.
-    if (disconnect) {
-      const disconnectLines = this.buildDisconnects(
+    if (!this.strictMode.strict) {
+      for (const field of this.rootDisconnectOrderFields(
+        update,
         disconnect,
         nodeDef,
-        params,
-        policyContext,
-        counter,
-      );
-      lines.push(...disconnectLines);
+      ))
+        this.strictMode.warn(
+          'update-op-order',
+          `${nodeDef.typeName}.${field}`,
+          `${returnMode === 'count' ? 'updateMany' : 'update'} on ${nodeDef.typeName} has a root \`disconnect\` and a nested ` +
+            `update / connect / create / delete on "${nodeDef.typeName}.${field}" (same relationship type). 2.x runs the root ` +
+            `\`disconnect\` after the \`update\` body, so the nested ops still see the relationships it removes and a blanket ` +
+            `disconnect also removes what they just linked (@neo4j/graphql runs the root \`disconnect\` first).`,
+          'run the root `disconnect` before the `update` body, as @neo4j/graphql does',
+        );
+      emitDisconnect();
     }
 
     // Connect relationships (top-level)
@@ -862,6 +886,47 @@ export class MutationCompiler {
     return state.cycleDelete
       ? { cypher: lines.join('\n'), params, cycleDelete: true }
       : { cypher: lines.join('\n'), params };
+  }
+
+  /**
+   * v2.9.0 — the `update` relationship fields whose nested ops can give a
+   * different result depending on whether the root `disconnect` runs before
+   * or after them: a nested `update`, `connect`, `create` or `delete` on a
+   * field with the same relationship type as a field the root `disconnect`
+   * names. A nested `disconnect` alone commutes with it, so it is left out.
+   */
+  private rootDisconnectOrderFields(
+    update: Record<string, unknown> | undefined,
+    disconnect: Record<string, unknown> | undefined,
+    nodeDef: NodeDefinition,
+  ): string[] {
+    if (!update || !disconnect) return [];
+    const disconnectedTypes = new Set<string>();
+    for (const [key, value] of Object.entries(disconnect)) {
+      const relDef = nodeDef.relationships.get(key);
+      if (relDef && value !== undefined) disconnectedTypes.add(relDef.type);
+    }
+    if (disconnectedTypes.size === 0) return [];
+    const ops = ['update', 'connect', 'create', 'delete'];
+    // An item, or a per-member map of items (`{ Dog: [{ create }] }`).
+    const hasOrderedOp = (value: unknown, depth = 0): boolean =>
+      (Array.isArray(value) ? value : [value]).some(
+        (item) =>
+          isPlainObject(item) &&
+          (ops.some((op) => item[op] != null) ||
+            (depth === 0 &&
+              Object.entries(item).some(
+                ([k, v]) => this.schema.nodes.has(k) && hasOrderedOp(v, 1),
+              ))),
+      );
+    const fields: string[] = [];
+    for (const [key, value] of Object.entries(update)) {
+      const relDef = nodeDef.relationships.get(key);
+      if (!relDef || value == null || !disconnectedTypes.has(relDef.type))
+        continue;
+      if (hasOrderedOp(value)) fields.push(key);
+    }
+    return fields;
   }
 
   /**
