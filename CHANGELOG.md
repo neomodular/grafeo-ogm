@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.9.0 (2026-10-22) — update op order, union connections and record-factory time zones
+
+> **Minor release.** Three behaviours that differed from `@neo4j/graphql` 5.x or from the Neo4j driver warn by default and are corrected under `strict: true`: the op order of `update()` (within a nested update item and at the root), a `<rel>Connection` selected under a union, and `Neo4jRecordFactory.dateTime` time-zone strings (its own `{ strict: true }` option). Without `strict`, every input that worked in 2.8.0 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Fixed
+
+- **`Neo4jRecordFactory.dateTime` reads the time-zone strings that threw before**, in both modes, as Neo4j 5.26 reads them: `[Z]` / `[z]` / `Z[Z]` are offset 0 with no zone id, and an hour without minutes (`2024-01-01T10+01:00`) is read. No input that worked in 2.8.0 returns a different value by default.
+
+### Documentation
+
+- **The nested update item op order was documented wrongly since v2.4.2.** The README said an item runs "as in `@neo4j/graphql`": `delete`, `disconnect`, `connect`, `create`, `update`. `@neo4j/graphql` 5.x runs `delete`, `disconnect`, `update`, `connect`, `create`, so in 2.x an item's `update` also matches the nodes its own `connect` / `create` just linked. At the root, 2.x runs the root `disconnect` after the `update` body; `@neo4j/graphql` runs it before. The README, `CLAUDE.md` and the test comment now state the real order and how to get the upstream one.
+
+### Strict mode
+
+- **Op order in `update()`** follows `@neo4j/graphql` 5.x at both levels. Within a nested update item: `delete`, `disconnect`, `update`, `connect`, `create`, so the item's `update` touches only the relationships that existed before it. At the root: the root `disconnect` runs first, then the `update` body, then the root `connect`, so a blanket root `disconnect` no longer removes what a nested `create` / `connect` just added, and a nested `delete` no longer reaches a node the root `disconnect` unlinked. Items still run in array order.
+- **A `<rel>Connection` selected under a union is read per member.** Each member whose relationship differs from the first declaring member's (type, direction, target or edge-properties type) gets its own branch, compiled against its own relationship and AND-ed with its target's `read` policy, in `edges`, `totalCount` and `pageInfo`, through the typed `select` and `selectionSet` fragments alike. An argument a member's relationship cannot take throws `OGMError`. Unions whose members share one relationship are not affected.
+- **`Neo4jRecordFactory.dateTime(iso, { strict: true })`** builds exactly what the driver returns for `datetime(iso)` on Neo4j 5.26. It throws where Neo4j rejects the string (an offset the zone does not have at that wall time, including any offset inside a DST gap; an offset outside ±18:00 or with minutes over 59; a zone id java.time lacks, such as `EST`, `GMT+0` or `[+05:00]`; a date with an offset or zone but no time) and spells zone ids as Neo4j does (`[us/eastern]` gives `US/Eastern`). `Neo4jRecordFactory` is a static helper with no OGM instance, so it takes its own option.
+
+### Deprecations
+
+Each of these warns in 2.x and becomes the default in 3.0, as the strict behaviour above does today:
+
+- **`nested-update-op-order`** (logged for a nested update item with `update` together with `connect` or `create`): the item's `update` runs after its `connect` / `create`. 3.0 runs it before them.
+- **`update-op-order`** (logged when the root `disconnect` names a relationship type that a nested `update`, `connect`, `create` or `delete` also writes): the root `disconnect` runs after the `update` body. 3.0 runs it first.
+- **`select-union-connection`** (logged once per union field whose members' relationships differ): every member is read through the first declaring member's relationship. 3.0 reads each member through its own.
+- **`Neo4jRecordFactory.dateTime` time-zone strings** keep their 2.8.0 value and emit one `DeprecationWarning` per kind through `process.emitWarning`, with code `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `GRAFEO_RECORD_FACTORY_OFFSET_RANGE`, `GRAFEO_RECORD_FACTORY_ZONE_ID_UNSUPPORTED`, `GRAFEO_RECORD_FACTORY_ZONE_ID_CASE` or `GRAFEO_RECORD_FACTORY_DATE_ONLY_ZONE`. 3.0 throws for a zone/offset mismatch, an offset out of range, an unsupported zone id and a date-only zone, and returns Neo4j's spelling for `_ZONE_ID_CASE`, as `{ strict: true }` does.
+
 ## 2.8.0 (2026-10-19) — connection pageInfo, nested-write and read-input fixes
 
 > **Minor release.** Connections now return `pageInfo` and edge `cursor`. A nested `delete` that reaches the node being updated through a cycle no longer fails the call when the OGM owns the transaction. Five inputs that were accepted but ignored (`overwrite: false`, relationship-property `@default`, fields selected in the wrong shape, unknown `pageInfo` fields, typed `where` / `orderBy` under a union) warn by default and are honoured under `strict: true`. Without `strict`, every input that worked in 2.7.0 compiles to byte-identical Cypher.
