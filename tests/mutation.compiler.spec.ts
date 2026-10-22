@@ -1232,8 +1232,10 @@ describe('MutationCompiler', () => {
       });
     });
 
-    // v2.4.2 — order within one nested update item matches @neo4j/graphql:
-    // delete, disconnect, connect, create, update.
+    // v2.4.2 — order within one nested update item: delete, disconnect,
+    // connect, create, update. v2.8.1 — correction: @neo4j/graphql 5.x
+    // runs `update` before `connect` / `create`; only the disconnect ->
+    // connect -> create part matches it.
     it('emits a same-item create after its disconnect and connect', () => {
       const result = compiler.compileUpdate(
         { id: 'conc1' },

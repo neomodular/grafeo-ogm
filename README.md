@@ -1039,7 +1039,7 @@ await Book.update({
 });
 ```
 
-- **Order within an item** (as in `@neo4j/graphql`): `delete`, `disconnect`, `connect`, `create`, `update`. So `disconnect: [{}]` + `create` replaces the relationship set.
+- **Order within an item**: `delete`, `disconnect`, `connect`, `create`, `update`. So `disconnect: [{}]` + `create` replaces the relationship set. This is **not** the `@neo4j/graphql` 5.x order, which runs `update` before `connect` / `create` (`delete`, `disconnect`, `update`, `connect`, `create`). In 2.x an item's `update` therefore also matches the nodes its own `connect` / `create` just linked. To update only the existing relationships, put the `update` in an earlier item of the same field (items run in array order).
 - **Nested connect / disconnect** recurse: `connect: { posts: [{ where, connect: { tags: [...] } }] }` links the post *and* its tags (max 5 levels).
 - **Interface and union relationships** work for every nested op. Key the input by member type (`pets: { Dog: { create: [...] } }`), or use the flat shape and name the implementer on create (`create: [{ node: { Dog: { name: 'Rex' } } }]`).
 - With [Node-Level Security](#node-level-security), every target applies its own policy: `read` to connect / disconnect, `create` (+ `WITH CHECK`) to nested creates, `update` to nested updates, `delete` to nested deletes.
