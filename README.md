@@ -1315,6 +1315,28 @@ await feeds.find({
 
 A union type has no relationships of its own: a `<rel>Connection` selected on it is compiled with the relationship of the first member that declares the field. A member whose relationship has another type, direction, target or edge-properties type gets that member's edges instead of its own, in `edges`, `totalCount` and `pageInfo`, through the typed `select` and `selectionSet` fragments alike. In strict mode each such member gets its own branch, and an argument that member's relationship cannot take (such as a `sort` on a field its target lacks) throws `OGMError`. Unions whose members all share one relationship are not affected and never warn.
 
+#### 21. `Neo4jRecordFactory.dateTime` time-zone strings (since 2.9.0)
+
+`Neo4jRecordFactory` is a static test helper with no OGM instance, so it takes its own option: `Neo4jRecordFactory.dateTime(iso, { strict: true })`. It becomes the default in 3.0.
+
+```typescript
+Neo4jRecordFactory.dateTime('2024-07-01T10:00:00+05:00[Europe/Berlin]');
+// default: 10:00+05:00[Europe/Berlin] (and warns) · strict: TypeError, timezone and offset do not match
+Neo4jRecordFactory.dateTime('2024-07-01T10:00:00[us/eastern]');
+// default: [us/eastern] (and warns) · strict: [US/Eastern], as the driver returns it
+```
+
+Strict matches what the driver returns for `datetime(iso)` on Neo4j 5.26 in all of these cases. It throws where Neo4j rejects the string:
+
+- an offset the zone does not have at that wall time, including any offset inside a DST gap (either offset in a DST overlap is fine);
+- an offset outside ±18:00, or with minutes over 59 (`+05:75` reads as `+06:15` by default);
+- a zone id that java.time lacks: `EST`, `MST`, `HST`, `ROC`, `GMT+0`, `GMT-0`, or an offset written as an id such as `[+05:00]`;
+- a date with an offset or zone but no time (`2024-07-01Z`).
+
+Strict also spells a zone id as Neo4j does: ids match case-insensitively and keep their alias (`[asia/calcutta]` gives `Asia/Calcutta`).
+
+By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE` or `_DATE_ONLY_ZONE`. Strings that threw before 2.9.0 read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
@@ -2229,6 +2251,14 @@ const count = Neo4jRecordFactory.integer(42);
 // Same fields and toString() as the driver's datetime($iso): the offset,
 // all nine fractional digits and an [Area/City] zone id are kept (v2.4.8).
 const dt = Neo4jRecordFactory.dateTime('2024-01-01T10:00:00.123456789+02:00');
+
+// v2.9.0 — { strict: true } (the default in 3.0) also matches Neo4j where
+// the 2.x default keeps its v2.8.0 value: it throws where Neo4j rejects the
+// string and spells zone ids as Neo4j does. See Strict mode, item 16.
+Neo4jRecordFactory.dateTime('2024-07-01T10:00:00[europe/berlin]', { strict: true });
+// => 2024-07-01T10:00:00+02:00[Europe/Berlin]  (default: [europe/berlin], and warns)
+Neo4jRecordFactory.dateTime('2024-07-01T10:00:00Z[Europe/Berlin]', { strict: true });
+// => throws: timezone and offset do not match  (default: 10:00Z[Europe/Berlin], and warns)
 
 // Properties are stored as given; use integer() where the driver would
 // return an Integer. The third argument (v2.4.8) sets identity / elementId.

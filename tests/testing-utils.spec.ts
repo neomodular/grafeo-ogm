@@ -1,5 +1,8 @@
 import { CypherAssert } from '../src/testing/cypher-assert';
-import { Neo4jRecordFactory } from '../src/testing/neo4j-record-factory';
+import {
+  Neo4jRecordFactory,
+  resetDateTimeWarnings,
+} from '../src/testing/neo4j-record-factory';
 import { SelectionSetFactory } from '../src/testing/selection-set-factory';
 import neo4j from 'neo4j-driver';
 import { ResultMapper } from '../src/execution/result-mapper';
@@ -491,6 +494,333 @@ describe('Neo4jRecordFactory', () => {
       expect(ResultMapper.convertNeo4jTypes(dt)).toBe(
         '2024-01-01T10:00:00+02:00',
       );
+    });
+
+    // v2.9.0 — values checked against `datetime(iso)` on Neo4j 5.26
+    // (tests/integration/record-factory.spec.ts). Run under several
+    // machine zones: none of them may depend on it.
+    function underEachZone(fn: () => void): void {
+      const saved = process.env.TZ;
+      try {
+        for (const tz of ['America/Chicago', 'Asia/Kathmandu', 'UTC']) {
+          process.env.TZ = tz;
+          fn();
+        }
+      } finally {
+        if (saved === undefined) delete process.env.TZ;
+        else process.env.TZ = saved;
+      }
+    }
+
+    /** Codes of the warnings `fn` emits, without printing them. */
+    function warningCodes(fn: () => void): string[] {
+      const spy = jest
+        .spyOn(process, 'emitWarning')
+        .mockImplementation(() => undefined);
+      try {
+        fn();
+        return spy.mock.calls.map(
+          (call) => (call[1] as { code?: string } | undefined)?.code ?? '',
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    }
+
+    beforeEach(() => resetDateTimeWarnings());
+
+    it.each([
+      // input, driver toString(), timeZoneOffsetSeconds, timeZoneId
+      [
+        '2026-03-29T01:30:00+05:45',
+        '2026-03-29T01:30:00+05:45',
+        20700,
+        undefined,
+      ],
+      [
+        '2026-03-29T01:30:00-09:30',
+        '2026-03-29T01:30:00-09:30',
+        -34200,
+        undefined,
+      ],
+      [
+        '2026-03-29T01:30:00-18:00',
+        '2026-03-29T01:30:00-18:00',
+        -64800,
+        undefined,
+      ],
+      ['2026-07-01T10:00:00[UTC]', '2026-07-01T10:00:00Z[UTC]', 0, 'UTC'],
+      [
+        '2026-07-01T10:00:00[US/Eastern]',
+        '2026-07-01T10:00:00-04:00[US/Eastern]',
+        -14400,
+        'US/Eastern',
+      ],
+      [
+        '2026-10-25T02:30:00+01:00[Europe/Madrid]',
+        '2026-10-25T02:30:00+01:00[Europe/Madrid]',
+        3600,
+        'Europe/Madrid',
+      ],
+      [
+        '2026-10-25T02:30:00+02:00[Europe/Madrid]',
+        '2026-10-25T02:30:00+02:00[Europe/Madrid]',
+        7200,
+        'Europe/Madrid',
+      ],
+      [
+        '2026-11-01T01:30:00-05:00[America/New_York]',
+        '2026-11-01T01:30:00-05:00[America/New_York]',
+        -18000,
+        'America/New_York',
+      ],
+      [
+        '1900-01-01T00:00:00[Europe/Madrid]',
+        '1900-01-01T00:00:00-00:14:44[Europe/Madrid]',
+        -884,
+        'Europe/Madrid',
+      ],
+      // These threw before v2.9.0 ("Invalid time zone" / not ISO), so they
+      // read as Neo4j does in both modes.
+      ['2026-07-01T10:00:00[Z]', '2026-07-01T10:00:00Z', 0, undefined],
+      ['2026-07-01T10:00:00Z[z]', '2026-07-01T10:00:00Z', 0, undefined],
+      ['2026-07-01T10+01:00', '2026-07-01T10:00:00+01:00', 3600, undefined],
+      [
+        '2026-07-01T10[Europe/Madrid]',
+        '2026-07-01T10:00:00+02:00[Europe/Madrid]',
+        7200,
+        'Europe/Madrid',
+      ],
+      [
+        '2026-07-01T10[europe/madrid]',
+        '2026-07-01T10:00:00+02:00[Europe/Madrid]',
+        7200,
+        'Europe/Madrid',
+      ],
+    ] as const)(
+      'builds %s as the driver returns it, in both modes (v2.9.0)',
+      (iso, str, offset, zoneId) => {
+        for (const strict of [false, true])
+          underEachZone(() => {
+            let dt: Record<string, unknown> = {};
+            const codes = warningCodes(() => {
+              dt = Neo4jRecordFactory.dateTime(iso, { strict }) as Record<
+                string,
+                unknown
+              >;
+            });
+            expect([process.env.TZ, strict, String(dt)]).toEqual([
+              process.env.TZ,
+              strict,
+              str,
+            ]);
+            expect(dt.timeZoneOffsetSeconds).toBe(offset);
+            expect(dt.timeZoneId).toBe(zoneId);
+            expect(ResultMapper.convertNeo4jTypes(dt)).toBe(str);
+            expect(codes).toEqual([]);
+          });
+      },
+    );
+
+    it.each([
+      // input, strict (driver) id, default (v2.8.0) id
+      ['2026-07-01T10:00:00[europe/madrid]', 'Europe/Madrid', 'europe/madrid'],
+      ['2026-07-01T10:00:00[us/eastern]', 'US/Eastern', 'us/eastern'],
+      ['2026-07-01T10:00:00[utc]', 'UTC', 'utc'],
+      ['2026-07-01T10:00:00[asia/calcutta]', 'Asia/Calcutta', 'asia/calcutta'],
+    ] as const)(
+      'strict spells the zone id of %s as Neo4j does; the default keeps it and warns (v2.9.0)',
+      (iso, strictId, defaultId) => {
+        const strict = Neo4jRecordFactory.dateTime(iso, {
+          strict: true,
+        }) as Record<string, unknown>;
+        expect(strict.timeZoneId).toBe(strictId);
+        expect(String(strict)).toContain(`[${strictId}]`);
+
+        let loose: Record<string, unknown> = {};
+        const codes = warningCodes(() => {
+          loose = Neo4jRecordFactory.dateTime(iso) as Record<string, unknown>;
+        });
+        expect(loose.timeZoneId).toBe(defaultId);
+        expect(loose.timeZoneOffsetSeconds).toBe(strict.timeZoneOffsetSeconds);
+        expect(codes).toEqual(['GRAFEO_RECORD_FACTORY_ZONE_ID_CASE']);
+      },
+    );
+
+    it.each([
+      // input, strict error, warning code, default (v2.8.0) toString()
+      // Offset the zone does not have at that wall time.
+      [
+        '2026-07-01T10:00:00+05:00[Europe/Madrid]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-07-01T10:00:00+05:00[Europe/Madrid]',
+      ],
+      [
+        '2026-07-01T10:00:00Z[Europe/Madrid]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-07-01T10:00:00Z[Europe/Madrid]',
+      ],
+      [
+        '2026-07-01T10:00:00+02:00[Asia/Kathmandu]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-07-01T10:00:00+02:00[Asia/Kathmandu]',
+      ],
+      [
+        '2026-10-25T02:30:00+03:00[Europe/Madrid]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-10-25T02:30:00+03:00[Europe/Madrid]',
+      ],
+      // Any offset inside a DST gap.
+      [
+        '2026-03-29T02:30:00+01:00[Europe/Madrid]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-03-29T02:30:00+01:00[Europe/Madrid]',
+      ],
+      [
+        '2026-03-29T02:30:00+02:00[Europe/Madrid]',
+        /timezone and offset do not match/,
+        'ZONE_OFFSET_MISMATCH',
+        '2026-03-29T02:30:00+02:00[Europe/Madrid]',
+      ],
+      // Offset outside ±18:00 or minutes over 59.
+      [
+        '2026-07-01T10:00:00+18:01',
+        /outside -18:00 to \+18:00/,
+        'OFFSET_RANGE',
+        '2026-07-01T10:00:00+18:01',
+      ],
+      [
+        '2026-07-01T10:00:00-18:01',
+        /outside -18:00 to \+18:00/,
+        'OFFSET_RANGE',
+        '2026-07-01T10:00:00-18:01',
+      ],
+      [
+        '2026-07-01T10:00:00+19',
+        /outside -18:00 to \+18:00/,
+        'OFFSET_RANGE',
+        '2026-07-01T10:00:00+19:00',
+      ],
+      [
+        '2026-07-01T10:00:00+05:75',
+        /outside -18:00 to \+18:00/,
+        'OFFSET_RANGE',
+        '2026-07-01T10:00:00+06:15',
+      ],
+      [
+        '2026-12-31T23:59:59-23:59',
+        /outside -18:00 to \+18:00/,
+        'OFFSET_RANGE',
+        '2026-12-31T23:59:59-23:59',
+      ],
+      // Zone ids java.time lacks.
+      [
+        '2026-07-01T10:00:00[EST]',
+        /zone id Neo4j does not accept/,
+        'ZONE_ID_UNSUPPORTED',
+        '2026-07-01T10:00:00-05:00[EST]',
+      ],
+      [
+        '2026-07-01T10:00:00[hst]',
+        /zone id Neo4j does not accept/,
+        'ZONE_ID_UNSUPPORTED',
+        '2026-07-01T10:00:00-10:00[hst]',
+      ],
+      [
+        '2026-07-01T10:00:00[GMT-0]',
+        /zone id Neo4j does not accept/,
+        'ZONE_ID_UNSUPPORTED',
+        '2026-07-01T10:00:00Z[GMT-0]',
+      ],
+      [
+        '2026-07-01T10:00:00[+05:00]',
+        /zone id Neo4j does not accept/,
+        'ZONE_ID_UNSUPPORTED',
+        '2026-07-01T10:00:00+05:00[+05:00]',
+      ],
+      // A date alone with an offset or zone.
+      [
+        '2026-07-01Z',
+        /not an ISO-8601 date-time/,
+        'DATE_ONLY_ZONE',
+        '2026-07-01T00:00:00Z',
+      ],
+      [
+        '2026-07-01-05:00',
+        /not an ISO-8601 date-time/,
+        'DATE_ONLY_ZONE',
+        '2026-07-01T00:00:00-05:00',
+      ],
+      [
+        '2026-07-01[Europe/Madrid]',
+        /not an ISO-8601 date-time/,
+        'DATE_ONLY_ZONE',
+        '2026-07-01T00:00:00+02:00[Europe/Madrid]',
+      ],
+    ] as const)(
+      'strict rejects %s as Neo4j does; the default keeps the v2.8.0 value and warns (v2.9.0)',
+      (iso, message, code, legacy) => {
+        expect(() =>
+          Neo4jRecordFactory.dateTime(iso, { strict: true }),
+        ).toThrow(message);
+        let value: unknown;
+        const codes = warningCodes(() => {
+          value = Neo4jRecordFactory.dateTime(iso);
+        });
+        expect(String(value)).toBe(legacy);
+        expect(codes).toEqual([`GRAFEO_RECORD_FACTORY_${code}`]);
+      },
+    );
+
+    it.each([
+      ['2026-07-01T10:00:00+01:00[Z]', /timezone and offset do not match/],
+      ['2026-07-01[Z]', /not an ISO-8601 date-time/],
+      ['2026-07-01 10Z', /not an ISO-8601 date-time/],
+      ['2026-07-01 10:00:00[Z]', /not an ISO-8601 date-time/],
+    ] as const)(
+      'still throws for %s in both modes (it threw before v2.9.0 and Neo4j rejects it)',
+      (iso, message) => {
+        expect(() => Neo4jRecordFactory.dateTime(iso)).toThrow(message);
+        expect(() =>
+          Neo4jRecordFactory.dateTime(iso, { strict: true }),
+        ).toThrow(message);
+      },
+    );
+
+    it('warns once per code, as a DeprecationWarning, and never in strict mode (v2.9.0)', () => {
+      const spy = jest
+        .spyOn(process, 'emitWarning')
+        .mockImplementation(() => undefined);
+      try {
+        Neo4jRecordFactory.dateTime('2026-07-01T10:00:00Z[Europe/Madrid]');
+        Neo4jRecordFactory.dateTime('2026-07-01T10:00:00+05:00[Europe/Madrid]');
+        Neo4jRecordFactory.dateTime('2026-07-01T10:00:00+19');
+        Neo4jRecordFactory.dateTime('2026-07-01T10:00:00+05:75');
+        Neo4jRecordFactory.dateTime('2026-07-01T10:00:00[europe/madrid]', {
+          strict: true,
+        });
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(spy.mock.calls[0][0]).toMatch(
+          /Pass \{ strict: true \} \(default in 3\.0\)/,
+        );
+        expect(spy.mock.calls.map((c) => c[1])).toEqual([
+          {
+            type: 'DeprecationWarning',
+            code: 'GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH',
+          },
+          {
+            type: 'DeprecationWarning',
+            code: 'GRAFEO_RECORD_FACTORY_OFFSET_RANGE',
+          },
+        ]);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

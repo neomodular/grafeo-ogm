@@ -1,4 +1,5 @@
 import neo4j, { Integer, Record as Neo4jRecord } from 'neo4j-driver';
+import { canonicalZoneId, NEO4J_REJECTED_ZONE_IDS } from './zone-ids';
 
 /**
  * ISO-8601 date-time as Neo4j's `datetime()` accepts it: a date, an
@@ -7,9 +8,15 @@ import neo4j, { Integer, Record as Neo4jRecord } from 'neo4j-driver';
  *
  * v2.5.3 — the basic format (`20240101T100000Z`, no separators) is
  * accepted too, as Neo4j accepts it.
+ *
+ * v2.9.0 — the minutes are optional (`2024-01-01T10+01:00`), as in Neo4j;
+ * such a string used to throw.
  */
 const ISO_DATE_TIME =
-  /^(?:([+-]?\d{4,})-(\d{2})-(\d{2})|([+-]?\d{4})(\d{2})(\d{2}))(?:[T ](\d{2}):?(\d{2})(?::?(\d{2})(?:[.,](\d{1,9}))?)?)?(Z|[+-]\d{2}(?::?\d{2})?)?(?:\[([^\]]+)\])?$/i;
+  /^(?:([+-]?\d{4,})-(\d{2})-(\d{2})|([+-]?\d{4})(\d{2})(\d{2}))(?:([T ])(\d{2})(?::?(\d{2})(?::?(\d{2})(?:[.,](\d{1,9}))?)?)?)?(Z|[+-]\d{2}(?::?\d{2})?)?(?:\[([^\]]+)\])?$/i;
+
+/** Largest offset java.time (and so Neo4j) allows: ±18:00. */
+const MAX_OFFSET_SECONDS = 18 * 3600;
 
 function parseOffsetSeconds(offset: string): number {
   if (offset.toUpperCase() === 'Z') return 0;
@@ -20,6 +27,66 @@ function parseOffsetSeconds(offset: string): number {
   // v2.5.3 — `-00:00` is offset 0, not -0 (which `toEqual` tells apart
   // from the driver's 0).
   return sign * (hours * 3600 + minutes * 60) || 0;
+}
+
+/** Whether Neo4j accepts `offset`: within ±18:00, minutes at most 59. */
+function offsetInRange(offset: string): boolean {
+  if (offset.toUpperCase() === 'Z') return true;
+  const digits = offset.slice(1).replace(':', '');
+  const minutes = digits.length > 2 ? Number(digits.slice(2, 4)) : 0;
+  return (
+    minutes <= 59 && Math.abs(parseOffsetSeconds(offset)) <= MAX_OFFSET_SECONDS
+  );
+}
+
+/** Options for {@link Neo4jRecordFactory.dateTime}. */
+export interface DateTimeFactoryOptions {
+  /**
+   * v2.9.0 — build exactly what the driver returns for `datetime(iso)`,
+   * and throw where Neo4j rejects the string. Off by default in 2.x (the
+   * v2.8.0 value is kept, with a one-time `DeprecationWarning`); the
+   * default in 3.0.
+   */
+  strict?: boolean;
+}
+
+/**
+ * v2.9.0 — inputs whose 2.x default value differs from what Neo4j does.
+ * Each warns once per process (`process.emitWarning`, type
+ * `DeprecationWarning`) unless `strict: true` is passed.
+ */
+const DATE_TIME_DEPRECATIONS = {
+  GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH:
+    'has an offset its zone id does not have at that wall time; Neo4j rejects it ("Timezone and offset do not match"), the factory keeps both as written',
+  GRAFEO_RECORD_FACTORY_ZONE_ID_CASE:
+    'has a zone id not spelled as Neo4j spells it; Neo4j matches it case-insensitively and returns its own spelling, the factory keeps it as written',
+  GRAFEO_RECORD_FACTORY_ZONE_ID_UNSUPPORTED:
+    'has a zone id Neo4j rejects (java.time lacks it), the factory accepts it',
+  GRAFEO_RECORD_FACTORY_OFFSET_RANGE:
+    'has an offset outside -18:00..+18:00 or with minutes over 59; Neo4j rejects it, the factory accepts it',
+  GRAFEO_RECORD_FACTORY_DATE_ONLY_ZONE:
+    'is a date with an offset or zone but no time; Neo4j rejects it, the factory reads it as midnight',
+} as const;
+type DateTimeDeprecation = keyof typeof DATE_TIME_DEPRECATIONS;
+
+const warnedDateTimeCodes = new Set<DateTimeDeprecation>();
+
+function warnDateTime(code: DateTimeDeprecation, isoString: string): void {
+  if (warnedDateTimeCodes.has(code)) return;
+  warnedDateTimeCodes.add(code);
+  process.emitWarning(
+    `Neo4jRecordFactory.dateTime: '${isoString}' ${DATE_TIME_DEPRECATIONS[code]}. ` +
+      'Pass { strict: true } (default in 3.0) to match the driver.',
+    { type: 'DeprecationWarning', code },
+  );
+}
+
+/**
+ * Forget which `dateTime` deprecation warnings were emitted. Internal, for
+ * tests; not exported from `grafeo-ogm/testing`.
+ */
+export function resetDateTimeWarnings(): void {
+  warnedDateTimeCodes.clear();
 }
 
 /**
@@ -65,6 +132,31 @@ function zoneOffsetAt(timeZone: string, instantMs: number): number {
 }
 
 /**
+ * The offsets `timeZone` may have around a wall-clock time (`candidates`)
+ * and those the wall time really has (`valid`): one normally, two in a DST
+ * overlap, none in a gap.
+ */
+function zoneOffsetsAtWall(
+  timeZone: string,
+  wallMs: number,
+): { candidates: number[]; valid: number[] } {
+  const DAY = 86_400_000;
+  const first = zoneOffsetAt(timeZone, wallMs);
+  const candidates = [
+    ...new Set<number>([
+      zoneOffsetAt(timeZone, wallMs - DAY),
+      zoneOffsetAt(timeZone, wallMs + DAY),
+      first,
+      zoneOffsetAt(timeZone, wallMs - first * 1000),
+    ]),
+  ];
+  const valid = candidates.filter(
+    (o) => zoneOffsetAt(timeZone, wallMs - o * 1000) === o,
+  );
+  return { candidates, valid };
+}
+
+/**
  * Resolve a wall-clock time in `timeZone` as Neo4j (java.time) does:
  * - a valid wall time keeps its offset;
  * - in a DST overlap the earlier offset (the larger one) wins;
@@ -78,17 +170,7 @@ function resolveZoned(
   timeZone: string,
   wallMs: number,
 ): { offsetSeconds: number; wallMs: number } {
-  const DAY = 86_400_000;
-  const first = zoneOffsetAt(timeZone, wallMs);
-  const candidates = new Set<number>([
-    zoneOffsetAt(timeZone, wallMs - DAY),
-    zoneOffsetAt(timeZone, wallMs + DAY),
-    first,
-    zoneOffsetAt(timeZone, wallMs - first * 1000),
-  ]);
-  const valid = [...candidates].filter(
-    (o) => zoneOffsetAt(timeZone, wallMs - o * 1000) === o,
-  );
+  const { candidates, valid } = zoneOffsetsAtWall(timeZone, wallMs);
   if (valid.length > 0) return { offsetSeconds: Math.max(...valid), wallMs };
   // Gap: the instant uses the offset before the transition (the smaller).
   const instant = wallMs - Math.min(...candidates) * 1000;
@@ -135,17 +217,47 @@ export class Neo4jRecordFactory {
    * ambiguous one takes the earlier offset, and historical (local mean
    * time) offsets are honoured for any year.
    *
+   * v2.9.0 — `[Z]` means offset 0 with no zone id, and an hour without
+   * minutes (`10+01:00`) is read; both used to throw.
+   *
+   * v2.9.0 — `{ strict: true }` (the default in 3.0) also matches Neo4j
+   * where the 2.x default does not: it throws for strings Neo4j rejects
+   * (an offset the zone does not have at that wall time, such as
+   * `10:00+05:00[Europe/Madrid]` or any offset in a DST gap; an offset
+   * outside ±18:00; a zone id java.time lacks, such as `EST`; a bare date
+   * with an offset or zone), and spells a zone id as Neo4j does
+   * (`[us/eastern]` → `US/Eastern`). Without it those strings keep their
+   * v2.8.0 value and emit a one-time `DeprecationWarning`.
+   *
    * Before v2.4.8 the value was converted to UTC with the offset dropped
    * and the fraction cut to milliseconds; before v2.5.0 an offset-less
    * string was read in the machine's local zone.
    */
-  static dateTime(isoString: string): unknown {
+  static dateTime(
+    isoString: string,
+    options: DateTimeFactoryOptions = {},
+  ): unknown {
     const m = ISO_DATE_TIME.exec(isoString.trim());
     // A non-ISO string `Date` understands (e.g. RFC 2822) keeps the
     // pre-v2.5.0 parse.
     if (!m) return Neo4jRecordFactory.legacyDateTime(isoString);
 
-    const [, ey, emo, ed, by, bmo, bd, h, mi, s, frac, offset, zoneId] = m;
+    const [
+      ,
+      ey,
+      emo,
+      ed,
+      by,
+      bmo,
+      bd,
+      sep,
+      h,
+      mi,
+      s,
+      frac,
+      offsetText,
+      zoneText,
+    ] = m;
     let year = Number(ey ?? by);
     let month = Number(emo ?? bmo);
     let day = Number(ed ?? bd);
@@ -154,9 +266,108 @@ export class Neo4jRecordFactory {
     let second = Number(s ?? 0);
     const nanosecond = frac ? Number(frac.padEnd(9, '0')) : 0;
 
+    const isZ = zoneText?.toUpperCase() === 'Z';
+    // v2.9.0 — `[Z]` and an hour without minutes threw before v2.9.0, so
+    // there is no earlier value to keep: they always get the strict
+    // reading. Neo4j rejects a space before the time (which the default
+    // still accepts in a full time, as before), so those keep throwing.
+    const newlyAccepted = isZ || (h !== undefined && mi === undefined);
+    if (newlyAccepted && sep === ' ')
+      throw new TypeError(
+        `Neo4jRecordFactory.dateTime: '${isoString}' is not an ISO-8601 date-time`,
+      );
+    const strict = options.strict === true || newlyAccepted;
+    // In the 2.x default, each check below keeps the v2.8.0 value and warns
+    // once; `strict: true` throws, as Neo4j rejects the string.
+    const reject = (
+      code: DateTimeDeprecation,
+      error: () => TypeError,
+    ): void => {
+      if (strict) throw error();
+      warnDateTime(code, isoString);
+    };
+
+    // v2.9.0 — a date with an offset or zone but no time
+    // (`2024-01-01Z`, `2024-01-01[Europe/Berlin]`) is rejected by Neo4j.
+    // With `[Z]` it threw before v2.9.0 too.
+    if (h === undefined && (offsetText ?? zoneText) !== undefined) {
+      const error = () =>
+        new TypeError(
+          `Neo4jRecordFactory.dateTime: '${isoString}' is not an ISO-8601 date-time`,
+        );
+      if (isZ) throw error();
+      reject('GRAFEO_RECORD_FACTORY_DATE_ONLY_ZONE', error);
+    }
+
+    // v2.9.0 — an offset outside ±18:00 or with minutes over 59 is
+    // rejected by Neo4j (`+05:75` used to become +06:15).
+    if (offsetText !== undefined && !offsetInRange(offsetText))
+      reject(
+        'GRAFEO_RECORD_FACTORY_OFFSET_RANGE',
+        () =>
+          new TypeError(
+            `Neo4jRecordFactory.dateTime: '${isoString}' has a zone offset outside -18:00 to +18:00`,
+          ),
+      );
+
+    // v2.9.0 — `[Z]` is Neo4j's spelling of offset 0 with no zone id
+    // (`10:00[Z]` returns `10:00Z`). Before v2.9.0 it threw ("Invalid time
+    // zone"), so this applies in both modes.
+    let offset: string | undefined = offsetText;
+    let zoneId: string | undefined = zoneText;
+    if (isZ) {
+      zoneId = undefined;
+      if (offset === undefined) offset = 'Z';
+      else if (parseOffsetSeconds(offset) !== 0)
+        throw Neo4jRecordFactory.zoneMismatch(isoString);
+    }
+    if (zoneId !== undefined) {
+      // v2.9.0 — ids `Intl` knows but Neo4j does not (`EST`, an offset
+      // such as `[+05:00]`) are rejected by Neo4j.
+      const id = zoneId;
+      if (NEO4J_REJECTED_ZONE_IDS.has(id.toUpperCase()) || /^[+-]/.test(id))
+        reject(
+          'GRAFEO_RECORD_FACTORY_ZONE_ID_UNSUPPORTED',
+          () =>
+            new TypeError(
+              `Neo4jRecordFactory.dateTime: '${isoString}' has a zone id Neo4j does not accept: '${id}'`,
+            ),
+        );
+      // v2.9.0 — Neo4j returns the id in its own spelling
+      // (`[europe/madrid]` → `Europe/Madrid`).
+      const canonical = canonicalZoneId(id);
+      if (canonical !== undefined && canonical !== id)
+        if (strict) zoneId = canonical;
+        else warnDateTime('GRAFEO_RECORD_FACTORY_ZONE_ID_CASE', isoString);
+    }
+
     let offsetSeconds = 0;
-    if (offset !== undefined) offsetSeconds = parseOffsetSeconds(offset);
-    else if (zoneId !== undefined) {
+    if (offset !== undefined) {
+      offsetSeconds = parseOffsetSeconds(offset);
+      // v2.9.0 — with both an offset and a zone id, Neo4j requires the
+      // offset to be one the zone has at that wall time (either one in a
+      // DST overlap, none in a gap) and rejects the string otherwise. The
+      // default pairs any offset with any zone, as before
+      // (`10:00Z[Europe/Madrid]` in July), a value no server returns.
+      if (zoneId !== undefined) {
+        let matches: boolean;
+        try {
+          matches = zoneOffsetsAtWall(
+            zoneId,
+            utcMs(year, month, day, hour, minute, second),
+          ).valid.includes(offsetSeconds);
+        } catch (e) {
+          // A zone `Intl` does not know: Neo4j rejects it; the default
+          // keeps the pre-v2.9.0 value without warning about it.
+          if (strict) throw e;
+          matches = true;
+        }
+        if (!matches)
+          reject('GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH', () =>
+            Neo4jRecordFactory.zoneMismatch(isoString),
+          );
+      }
+    } else if (zoneId !== undefined) {
       const resolved = resolveZoned(
         zoneId,
         utcMs(year, month, day, hour, minute, second),
@@ -181,6 +392,12 @@ export class Neo4jRecordFactory {
       nanosecond,
       offsetSeconds,
       zoneId,
+    );
+  }
+
+  private static zoneMismatch(isoString: string): TypeError {
+    return new TypeError(
+      `Neo4jRecordFactory.dateTime: '${isoString}' — timezone and offset do not match`,
     );
   }
 

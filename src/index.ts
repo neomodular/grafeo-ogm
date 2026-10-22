@@ -138,6 +138,7 @@ export {
   Neo4jRecordFactory,
   SelectionSetFactory,
 } from './testing';
+export type { DateTimeFactoryOptions } from './testing';
 
 // CLI configuration — `defineConfig` gives grafeo.config.ts files full type
 // inference. The CLI itself (bin "grafeo") lives in dist/cjs/cli and is NOT
