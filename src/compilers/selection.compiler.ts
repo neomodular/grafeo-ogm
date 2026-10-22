@@ -1654,16 +1654,29 @@ export class SelectionCompiler {
       }
 
       if (node.isConnection) {
-        const connectionCypher = this.compileConnection(
-          node,
-          nodeVar,
-          nodeDef,
-          maxDepth,
-          currentDepth,
-          params,
-          paramCounter,
-          policyContext,
-        );
+        const connectionCypher =
+          unionMembers && unionMembers.length > 0
+            ? this.compileUnionConnection(
+                node,
+                nodeVar,
+                nodeDef,
+                unionMembers,
+                maxDepth,
+                currentDepth,
+                params,
+                paramCounter,
+                policyContext,
+              )
+            : this.compileConnection(
+                node,
+                nodeVar,
+                nodeDef,
+                maxDepth,
+                currentDepth,
+                params,
+                paramCounter,
+                policyContext,
+              );
         if (connectionCypher) parts.push(`${key}: ${connectionCypher}`);
 
         continue;
@@ -2923,6 +2936,89 @@ export class SelectionCompiler {
 
     const elseClause = isSingular ? 'null' : '[]';
     return `CASE ${branches.join(' ')} ELSE ${elseClause} END`;
+  }
+
+  /**
+   * v2.9.0 — a `<rel>Connection` selected under a union parent. The union's
+   * merged definition carries the relationship of the FIRST member that
+   * declares it, so every member's connection is compiled with that
+   * member's type, direction, target and edge properties: a member whose
+   * relationship differs gets the wrong edges, or none.
+   *
+   * 2.x keeps that Cypher (byte-identical) and warns once per union field
+   * when a member differs. Strict gives each differing member its own
+   * branch, compiled against its own relationship (target `read` policy
+   * included; an argument it cannot take throws), and keeps the
+   * first member's connection in `ELSE`. A node that also carries the label
+   * of a member sharing the first relationship stays in `ELSE`.
+   */
+  private compileUnionConnection(
+    node: SelectionNode,
+    nodeVar: string,
+    unionDef: NodeDefinition,
+    unionMembers: string[],
+    maxDepth: number,
+    currentDepth: number,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
+  ): string | null {
+    const compileFor = (def: NodeDefinition): string | null =>
+      this.compileConnection(
+        node,
+        nodeVar,
+        def,
+        maxDepth,
+        currentDepth,
+        params,
+        paramCounter,
+        policyContext,
+      );
+    const relField = node.fieldName.replace(/Connection$/, '');
+    const base = unionDef.relationships.get(relField);
+    const fallback = compileFor(unionDef);
+    if (!base || !fallback) return fallback;
+
+    const differing: NodeDefinition[] = [];
+    const sharing: NodeDefinition[] = [];
+    for (const memberName of unionMembers) {
+      const def = this.schema.nodes.get(memberName);
+      const rel = def?.relationships.get(relField);
+      if (!def || !rel) continue;
+      const same =
+        rel.type === base.type &&
+        rel.direction === base.direction &&
+        rel.target === base.target &&
+        rel.properties === base.properties;
+      (same ? sharing : differing).push(def);
+    }
+    if (differing.length === 0) return fallback;
+
+    if (!this.strictMode.strict) {
+      this.strictMode.warn(
+        'select-union-connection',
+        `${unionDef.typeName}.${node.fieldName}`,
+        `"${node.fieldName}", selected under the union "${unionDef.typeName}", is read in 2.x through the relationship ` +
+          `of its first member "${sharing[0]?.typeName ?? unionDef.typeName}" for every member, so the edges of ` +
+          `${differing.map((d) => `"${d.typeName}"`).join(', ')} are wrong or missing.`,
+        'read each member through its own relationship',
+      );
+      return fallback;
+    }
+
+    const excluded = sharing
+      .map((def) => ` AND NOT ${nodeVar}:${escapeIdentifier(def.label)}`)
+      .join('');
+    const branches: string[] = [];
+    for (const def of differing) {
+      const expr = compileFor(def);
+      if (expr)
+        branches.push(
+          `WHEN ${nodeVar}:${escapeIdentifier(def.label)}${excluded} THEN ${expr}`,
+        );
+    }
+    if (branches.length === 0) return fallback;
+    return `CASE ${branches.join(' ')} ELSE ${fallback} END`;
   }
 
   /**

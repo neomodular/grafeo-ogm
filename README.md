@@ -1302,6 +1302,19 @@ await users.update({
 
 By default `update()` runs the `update` body (root `SET`, then the nested ops of each relationship field), then the root `disconnect`, then the root `connect`. Strict mode runs the root `disconnect` first, then the `update` body, then the root `connect`: the `@neo4j/graphql` 5.x order (`delete`, `disconnect`, `update`, `connect`, `create`). So under strict mode a blanket root `disconnect: { posts: null }` no longer removes what a nested `create` / `connect` on `posts` just added, and a nested `delete` no longer reaches a node the root `disconnect` unlinked. The warning is logged only when the root `disconnect` names a relationship type that a nested `update`, `connect`, `create` or `delete` also writes.
 
+#### 20. A connection selected under a union (since 2.9.0)
+
+```typescript
+// union Media = Post | Video — Post.tags: -[:TAGGED]->, Video.tags: <-[:LABELED]-
+await feeds.find({
+  select: { items: { select: { tagsConnection: { select: { edges: { node: { select: { name: true } } } } } } } },
+});
+// default: every member read through Post's relationship — Video's edges come back empty or wrong (and warns)
+// strict:  each member read through its own relationship (AND the Tag read policy)
+```
+
+A union type has no relationships of its own: a `<rel>Connection` selected on it is compiled with the relationship of the first member that declares the field. A member whose relationship has another type, direction, target or edge-properties type gets that member's edges instead of its own, in `edges`, `totalCount` and `pageInfo`, through the typed `select` and `selectionSet` fragments alike. In strict mode each such member gets its own branch, and an argument that member's relationship cannot take (such as a `sort` on a field its target lacks) throws `OGMError`. Unions whose members all share one relationship are not affected and never warn.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
