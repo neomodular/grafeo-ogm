@@ -527,6 +527,16 @@ describe('Neo4jRecordFactory', () => {
       }
     }
 
+    /** Whether this runtime's `Intl` takes an offset as a time zone. */
+    function intlAcceptsOffsetZones(): boolean {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: '+05:00' });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     beforeEach(() => resetDateTimeWarnings());
 
     it.each([
@@ -768,6 +778,15 @@ describe('Neo4jRecordFactory', () => {
         expect(() =>
           Neo4jRecordFactory.dateTime(iso, { strict: true }),
         ).toThrow(message);
+        // An offset-like zone id (`[+05:00]`) is only accepted by runtimes
+        // whose ICU knows offset time zones (Node 22.12+); elsewhere v2.8.0
+        // threw a RangeError for it, and the default mode still does.
+        if (iso.endsWith('[+05:00]') && !intlAcceptsOffsetZones()) {
+          warningCodes(() =>
+            expect(() => Neo4jRecordFactory.dateTime(iso)).toThrow(RangeError),
+          );
+          return;
+        }
         let value: unknown;
         const codes = warningCodes(() => {
           value = Neo4jRecordFactory.dateTime(iso);
