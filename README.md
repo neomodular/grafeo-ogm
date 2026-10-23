@@ -1767,6 +1767,19 @@ Write restrictives and create default-deny are checked before the query runs, so
 
 > **A type without policies is open, but not a gateway.** Before v2.3.0, reading or writing through a type with no policies of its own skipped the policies of the types beyond it, and nested writes enforced no target-type policy at all. If a nested write into a protected type now gets filtered or denied, add the matching policy for that operation on the target type, or perform the write directly on its model.
 
+#### Runtime labels
+
+`create`, `createMany` and `upsert` accept `labels`, and `setLabels` accepts `addLabels` / `removeLabels`: extra labels for multi-label nodes. A label that **another declared node type carries** (its type name, or one of its `@node(labels: [...])`) puts the node in that type, where that type's model reaches it. Since v2.10.1 such a label is a write on that type and its policies apply; before v2.10.1 only the label string was validated, so `Public.create({ labels: ['Secret'] })` minted a `Secret` with none of `Secret`'s policies, `setLabels` converted rows into it, and a context that could update but not read a `Secret` could relabel it into an unprotected type and read it there.
+
+| Call | Policy applied |
+|---|---|
+| `create`, `createMany`, `upsert` with `labels` naming type `T` | `T.create`: at least one `create` permissive must apply, and its write restrictives (`WITH CHECK`) must accept each input, as for a nested create. For `upsert` that is the `create` input and, in default mode, the `update` input too, since the labels also go on the node the MERGE matches. Denied → `PolicyDeniedError`, nothing is written. |
+| `setLabels({ addLabels })` naming type `T` | `T.create` as above, with an **empty input** for `WITH CHECK` (the call carries no properties; a restrictive that inspects the input rejects, so create the node as `T` instead). The matched node must also pass the root type's **`read`** filter, beside its `update` filter: it becomes reachable through `T`'s model, so the context must be able to see it through this one. |
+| `setLabels({ removeLabels })` naming type `T` (the root type included) | `T.delete`: the node must pass `T`'s `delete` row filter. Leaving a type is a delete from it. |
+| default-mode `upsert` / `createMany({ skipDuplicates })` with `labels` naming `T` | the existing node the MERGE matches is relabelled (and, for `upsert`, updated) only where it passes the root `update` **and `read`** filters. Strict mode puts the labels on created nodes only. |
+
+A label no declared type carries is unaffected, and so are a policy-free OGM and a bypass. For a node the call creates, a type counts only when the node will carry all of its labels; for an existing node, any shared label counts. Interface policies apply through the implementer. `policiesEvaluated` in the audit metadata lists these policies after the root's own.
+
 #### Enforcement boundary
 
 > **The OGM enforces policies at the compiler.** Policies do NOT apply to `ogm.$queryRaw`, `ogm.$executeRaw`, or to `@cypher` directive bodies that traverse from a stored field. If you need raw-Cypher enforcement, write the predicate into your raw Cypher manually or layer a Neo4j role/RBAC at the database.

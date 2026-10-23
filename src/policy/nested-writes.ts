@@ -296,8 +296,12 @@ function concreteTypes(
   );
 }
 
-/** The target type's bundle for `op`; a type without policies is open. */
-function targetBundle(
+/**
+ * The target type's bundle for `op`; a type without policies is open.
+ * Shared with `src/policy/labels.ts` and the model's relabel guards
+ * (v2.10.1).
+ */
+export function targetBundle(
   bundle: PolicyContextBundle,
   typeName: string,
   op: Operation,

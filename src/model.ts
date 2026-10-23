@@ -18,10 +18,16 @@ import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
 import {
+  addedLabelTypes,
+  evaluateLabelCreatePolicies,
+  removedLabelTypes,
+} from './policy/labels';
+import {
   assertNestedCreatesAllowed,
   assertNestedUpdatesAllowed,
   evaluateCreatePolicies,
   evaluateWriteRestrictives,
+  targetBundle,
 } from './policy/nested-writes';
 import {
   buildExplainPlan,
@@ -42,6 +48,7 @@ import type {
   ResolvedPolicies,
 } from './policy/types';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
+import { getTargetLabelString } from './schema/utils';
 import { CypherFieldScope } from './utils/cypher-field-projection';
 import {
   compileSortClause,
@@ -594,6 +601,12 @@ export class Model<
      * bypass, is ALWAYS recorded even with `auditMetadata: false`.
      */
     explain = false,
+    /**
+     * v2.10.1 — policies of OTHER types (or operations) the call applied
+     * because a runtime label put the node in that type; listed after the
+     * root's own (see `src/policy/labels.ts`).
+     */
+    extraEvaluated: ReadonlyArray<string> = [],
   ): ExecutionContext | undefined {
     if (!this.policyBinding) return context;
     if (
@@ -609,7 +622,7 @@ export class Model<
       ctxFingerprint: hashCtx(this.policyBinding.ctx),
       modelType: this.nodeDef.typeName,
       operation,
-      policiesEvaluated: [...evaluated],
+      policiesEvaluated: [...evaluated, ...extraEvaluated],
       bypassed,
     };
     if (explain) metadata.explain = true;
@@ -960,6 +973,18 @@ export class Model<
 
     const policyContext = this.resolvePolicyContext('create', params.unsafe);
     this.evaluateCreatePolicies(policyContext, params.input);
+    // v2.10.1 — `labels` naming another declared type: the node is created
+    // as that type too, so that type's `create` policies apply to each
+    // input (default deny + WITH CHECK), as for a nested create. Pre-2.10.1
+    // only the label string was validated, so a context that could not
+    // create a `Secret` minted one with `Public.create({ labels: ['Secret'] })`.
+    const labelPolicies = evaluateLabelCreatePolicies(
+      policyContext,
+      this.nodeDef,
+      addedLabelTypes(this.schema, this.nodeDef, params.labels, true),
+      params.input as unknown as Record<string, unknown>[],
+      'create',
+    );
     assertNestedCreatesAllowed(
       this.schema,
       this.nodeDef,
@@ -1008,6 +1033,8 @@ export class Model<
         policyContext,
         'create',
         Boolean(params.unsafe?.bypassPolicies),
+        false,
+        labelPolicies,
       ),
     );
     const summary = result.summary;
@@ -1375,14 +1402,58 @@ export class Model<
     const policyContext = this.resolvePolicyContext('update', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'update');
 
+    // v2.10.1 — labels that another declared type carries
+    // (`src/policy/labels.ts`). Adding one is a `create` on that type:
+    // checked here, before compile, on an empty input (the call carries no
+    // properties); the MATCH then also needs the root `read` filter, since
+    // the node becomes reachable through that type's model. Removing one is
+    // a `delete` on the type: its `delete` row filter joins the MATCH.
+    // Pre-2.10.1 only the root `update` filter ran, so a context that
+    // could not create a `Secret` converted its own row into one, and a
+    // context that could update but not read a `Secret` relabelled it as
+    // an unprotected type and read it there.
+    const addTypes = policyContext
+      ? addedLabelTypes(this.schema, this.nodeDef, params.addLabels, false)
+      : [];
+    const leftTypes = policyContext
+      ? removedLabelTypes(this.schema, params.removeLabels)
+      : [];
+    const labelPolicies = evaluateLabelCreatePolicies(
+      policyContext,
+      this.nodeDef,
+      addTypes,
+      [{}],
+      'setLabels',
+    );
+    // One `@cypher` scope for the root `update` filter and the label
+    // guards, so their preludes form a single WITH chain.
+    const scope =
+      policyContext && (addTypes.length > 0 || leftTypes.length > 0)
+        ? new CypherFieldScope('n', [], '__where')
+        : undefined;
+
     const paramCounter = { count: 0 };
     const whereResult = this.whereCompiler.compile(
       params.where,
       'n',
       this.nodeDef,
       paramCounter,
-      policyContext ? { policyContext } : undefined,
+      policyContext
+        ? scope
+          ? { policyContext, scope }
+          : { policyContext }
+        : undefined,
     );
+    if (policyContext && scope)
+      this.applyLabelChangeGuards(
+        whereResult,
+        policyContext,
+        addTypes.length > 0,
+        leftTypes,
+        paramCounter,
+        scope,
+        labelPolicies,
+      );
 
     const { cypher, params: mutParams } =
       this.mutationCompiler.compileSetLabels(
@@ -1400,6 +1471,8 @@ export class Model<
         policyContext,
         'update',
         Boolean(params.unsafe?.bypassPolicies),
+        false,
+        labelPolicies,
       ),
     );
   }
@@ -1537,6 +1610,31 @@ export class Model<
       'create',
       params.create as Record<string, unknown> | undefined,
     );
+    // v2.10.1 — `labels` naming another declared type: the node is created
+    // as that type too, so its `create` policies apply (default deny + WITH
+    // CHECK on the `create` input). In default mode the labels also go on
+    // the EXISTING node the MERGE matches (see `labelsOnMatchedNodes`),
+    // which may carry further labels: its WITH CHECK runs on the `update`
+    // input, and the matched node must also pass the root `read` filter
+    // (`compileRelabelGuard`) — it becomes reachable through that type's
+    // model. Strict mode puts the labels in ON CREATE SET only.
+    const relabelsMatched = !this.strictMode.strict;
+    const labelTypes = addedLabelTypes(
+      this.schema,
+      this.nodeDef,
+      params.labels,
+      !relabelsMatched,
+    );
+    const labelInputs = [params.create as Record<string, unknown>];
+    if (relabelsMatched)
+      labelInputs.push(params.update as Record<string, unknown>);
+    const labelPolicies = evaluateLabelCreatePolicies(
+      createPolicy,
+      this.nodeDef,
+      labelTypes,
+      labelInputs,
+      'upsert',
+    );
 
     // Shared counter so the update guard's and the selection's params don't
     // collide with anything already in mergeParams.
@@ -1547,7 +1645,13 @@ export class Model<
       params.update as Record<string, unknown>,
       this.nodeDef,
       params.labels,
-      this.compileUpdateGuard(updatePolicy, paramCounter, ['__matched']),
+      this.compileRelabelGuard(
+        updatePolicy,
+        paramCounter,
+        ['__matched'],
+        relabelsMatched && labelTypes.length > 0,
+        labelPolicies,
+      ),
     );
 
     const readPolicyContext = this.resolvePolicyContext('read', params.unsafe);
@@ -1577,6 +1681,8 @@ export class Model<
         updatePolicy ?? createPolicy,
         'update',
         Boolean(params.unsafe?.bypassPolicies),
+        false,
+        labelPolicies,
       ),
     );
     const mapped = ResultMapper.mapRecords(result.records, 'n') as T[];
@@ -1597,6 +1703,27 @@ export class Model<
       policyContext,
       params.data as unknown as TCreateInput[],
     );
+    // v2.10.1 — `labels` naming another declared type: every node is
+    // created as that type too, so its `create` policies apply to each item
+    // (default deny + WITH CHECK), as for a nested create. With
+    // skipDuplicates in default mode the labels also go on the EXISTING
+    // nodes the MERGE matches, which may carry further labels (any shared
+    // label counts); otherwise the created nodes' label set is known.
+    const relabelsMatched =
+      Boolean(params.skipDuplicates) && !this.strictMode.strict;
+    const labelTypes = addedLabelTypes(
+      this.schema,
+      this.nodeDef,
+      params.labels,
+      !relabelsMatched,
+    );
+    const labelPolicies = evaluateLabelCreatePolicies(
+      policyContext,
+      this.nodeDef,
+      labelTypes,
+      params.data as unknown as Record<string, unknown>[],
+      'createMany',
+    );
 
     // v2.6.1 — with skipDuplicates, default-mode `labels` are also SET on
     // the EXISTING nodes the MERGE matches: a label change, gated by the
@@ -1605,14 +1732,19 @@ export class Model<
     // context without an update permissive simply relabels no matched node.
     // (`policyContext` is null exactly when no policy is bound or a bypass
     // is active, so the update bundle is resolved only when it can apply.)
+    // v2.10.1 — a matched node relabelled into another declared type must
+    // also pass the root `read` filter (`compileRelabelGuard`).
     const updateGuard =
       policyContext &&
       params.skipDuplicates &&
       params.labels &&
       params.labels.length > 0
-        ? this.compileUpdateGuard(
+        ? this.compileRelabelGuard(
             this.resolvePolicyContext('update', params.unsafe),
             { count: 0 },
+            [],
+            relabelsMatched && labelTypes.length > 0,
+            labelPolicies,
           )
         : undefined;
     const { cypher, params: mutParams } =
@@ -1632,6 +1764,8 @@ export class Model<
         policyContext,
         'create',
         Boolean(params.unsafe?.bypassPolicies),
+        false,
+        labelPolicies,
       ),
     );
     // v2.5.0 — with skipDuplicates the MERGE row count includes the
@@ -2061,6 +2195,149 @@ export class Model<
       { policyContext: bundle, preserveVars },
     );
     return guard.cypher ? guard : undefined;
+  }
+
+  /**
+   * v2.10.1 — the matched-node guard of a MERGE-based write whose runtime
+   * `labels` put the EXISTING node it matches into another declared type
+   * (`src/policy/labels.ts`): the root `update` row filter
+   * (`compileUpdateGuard`) AND the root `read` row filter — the node
+   * becomes reachable through that type's model, so the context must be
+   * able to see it through this one. Both compile into one `@cypher`
+   * scope, so their preludes form a single WITH chain. The `read`
+   * policies that applied are appended to `evaluated` (audit metadata).
+   * Without `requireRead` this is exactly `compileUpdateGuard`.
+   */
+  private compileRelabelGuard(
+    bundle: PolicyContextBundle | null,
+    paramCounter: { count: number },
+    preserveVars: ReadonlyArray<string>,
+    requireRead: boolean,
+    evaluated: string[],
+  ): MatchGuard | undefined {
+    if (!bundle || !requireRead)
+      return this.compileUpdateGuard(bundle, paramCounter, preserveVars);
+    const readBundle = targetBundle(bundle, this.nodeDef.typeName, 'read');
+    this.assertNotDeniedAtCompile(readBundle, 'read');
+    const scope = new CypherFieldScope('n', preserveVars, '__where');
+    const update = this.whereCompiler.compile(
+      undefined,
+      'n',
+      this.nodeDef,
+      paramCounter,
+      { policyContext: bundle, scope },
+    );
+    const read = this.whereCompiler.compile(
+      undefined,
+      'n',
+      this.nodeDef,
+      paramCounter,
+      { policyContext: readBundle, scope },
+    );
+    evaluated.push(...readBundle.resolved.evaluated);
+    const clauses = [update.cypher, read.cypher].filter(Boolean);
+    if (clauses.length === 0) return undefined;
+    const params: Record<string, unknown> = {};
+    mergeParams(params, update.params);
+    mergeParams(params, read.params);
+    const guard: MatchGuard = {
+      cypher:
+        clauses.length === 1
+          ? clauses[0]
+          : clauses.map((c) => `(${c})`).join(' AND '),
+      params,
+    };
+    if (scope.hasAny()) guard.preludes = scope.emit();
+    return guard;
+  }
+
+  /**
+   * v2.10.1 — AND the label-change guards of `setLabels` into its compiled
+   * MATCH filter (`src/policy/labels.ts`):
+   *
+   * - `requireRead` (a declared type's label is ADDED): the root `read`
+   *   row filter — `PolicyDeniedError` before compile under
+   *   `onDeny: 'throw'` when no read permissive applies;
+   * - for every type in `leftTypes` (a label it carries is REMOVED): its
+   *   `delete` row filter, as `(NOT n:<type labels> OR <clause>)` — the
+   *   root's own clause as is — with the direct delete's compile-time
+   *   default deny under `onDeny: 'throw'`. A `delete` policy that needs a
+   *   `@cypher` projection is rejected, as in nested-write target filters.
+   *
+   * `whereResult` was compiled into `scope` (root `update` filter); the
+   * read guard joins the same scope and the chain is emitted once. The
+   * policies that applied are appended to `evaluated` (audit metadata).
+   */
+  private applyLabelChangeGuards(
+    whereResult: {
+      cypher: string;
+      params: Record<string, unknown>;
+      preludes?: string[];
+    },
+    bundle: PolicyContextBundle,
+    requireRead: boolean,
+    leftTypes: ReadonlyArray<NodeDefinition>,
+    paramCounter: { count: number },
+    scope: CypherFieldScope,
+    evaluated: string[],
+  ): void {
+    const guards: string[] = [];
+    if (requireRead) {
+      const readBundle = targetBundle(bundle, this.nodeDef.typeName, 'read');
+      this.assertNotDeniedAtCompile(readBundle, 'read');
+      const read = this.whereCompiler.compile(
+        undefined,
+        'n',
+        this.nodeDef,
+        paramCounter,
+        { policyContext: readBundle, scope },
+      );
+      if (read.cypher) {
+        guards.push(read.cypher);
+        mergeParams(whereResult.params, read.params);
+      }
+      evaluated.push(...readBundle.resolved.evaluated);
+    }
+    for (const def of leftTypes) {
+      const resolved = bundle.resolveForType(def.typeName, 'delete');
+      if (!resolved || resolved.overridden) continue;
+      if (
+        bundle.defaults.onDeny === 'throw' &&
+        resolved.permissives.length === 0
+      )
+        throw new PolicyDeniedError({
+          typeName: def.typeName,
+          operation: 'delete',
+          reason: 'no-permissive-matched',
+        });
+      const clause = this.whereCompiler.compileTargetPolicyClause(
+        def.typeName,
+        'n',
+        'delete',
+        bundle,
+        paramCounter,
+      );
+      if (clause.preludes.length > 0)
+        throw new OGMError(
+          `Policy on "${def.typeName}" requires @cypher field projection, which is not supported ` +
+            `in the label guard of setLabels. Refactor the policy to use stored properties.`,
+        );
+      if (clause.cypher === null) continue;
+      mergeParams(whereResult.params, clause.params);
+      evaluated.push(...resolved.evaluated);
+      guards.push(
+        def.typeName === this.nodeDef.typeName
+          ? clause.cypher
+          : `NOT n:${getTargetLabelString(def)} OR ${clause.cypher}`,
+      );
+    }
+    if (guards.length > 0) {
+      const extra = guards.map((g) => `(${g})`).join(' AND ');
+      whereResult.cypher = whereResult.cypher
+        ? `(${whereResult.cypher}) AND ${extra}`
+        : extra;
+    }
+    if (scope.hasAny()) whereResult.preludes = scope.emit();
   }
 
   private defaultSelection(): SelectionNode[] {
