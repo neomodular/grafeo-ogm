@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.10.0 (2026-10-22) — unknown keys in nested write inputs
+
+> **Minor release.** Unknown keys in nested write inputs warn by default and throw under `strict: true` (strict item 22). Without `strict`, every input that worked in 2.9.1 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Strict mode
+
+- **Unknown keys in nested write inputs throw `OGMError`** before anything runs. Before 2.10.0 these objects were compiled from a fixed set of keys and any other key was ignored, even under `strict: true`. A typo'd `wher` in a nested update item left the item's `update` unfiltered, so it renamed **every** related node. `updat`, `creat`, an `egde` next to `node`, and a node field next to `edge` in a nested `update` were dropped. Strict checks each shape, at any depth and per union / interface member, against the keys of its generated input type:
+  - **nested update item:** `where`, `update`, `connect`, `disconnect`, `create`, `delete`
+  - **relationship field in `create()` or in a nested create's `node`:** `create`, `connect`
+  - **nested create item with `node`:** `node`, `edge`
+  - **an item's `update` with `node` or `edge`:** `node`, `edge`
+
+  Connect / disconnect items keep their item 1 check.
+
+### Deprecations
+
+- **`nested-write-unknown-key`** (logged once per OGM, input shape, field and key set): the unknown key is ignored. When a nested update item has `update` but no `where`, the warning says that the update reaches every related node. 3.0 throws, as `strict: true` does today.
+
 ## 2.9.1 (2026-10-22) — native Node ESM entry points
 
 > **Patch release.** `import { OGM } from 'grafeo-ogm'` now works in native Node ESM. The CommonJS build and the public API are unchanged.
