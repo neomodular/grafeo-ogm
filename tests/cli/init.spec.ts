@@ -238,6 +238,21 @@ describe('grafeo init (cli-init spec)', () => {
     expect(config).not.toContain(`schema: './${evil}.graphql'`);
   });
 
+  it('keeps an absolute --schema / --out absolute in the config (vNEXT)', async () => {
+    const io = makeIO();
+    const absSchema = path.join(io.cwd, 'graph', 'schema.graphql');
+    const absOut = path.join(io.cwd, 'gen', 'types.ts');
+    const code = await runInit(['--schema', absSchema, '--out', absOut], io);
+
+    expect(code).toBe(0);
+    const config = read(io.cwd, 'grafeo.config.ts');
+    const norm = (p: string) => p.replace(/\\/g, '/');
+    expect(config).toContain(`schema: ${JSON.stringify(norm(absSchema))}`);
+    expect(config).toContain(`out: ${JSON.stringify(norm(absOut))}`);
+    expect(config).not.toContain('.//');
+    expect(fs.existsSync(absSchema)).toBe(true);
+  });
+
   it('shows the logo splash when stdout is a TTY', async () => {
     const io = makeIO({ interactive: true, stdoutTTY: true });
     await runInit([], io);

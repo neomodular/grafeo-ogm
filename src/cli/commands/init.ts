@@ -99,9 +99,16 @@ export default defineConfig({
 `;
 }
 
-/** Normalize a path to a `./`-prefixed relative form for the config file. */
+/**
+ * Normalize a path for the config file: relative paths get a `./` prefix,
+ * absolute ones (POSIX `/x`, Windows `C:\x` / `\\server\x`) are kept as-is.
+ * vNEXT — pre-vNEXT an absolute `--schema /abs/s.graphql` became
+ * `.//abs/s.graphql`, a relative path the config then resolved against cwd.
+ */
 function rel(p: string): string {
   const normalized = p.replace(/\\/g, '/');
+  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(p))
+    return normalized;
   return normalized.startsWith('.') ? normalized : `./${normalized}`;
 }
 
