@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.19.0 (2026-10-23) — ignored write input and params
+
+> **Minor release.** It adds strict items 32–34, for input that 2.x ignores silently. Without `strict`, every input that worked in 2.18.0 compiles to byte-identical Cypher; the only addition is one warning per OGM instance and shape. Generated types are unchanged.
+
+### Strict mode
+
+- **Item 32:** a `connect` / `disconnect` map key that is not a relationship of the type used to be skipped silently. This covers the root, and keys nested in a connect / disconnect item at any depth. A cascade `delete` threw for the same mistake. Default mode now warns (`connect-unknown-relationship` / `disconnect-unknown-relationship`), and `strict: true` throws `OGMError`.
+- **Item 33:** `@cypher` fields given as write input were stored as a property that no read returns. This applies to `create`, `update`, `updateMany`, `createMany`, `upsert`, and nested create / update. Default mode warns (`cypher-field-write`), and `strict: true` throws `OGMError`.
+- **Item 34:** top-level params that a `Model` / `InterfaceModel` method does not read used to be ignored. Examples:
+  - an upstream-style `update({ where, delete })` (upstream `update()` never took `delete` either);
+  - a `deleteMany({ where, delete })` cascade;
+  - `delete({ where, labels })`, which deleted without the label filter;
+  - `InterfaceModel.find({ select })`.
+
+  Default mode warns (`unknown-param`, with advice for the common cases), and `strict: true` throws `OGMError`. Each method allows exactly the keys its TypeScript signature declares.
+
 ## 2.18.0 (2026-10-23) — write coercion and disconnect items
 
 > **Minor release.** It adds strict item 31 (a `null` / `undefined` item in a root disconnect array), and writes `@id` on relationship properties, which used to be always null. Without `strict`, inputs that worked in 2.17.0 compile to byte-identical Cypher, except that schemas with an edge `@id` now set it. Generated types are unchanged.
