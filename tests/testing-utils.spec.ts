@@ -356,6 +356,35 @@ describe('CypherAssert', () => {
       );
     });
 
+    // vNEXT — the missing-key message ran JSON.stringify over the actual
+    // params, which threw a raw TypeError for a bigint.
+    it('reports a missing key when the actual params hold a bigint (vNEXT)', () => {
+      expect(() =>
+        CypherAssert.assertParams(
+          { big: 9007199254740993n, n: neo4j.int(5), s: 'x' },
+          { missing: 1 },
+        ),
+      ).toThrow(
+        `Missing param key 'missing' in actual params: {"big":{"$bigint":"9007199254740993"},"n":{"low":5,"high":0},"s":"x"}`,
+      );
+    });
+
+    it('keeps the missing-key message for params without a bigint, key order included (vNEXT)', () => {
+      expect(() =>
+        CypherAssert.assertParams({ b: 1, a: [2, 'x'] }, { missing: 1 }),
+      ).toThrow(
+        `Missing param key 'missing' in actual params: {"b":1,"a":[2,"x"]}`,
+      );
+    });
+
+    it('reports a missing key even when the actual params cannot be written as JSON (vNEXT)', () => {
+      const cyclic: Record<string, unknown> = { a: 1 };
+      cyclic.self = cyclic;
+      expect(() => CypherAssert.assertParams(cyclic, { missing: 1 })).toThrow(
+        /^Missing param key 'missing' in actual params: \{ keys: a, self \}$/,
+      );
+    });
+
     it('compares neo4j Integers by value, and not to plain numbers (v2.5.0)', () => {
       expect(() =>
         CypherAssert.assertParams({ p: neo4j.int(5) }, { p: neo4j.int(5) }),

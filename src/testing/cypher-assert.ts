@@ -21,6 +21,25 @@ function canonicalJson(value: unknown): string | undefined {
   });
 }
 
+/**
+ * The actual params as JSON for an assertion message, in their own key
+ * order (as before), with a bigint written as `{"$bigint":"<digits>"}`.
+ *
+ * vNEXT — `JSON.stringify` threw a raw `TypeError` ("Do not know how to
+ * serialize a BigInt") while building the missing-key message, so a test
+ * saw that instead of the assertion. A value JSON cannot write at all (a
+ * cycle) falls back to the list of keys.
+ */
+function describeParams(params: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(params, (_key, v: unknown) =>
+      typeof v === 'bigint' ? { $bigint: v.toString() } : v,
+    );
+  } catch {
+    return `{ keys: ${Object.keys(params).join(', ')} }`;
+  }
+}
+
 interface Token {
   kind: 'word' | 'param' | 'quoted' | 'comment' | 'space' | 'punct';
   text: string;
@@ -328,7 +347,7 @@ export class CypherAssert {
     for (const key of Object.keys(expected)) {
       if (!(key in actual))
         throw new Error(
-          `Missing param key '${key}' in actual params: ${JSON.stringify(actual)}`,
+          `Missing param key '${key}' in actual params: ${describeParams(actual)}`,
         );
 
       const actualVal = canonicalJson(actual[key]);
