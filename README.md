@@ -587,6 +587,8 @@ const book = await Book.findUniqueOrThrow({
 | `_LT` | `<` | `{ price_LT: 50 }` |
 | `_LTE` | `<=` | `{ price_LTE: 50 }` |
 
+**Duration fields:** Neo4j does not order two durations (`duration > duration` is `null`), so a range filter on a `Duration` field adds both sides to the current instant, as `@neo4j/graphql` does: `{ ttl_GT: 'P1D' }` compiles to `datetime() + n.ttl > datetime() + duration($param0)`. Before v2.15.0 `_GT` / `_LT` compiled to a plain `n.ttl > …` and never matched a row. `_GTE` / `_LTE` still match only an equal duration unless `strict: true` ([item 25](#25-_gte--_lte-on-a-duration-field-since-2150)). Durations of different units are ordered at the current instant (UTC by default): `P1M` is longer than `P27D` and shorter than `P32D` whenever the query runs, but `P1M` vs `P30D` depends on the length of the month starting today, and `P1D` orders equal to `PT24H` (while `{ ttl: 'P1D' }` does not match a stored `PT24H`: equality, `_NOT` and `_IN` compare the durations themselves).
+
 **String operators:**
 
 | Operator | Cypher | Example |
@@ -1075,7 +1077,7 @@ const ogm = new OGM({ typeDefs, driver, logger, strict: true });
 
 Some input shapes compile to something other than what they say. A typo'd connect key widens the connect to every node. A fulltext `score` inside `OR` is ignored. Fixing these in place would change results that existing code may rely on, so 2.x keeps the old behaviour by default and adds an opt-in switch:
 
-- **`strict` off (the 2.x default).** Every input compiles exactly as in v2.5.4, byte for byte (the one exception is the aggregate fix at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log.
+- **`strict` off (the 2.x default).** Every input compiles exactly as in v2.5.4, byte for byte (the exceptions are the fixes at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log.
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
@@ -1431,9 +1433,24 @@ await users.find({ where: { id }, select: { tags: true } });
 
 Since 2.4.0 every `@cypher` field is reduced to its statement's first row (`head(collect(tags))`), which suits a scalar but cuts a list field that returns one row per element down to a single element. `@neo4j/graphql` 5.x `UNWIND`s the column and `collect`s every element, and strict mode does the same: a statement that returns one row per element gives the whole list, one that returns a single row holding a list gives that list (as in default mode), several list rows are concatenated, `null` elements are dropped, and no rows give `[]` (default mode: `null`). Each node is still returned exactly once. This applies everywhere the field is read: `select` / `selectionSet` at the root, through relationships and connections, in interface / union fragments and `InterfaceModel`, in mutation responses, and in `where` (`tags: ['x', 'y']`, `tags_IN`, `posts_SOME: { tags: … }`), which then compares the list the field returns. Scalar `@cypher` fields are unchanged in both modes, and list fields are not sortable (the generated sort input leaves them out). Through a relationship the field is projected inline, so an aggregating statement still throws there in both modes (see [Limitations](#limitations)). The warning code is `cypher-list-field`, logged once per OGM instance, type and field.
 
+#### 25. `_GTE` / `_LTE` on a Duration field (since 2.15.0)
+
+```typescript
+// stored: a.ttl = P1M, b.ttl = P27D, c.ttl = P1D
+await tasks.find({ where: { ttl_GTE: 'P27D' } });
+// default: [b]       — n.ttl >= duration($param0): only the equal duration (and warns)
+// strict:  [a, b]    — datetime() + n.ttl >= datetime() + duration($param0)
+```
+
+Neo4j does not order durations, so `n.ttl >= $p` is `null` unless the two durations are equal, and `_GTE` / `_LTE` behaved as equality. Strict mode compares them as `_GT` / `_LT` do since 2.15.0 in both modes (see [Duration fields](#where-operators)): both sides are added to the current instant, as in `@neo4j/graphql`. This applies wherever a where is accepted: root, relationship and connection filters (including `Duration` relationship properties in `edge`), nested selection `where`, `<rel>Aggregate(where)`, `aggregate()`, policy `when` partials and connect `where`. **Deprecated:** relying on `_GTE` / `_LTE` to match only equal durations; use the bare field (`{ ttl: 'P27D' }`) for that. The warning code is `duration-range-equality`, logged once per OGM instance, type and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
+
+#### Not behind the switch: `_GT` / `_LT` on a Duration field
+
+Before 2.15.0 they compiled to a plain `n.ttl > $p`, which Neo4j evaluates to `null` for two durations, so they never matched a row. Since 2.15.0, in both modes, they compare at the current instant (see [Duration fields](#where-operators)).
 
 ---
 

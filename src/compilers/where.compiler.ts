@@ -203,6 +203,75 @@ const OPERATOR_REGISTRY: ReadonlyArray<[string, OperatorDef]> = [
   ['_IN', { template: '%rf IN %rp', ciAware: false }],
 ];
 
+/** Range operators on a Duration field → their Cypher comparison operator. */
+const DURATION_RANGE_OPERATORS: Readonly<Record<string, string>> = {
+  _GT: '>',
+  _LT: '<',
+  _GTE: '>=',
+  _LTE: '<=',
+};
+
+/**
+ * v2.15.0 — the range comparison of a scalar `Duration` field, or `null`
+ * when the caller keeps its plain `field <op> param` Cypher.
+ *
+ * Neo4j does not order durations: `duration > duration` is `null`. So a
+ * plain `n.d > $p` / `n.d < $p` never matched a row, and `n.d >= $p` /
+ * `n.d <= $p` were true only for an EQUAL duration (the `=` half). Like
+ * `@neo4j/graphql` 5.x (`createDurationOperation`, also used by its
+ * aggregation filters), both sides are added to the statement's current
+ * instant and the resulting datetimes are compared:
+ * `datetime() + n.d > datetime() + duration($p)`. A null duration still
+ * yields `null` (the row is dropped), as before.
+ *
+ * Mixed units are ordered at the current instant (UTC by default): `P1M`
+ * vs `P30D` depends on the length of the month starting today (`P1M` is
+ * the longer one when that month has 31 days, equal or shorter otherwise),
+ * while `P1M` > `P27D` and `P1M` < `P32D` always hold. Equality, `_NOT`
+ * and `_IN` keep comparing the durations themselves (component-wise).
+ *
+ * - `_GT` / `_LT` returned no row ever, so they are corrected in both modes.
+ * - `_GTE` / `_LTE` matched the equal durations, which callers may rely
+ *   on: default mode keeps that Cypher and warns once per OGM, type and
+ *   field (`duration-range-equality`); strict mode (item 25) compares as
+ *   `_GT` / `_LT` do.
+ *
+ * List fields are not affected.
+ *
+ * @internal
+ */
+export function compileDurationRange(
+  operator: string,
+  fieldRef: string,
+  paramRef: string,
+  propDef: PropertyDefinition | undefined,
+  strictMode: StrictMode,
+  typeName: string | undefined,
+): string | null {
+  if (propDef?.type !== 'Duration' || propDef.isArray) return null;
+  const cmp = DURATION_RANGE_OPERATORS[operator];
+  if (cmp === undefined) return null;
+  if ((operator === '_GTE' || operator === '_LTE') && !strictMode.strict) {
+    const field = `${typeName ?? '?'}.${propDef.name}`;
+    strictMode.warn(
+      'duration-range-equality',
+      field,
+      `\`${field}\` is a Duration: in 2.x its _GTE / _LTE filters match only an equal duration ` +
+        `(Neo4j does not order durations, so the \`>\` / \`<\` half is never true).`,
+      `compare durations by adding them to the current instant, as @neo4j/graphql does`,
+    );
+    return null;
+  }
+  return `datetime() + ${fieldRef} ${cmp} datetime() + ${paramRef}`;
+}
+
+/** The type name of a where frame's property holder (node, interface or edge type). */
+function typeNameOf(holder: unknown): string | undefined {
+  const h = holder as { typeName?: unknown; name?: unknown } | undefined;
+  if (typeof h?.typeName === 'string') return h.typeName;
+  return typeof h?.name === 'string' ? h.name : undefined;
+}
+
 /** Fast lookup by suffix */
 const OPERATOR_MAP = new Map<string, OperatorDef>(OPERATOR_REGISTRY);
 
@@ -2465,6 +2534,18 @@ export class WhereCompiler {
         `compare _IN / _NOT_IN case-insensitively`,
       );
     }
+
+    // v2.15.0 — Duration ranges (see `compileDurationRange`).
+    const durationRange = compileDurationRange(
+      operator,
+      rawFieldRef,
+      rawParamRef,
+      propDef,
+      this.strictMode,
+      typeNameOf(propsHolder),
+    );
+    if (durationRange !== null)
+      return { cypher: durationRange, params: { [paramName]: bound } };
 
     const ci =
       caseInsensitive && opDef.ciAware && !temporalWrapped && listCiAllowed;

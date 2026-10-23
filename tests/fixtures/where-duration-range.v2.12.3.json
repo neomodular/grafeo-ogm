@@ -1,0 +1,284 @@
+{
+  "default | Duration equality": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` = duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | Duration _NOT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <> duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | Duration _IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` IN [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "default | Duration _NOT_IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE NOT n.`d` IN [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "default | Duration list equality": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`ds` = [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "default | DateTime _GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`at` > datetime($param0)\nRETURN n { .`id` }"
+  ],
+  "default | DateTime _LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`at` <= datetime($param0)\nRETURN n { .`id` }"
+  ],
+  "default | Date _GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`day` >= date($param0)\nRETURN n { .`id` }"
+  ],
+  "default | Int _GT / _LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`n` > $param0 AND n.`n` <= $param1\nRETURN n { .`id` }"
+  ],
+  "default | edge Int _GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`w` >= $param1 }\nRETURN n { .`id` }"
+  ],
+  "default | array-connect where _IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`id` IN connItem.where.node.id_IN\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "default | root d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` > duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | nested steps_SOME d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection node d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection edge wait_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | selection steps(where: d_GT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` > duration($param0) | n0 { .`id` }] }"
+  ],
+  "default | selection stepsAggregate(where: d_GT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` > duration($param0) } } }"
+  ],
+  "default | aggregate() where d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` > duration($param0)\nRETURN count(n) AS count"
+  ],
+  "default | policy when d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` > duration($param0))\nRETURN n { .`id` }"
+  ],
+  "default | array-connect where d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` > duration(connItem.where.node.d_GT)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "default | root d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` < duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | nested steps_SOME d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection node d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection edge wait_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | selection steps(where: d_LT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` < duration($param0) | n0 { .`id` }] }"
+  ],
+  "default | selection stepsAggregate(where: d_LT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` < duration($param0) } } }"
+  ],
+  "default | aggregate() where d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` < duration($param0)\nRETURN count(n) AS count"
+  ],
+  "default | policy when d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` < duration($param0))\nRETURN n { .`id` }"
+  ],
+  "default | array-connect where d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` < duration(connItem.where.node.d_LT)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "default | root d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` >= duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | nested steps_SOME d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection node d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection edge wait_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | selection steps(where: d_GTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` >= duration($param0) | n0 { .`id` }] }"
+  ],
+  "default | selection stepsAggregate(where: d_GTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` >= duration($param0) } } }"
+  ],
+  "default | aggregate() where d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` >= duration($param0)\nRETURN count(n) AS count"
+  ],
+  "default | policy when d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` >= duration($param0))\nRETURN n { .`id` }"
+  ],
+  "default | array-connect where d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` >= duration(connItem.where.node.d_GTE)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "default | root d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <= duration($param0)\nRETURN n { .`id` }"
+  ],
+  "default | nested steps_SOME d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection node d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | connection edge wait_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "default | selection steps(where: d_LTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` <= duration($param0) | n0 { .`id` }] }"
+  ],
+  "default | selection stepsAggregate(where: d_LTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` <= duration($param0) } } }"
+  ],
+  "default | aggregate() where d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <= duration($param0)\nRETURN count(n) AS count"
+  ],
+  "default | policy when d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` <= duration($param0))\nRETURN n { .`id` }"
+  ],
+  "default | array-connect where d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` <= duration(connItem.where.node.d_LTE)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "strict | Duration equality": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` = duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | Duration _NOT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <> duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | Duration _IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` IN [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "strict | Duration _NOT_IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE NOT n.`d` IN [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "strict | Duration list equality": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`ds` = [wc_t IN $param0 | duration(wc_t)]\nRETURN n { .`id` }"
+  ],
+  "strict | DateTime _GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`at` > datetime($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | DateTime _LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`at` <= datetime($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | Date _GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`day` >= date($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | Int _GT / _LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`n` > $param0 AND n.`n` <= $param1\nRETURN n { .`id` }"
+  ],
+  "strict | edge Int _GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`w` >= $param1 }\nRETURN n { .`id` }"
+  ],
+  "strict | array-connect where _IN": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`id` IN connItem.where.node.id_IN\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "strict | root d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` > duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | nested steps_SOME d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection node d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection edge wait_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` > duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | selection steps(where: d_GT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` > duration($param0) | n0 { .`id` }] }"
+  ],
+  "strict | selection stepsAggregate(where: d_GT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` > duration($param0) } } }"
+  ],
+  "strict | aggregate() where d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` > duration($param0)\nRETURN count(n) AS count"
+  ],
+  "strict | policy when d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` > duration($param0))\nRETURN n { .`id` }"
+  ],
+  "strict | array-connect where d_GT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` > duration(connItem.where.node.d_GT)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "strict | root d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` < duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | nested steps_SOME d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection node d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection edge wait_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` < duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | selection steps(where: d_LT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` < duration($param0) | n0 { .`id` }] }"
+  ],
+  "strict | selection stepsAggregate(where: d_LT)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` < duration($param0) } } }"
+  ],
+  "strict | aggregate() where d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` < duration($param0)\nRETURN count(n) AS count"
+  ],
+  "strict | policy when d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` < duration($param0))\nRETURN n { .`id` }"
+  ],
+  "strict | array-connect where d_LT": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` < duration(connItem.where.node.d_LT)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "strict | root d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` >= duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | nested steps_SOME d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection node d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection edge wait_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` >= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | selection steps(where: d_GTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` >= duration($param0) | n0 { .`id` }] }"
+  ],
+  "strict | selection stepsAggregate(where: d_GTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` >= duration($param0) } } }"
+  ],
+  "strict | aggregate() where d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` >= duration($param0)\nRETURN count(n) AS count"
+  ],
+  "strict | policy when d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` >= duration($param0))\nRETURN n { .`id` }"
+  ],
+  "strict | array-connect where d_GTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` >= duration(connItem.where.node.d_GTE)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ],
+  "strict | root d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <= duration($param0)\nRETURN n { .`id` }"
+  ],
+  "strict | nested steps_SOME d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection node d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE r0.`d` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | connection edge wait_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE EXISTS { MATCH (n)-[e0:`LB_DUR_HAS`]->(r0:`LbDurStep`) WHERE e0.`wait` <= duration($param1) }\nRETURN n { .`id` }"
+  ],
+  "strict | selection steps(where: d_LTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, steps: [(n)-[:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` <= duration($param0) | n0 { .`id` }] }"
+  ],
+  "strict | selection stepsAggregate(where: d_LTE)": [
+    "MATCH (n:`LbDurTask`)\nRETURN n { .`id`, stepsAggregate: { `count`: COUNT { (n)-[e0:`LB_DUR_HAS`]->(n0:`LbDurStep`) WHERE n0.`d` <= duration($param0) } } }"
+  ],
+  "strict | aggregate() where d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`d` <= duration($param0)\nRETURN count(n) AS count"
+  ],
+  "strict | policy when d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE (n.`d` <= duration($param0))\nRETURN n { .`id` }"
+  ],
+  "strict | array-connect where d_LTE": [
+    "MATCH (n:`LbDurTask`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nUNWIND $connect_steps AS connItem\nMATCH (target:`LbDurStep`)\nWHERE target.`d` <= duration(connItem.where.node.d_LTE)\nMERGE (n)-[:`LB_DUR_HAS`]->(target)\nRETURN count(*) AS _conn_steps\n}\nRETURN n { __typename: 'LbDurTask', .`id`, .`runId`, .`d`, .`ds`, .`at`, .`day`, .`n` }"
+  ]
+}

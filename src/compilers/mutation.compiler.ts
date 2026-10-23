@@ -30,7 +30,11 @@ import {
   wrapWriteExpr,
 } from '../utils/write-coercion';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
-import { assertWhereDepth, WhereCompiler } from './where.compiler';
+import {
+  assertWhereDepth,
+  compileDurationRange,
+  WhereCompiler,
+} from './where.compiler';
 
 export interface MutationResult {
   cypher: string;
@@ -3587,16 +3591,30 @@ export class MutationCompiler {
       // Note: itemVar map access is NOT escaped (parameter map keys, not Cypher identifiers)
       // Temporal wrap keys off the FIRST item's value type — the UNWIND
       // fast path already requires shape-homogeneous items.
+      const propDef = targetNodeDef?.properties.get(baseProp);
+      const suffix = key.slice(baseProp.length);
       const valueRef = wrapWhereParam(
         `${itemVar}.where.node.${key}`,
         nodeWhere[key],
-        targetNodeDef?.properties.get(baseProp),
-        key.slice(baseProp.length),
+        propDef,
+        suffix,
       );
+      const fieldRef = `${targetVar}.${escapeIdentifier(baseProp)}`;
+      // v2.15.0 — Duration ranges, as in the WhereCompiler.
+      const durationRange = compileDurationRange(
+        suffix,
+        fieldRef,
+        valueRef,
+        propDef,
+        this.strictMode,
+        targetNodeDef?.typeName,
+      );
+      if (durationRange !== null) {
+        conditions.push(durationRange);
+        continue;
+      }
       conditions.push(
-        template
-          .replace('%v', `${targetVar}.${escapeIdentifier(baseProp)}`)
-          .replace('$%p', valueRef),
+        template.replace('%v', fieldRef).replace('$%p', valueRef),
       );
     }
 
