@@ -21,6 +21,7 @@ import {
   deleteSubgraph,
 } from '../../src/subgraph/subgraph-operations';
 import { SubgraphConfig } from '../../src/subgraph/types';
+import { OGM } from '../../src/ogm';
 
 const URI = process.env.NEO4J_APOC_URI;
 const describeLive = URI ? describe : describe.skip;
@@ -225,6 +226,117 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
     await expect(
       inTx((tx) => cloneSubgraph('book-a', bookConfig, tx)),
     ).rejects.toThrow(/1 owned node\(s\) share an `id`/);
+  });
+
+  // -------------------------------------------------------------------
+  // vNEXT — strict item 41: a reference relationship between two owned
+  // nodes. APOC clones it clone to clone (subgraphAll returns every
+  // relationship among the owned nodes); the 2.x default also re-attaches
+  // it from the clone back to the source's original.
+  // -------------------------------------------------------------------
+
+  const refConfig = (direction: 'OUT' | 'IN'): SubgraphConfig => ({
+    ...bookConfig,
+    referenceRelationships: [
+      { fromLabel: 'LeChapter', relationshipType: 'LE_NEXT', direction },
+      { fromLabel: 'LeChapter', relationshipType: 'LE_LANG', direction: 'OUT' },
+    ],
+  });
+
+  /** Book A owns c1 → c2 (LE_NEXT); both chapters reference a shared language. */
+  async function seedInternalReference(): Promise<void> {
+    await run(
+      `CREATE (a:LeBook {id: 'book-a', runId: $runId}),
+              (c1:LeChapter {id: 'c1', runId: $runId}),
+              (c2:LeChapter {id: 'c2', runId: $runId}),
+              (en:LeLang {id: 'en', runId: $runId}),
+              (a)-[:LE_HAS_CHAPTER]->(c1),
+              (a)-[:LE_HAS_CHAPTER]->(c2),
+              (c1)-[:LE_NEXT {w: 1}]->(c2),
+              (c1)-[:LE_LANG]->(en),
+              (c2)-[:LE_LANG]->(en)`,
+    );
+  }
+
+  /** Every relationship of a type, as `from->to`, a clone written `x'`. */
+  async function edges(type: string): Promise<string[]> {
+    const rows = await run(
+      `MATCH (x {runId: $runId})-[r:${type}]->(y {runId: $runId})
+       RETURN coalesce(x.clonedFromId + "'", x.id) + '->' +
+              coalesce(y.clonedFromId + "'", y.id) AS e ORDER BY e`,
+    );
+    return rows.map((r) => r.e as string);
+  }
+
+  it.each(['OUT', 'IN'] as const)(
+    'strict clones a reference relationship between owned nodes once, clone to clone (%s, vNEXT)',
+    async (direction) => {
+      await seedInternalReference();
+
+      await inTx((tx) =>
+        cloneSubgraph('book-a', refConfig(direction), tx, undefined, {
+          strict: true,
+        }),
+      );
+
+      expect(await edges('LE_NEXT')).toEqual(["c1'->c2'", 'c1->c2']);
+      // A reference to a node outside the subgraph is still re-attached.
+      expect(await edges('LE_LANG')).toEqual([
+        "c1'->en",
+        'c1->en',
+        "c2'->en",
+        'c2->en',
+      ]);
+      const props = await run(
+        `MATCH (:LeChapter {clonedFromId: 'c1', runId: $runId})-[r:LE_NEXT]->()
+         RETURN r.w AS w`,
+      );
+      expect(props).toEqual([{ w: 1 }]);
+    },
+  );
+
+  it.each([
+    ['OUT', ["c1'->c2", "c1'->c2'", 'c1->c2']],
+    ['IN', ["c1'->c2'", 'c1->c2', "c1->c2'"]],
+  ] as const)(
+    'the default keeps the extra link back into the source and warns once (%s, vNEXT)',
+    async (direction, expected) => {
+      await seedInternalReference();
+      const warn = jest.fn();
+      const logger = { debug: () => {}, warn };
+
+      await inTx((tx) =>
+        cloneSubgraph('book-a', refConfig(direction), tx, logger),
+      );
+      expect(await edges('LE_NEXT')).toEqual(expected);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(
+        /reference relationship LE_NEXT .* joins two owned nodes.*`strict: true`/,
+      );
+
+      // Warn-once per logger: a second clone does not warn again.
+      await inTx((tx) =>
+        cloneSubgraph('book-a', refConfig(direction), tx, logger),
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('OGM.$cloneSubgraph follows new OGM({ strict }) (vNEXT)', async () => {
+    await seedInternalReference();
+    const typeDefs = 'type LeBook @node { id: ID! }';
+    const warn = jest.fn();
+    const logger = { debug: () => {}, warn };
+
+    const strictOgm = new OGM({ typeDefs, driver, logger, strict: true });
+    await strictOgm.$cloneSubgraph('book-a', refConfig('OUT'));
+    expect(await edges('LE_NEXT')).toEqual(["c1'->c2'", 'c1->c2']);
+
+    const defaultOgm = new OGM({ typeDefs, driver, logger });
+    await defaultOgm.$cloneSubgraph('book-a', refConfig('OUT'));
+    expect(warn.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringMatching(/LE_NEXT \(OUT\) from LeChapter joins two owned/),
+    ]);
   });
 
   it('a delete with a root id of another label is a no-op', async () => {

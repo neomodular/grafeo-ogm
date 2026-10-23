@@ -709,3 +709,92 @@ describe('cloneSubgraph owned-node ids (v2.5.0)', () => {
     expect(err.message).not.toMatch(/java\.lang/);
   });
 });
+
+// vNEXT — strict item 41: a reference relationship between two owned nodes.
+describe('cloneSubgraph reference relationships between owned nodes (vNEXT)', () => {
+  const config: SubgraphConfig = {
+    ownedLabels: ['Post', 'Comment'],
+    ownedRelationships: ['HAS_COMMENT'],
+    maxLevel: 5,
+    referenceRelationships: [
+      { fromLabel: 'Comment', relationshipType: 'REPLY_TO', direction: 'OUT' },
+    ],
+  };
+
+  function cloneResults(extra: Record<string, unknown> = {}) {
+    return [
+      {
+        records: [
+          mockRecord({
+            originalId: 'root-1',
+            cloneElementId: 'elem-1',
+            ...extra,
+          }),
+        ],
+      },
+      { records: [mockRecord({ elemId: 'elem-1', newId: 'new-uuid-1' })] },
+    ];
+  }
+
+  it('sends the same statements as before in the default without a warn logger', async () => {
+    const tx = createMockTransaction([
+      ...cloneResults(),
+      { records: [mockRecord({ totalCreated: 1 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx, { debug: () => {} });
+
+    const calls = (tx.run as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[0][0]).toContain(
+      'RETURN original.id AS originalId, elementId(output) AS cloneElementId, labels(output) AS labels\n',
+    );
+    expect(calls[0][0]).not.toContain('originalElementId');
+    expect(calls[2][0]).not.toContain('ownedElementIds');
+    expect(Object.keys(calls[2][1])).toEqual(['mappings']);
+  });
+
+  it('strict skips targets that are owned originals', async () => {
+    const tx = createMockTransaction([
+      ...cloneResults({ originalElementId: 'orig-1' }),
+      { records: [mockRecord({ totalCreated: 0 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx, undefined, { strict: true });
+
+    const calls = (tx.run as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[0][0]).toContain('elementId(original) AS originalElementId');
+    expect(calls[2][0]).toContain(
+      'WHERE NOT elementId(target) IN $ownedElementIds',
+    );
+    expect(calls[2][1].ownedElementIds).toEqual(['orig-1']);
+  });
+
+  it('the default with a warn logger checks once, warns once, and changes nothing else', async () => {
+    const warn = jest.fn();
+    const logger = { debug: () => {}, warn };
+    const tx = createMockTransaction([
+      ...cloneResults(),
+      { records: [mockRecord({ internal: 1 })] },
+      { records: [mockRecord({ totalCreated: 1 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx, logger);
+
+    const first = (tx.run as jest.Mock).mock.calls;
+    expect(first).toHaveLength(4);
+    expect(first[2][0]).toContain('RETURN count(*) AS internal');
+    expect(first[3][0]).not.toContain('ownedElementIds');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(
+      /REPLY_TO \(OUT\) from Comment joins two owned nodes/,
+    );
+
+    // Already warned for this logger: no detection query any more.
+    const tx2 = createMockTransaction([
+      ...cloneResults(),
+      { records: [mockRecord({ totalCreated: 1 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx2, logger);
+    expect((tx2.run as jest.Mock).mock.calls).toHaveLength(3);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});

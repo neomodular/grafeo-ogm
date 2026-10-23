@@ -36,7 +36,11 @@ import { parseSchema } from './schema/parser';
 import { applyUpstreamNodeLabels, hasCustomNodeLabels } from './schema/labels';
 import { SchemaMetadata } from './schema/types';
 import { clearResolveTargetDefCache } from './schema/utils';
-import { cloneSubgraph, deleteSubgraph } from './subgraph/subgraph-operations';
+import {
+  cloneSubgraph,
+  deleteSubgraph,
+  InternalCloneSubgraphOptions,
+} from './subgraph/subgraph-operations';
 import {
   SubgraphCloneResult,
   SubgraphConfig,
@@ -836,12 +840,18 @@ export class OGM<
     config: SubgraphConfig,
     transaction?: Transaction,
   ): Promise<SubgraphCloneResult> {
+    // vNEXT — strict item 41 follows this OGM's `strict`, and its warning
+    // goes through this OGM's warn-once log.
+    const cloneOptions: InternalCloneSubgraphOptions = {
+      strictMode: this.modelCompilers.strictMode,
+    };
     if (transaction)
       return cloneSubgraph(
         sourceRootId,
         config,
         transaction,
         this.config.logger,
+        cloneOptions,
       );
 
     const session = this.config.driver.session();
@@ -852,6 +862,7 @@ export class OGM<
         config,
         tx,
         this.config.logger,
+        cloneOptions,
       );
       await tx.commit();
       return result;

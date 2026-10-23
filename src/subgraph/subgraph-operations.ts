@@ -1,6 +1,7 @@
 import { Transaction } from 'neo4j-driver';
 import { SubgraphOperationError } from '../errors';
 import { OGMLogger } from '../execution/executor';
+import { StrictMode } from '../utils/strict-mode';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
@@ -14,6 +15,42 @@ import {
 
 /** No-op logger used when no logger is provided. */
 const NOOP_LOGGER: OGMLogger = { debug: () => {} };
+
+/** Options for {@link cloneSubgraph} (vNEXT). */
+export interface CloneSubgraphOptions {
+  /**
+   * vNEXT — strict item 41: a reference relationship between two owned
+   * nodes is cloned once, clone to clone. Without it (the 2.x default) the
+   * clone also gets a copy pointing back at the source's original node, and
+   * a warning is logged. `OGM.$cloneSubgraph` follows `new OGM({ strict })`.
+   */
+  strict?: boolean;
+}
+
+/** Internal: the OGM passes its own StrictMode (warn-once per instance). */
+export interface InternalCloneSubgraphOptions extends CloneSubgraphOptions {
+  strictMode?: StrictMode;
+}
+
+/** Warn-once state for direct callers, per logger. */
+const directStrictModes = new WeakMap<OGMLogger, StrictMode>();
+
+function cloneStrictMode(
+  options: InternalCloneSubgraphOptions,
+  logger: OGMLogger | undefined,
+): StrictMode {
+  if (options.strictMode) return options.strictMode;
+  if (options.strict === true) return new StrictMode(true);
+  if (!logger) return new StrictMode(false);
+  let mode = directStrictModes.get(logger);
+  if (!mode) {
+    mode = new StrictMode(false, logger);
+    directStrictModes.set(logger, mode);
+  }
+  return mode;
+}
+
+const INTERNAL_REFERENCE_WARN = 'subgraph-internal-reference';
 
 /**
  * An owned relationship entry: a type with an optional APOC direction
@@ -131,7 +168,16 @@ function validateConfig(
  * @param sourceRootId - The `id` property of the root node to clone
  * @param config - Defines which nodes to clone vs reference
  * @param transaction - Caller-managed Neo4j transaction
+ * A relationship between two owned nodes is cloned by APOC, clone to
+ * clone, whatever its type. vNEXT — under `strict` (strict item 41), a
+ * reference relationship whose target is itself an owned node is not
+ * re-attached in Phase 2. Without it, Phase 2 also links the clone to the
+ * source's original target, so the clone has the relationship twice (once
+ * to its own copy, once back into the source subgraph); 2.x keeps that and
+ * logs a warning once.
+ *
  * @param logger - Optional logger for debug output
+ * @param options - `{ strict: true }` for the strict-mode behaviour (vNEXT)
  * @returns The cloned root node id, a mapping of original→cloned node ids,
  *          and the cloned node ids grouped by label
  */
@@ -140,16 +186,22 @@ export async function cloneSubgraph(
   config: SubgraphConfig,
   transaction: Transaction,
   logger?: OGMLogger,
+  options: CloneSubgraphOptions = {},
 ): Promise<SubgraphCloneResult> {
   const log = logger ?? NOOP_LOGGER;
   validateConfig(config, 'clone', sourceRootId);
+  const strictMode = cloneStrictMode(
+    options as InternalCloneSubgraphOptions,
+    logger,
+  );
 
   try {
-    const cloneResult = await executeApocClone(
+    const { result: cloneResult, originalElementIds } = await executeApocClone(
       sourceRootId,
       config,
       transaction,
       log,
+      strictMode.strict,
     );
 
     log.debug(
@@ -158,7 +210,22 @@ export async function cloneSubgraph(
       sourceRootId,
     );
 
-    await reattachReferenceRelationships(config, cloneResult, transaction, log);
+    if (!strictMode.strict)
+      await warnInternalReferences(
+        sourceRootId,
+        config,
+        cloneResult,
+        transaction,
+        strictMode,
+      );
+
+    await reattachReferenceRelationships(
+      config,
+      cloneResult,
+      transaction,
+      log,
+      originalElementIds,
+    );
 
     return cloneResult;
   } catch (error) {
@@ -252,7 +319,12 @@ async function executeApocClone(
   config: SubgraphConfig,
   transaction: Transaction,
   logger: OGMLogger,
-): Promise<SubgraphCloneResult> {
+  strict: boolean,
+): Promise<{
+  result: SubgraphCloneResult;
+  /** Element ids of the cloned originals (strict mode only, vNEXT). */
+  originalElementIds?: string[];
+}> {
   const relFilter = ownedRelationshipFilter(config);
   const labelFilter = config.ownedLabels.map((l) => `+${l}`).join('|');
   const rootLabel = rootLabelOf(config);
@@ -291,7 +363,9 @@ async function executeApocClone(
     WITH input, output
     MATCH (original) WHERE id(original) = input
     SET output.clonedFromId = original.id
-    RETURN original.id AS originalId, elementId(output) AS cloneElementId, labels(output) AS labels
+    RETURN original.id AS originalId, elementId(output) AS cloneElementId, labels(output) AS labels${
+      strict ? ', elementId(original) AS originalElementId' : ''
+    }
     `,
     {
       sourceId: sourceRootId,
@@ -377,10 +451,70 @@ async function executeApocClone(
   );
 
   return {
-    clonedRootId: finalClonedRootId,
-    nodeMapping: finalMapping,
-    nodesByLabel,
+    result: {
+      clonedRootId: finalClonedRootId,
+      nodeMapping: finalMapping,
+      nodesByLabel,
+    },
+    ...(strict
+      ? {
+          originalElementIds: result.records.map(
+            (r) => r.get('originalElementId') as string,
+          ),
+        }
+      : {}),
   };
+}
+
+/**
+ * vNEXT — default mode only: log the strict item 41 warning when a
+ * reference relationship joins two owned nodes, which Phase 2 re-attaches
+ * from the clone back to the source's original (on top of the clone-to-
+ * clone copy APOC made). A read-only query, run only when the warning
+ * would be logged (a logger with `warn`, not warned yet), so callers
+ * without a logger send exactly the statements they did before.
+ */
+async function warnInternalReferences(
+  sourceRootId: string,
+  config: SubgraphConfig,
+  cloneResult: SubgraphCloneResult,
+  transaction: Transaction,
+  strictMode: StrictMode,
+): Promise<void> {
+  const originalIds = Array.from(cloneResult.nodeMapping.keys());
+  for (const refRel of config.referenceRelationships) {
+    const detail = `${refRel.fromLabel}:${refRel.relationshipType}:${refRel.direction}`;
+    if (!strictMode.wouldWarn(INTERNAL_REFERENCE_WARN, detail)) continue;
+    const escapedRelType = escapeIdentifier(refRel.relationshipType);
+    const escapedLabel = assertSafeLabel(refRel.fromLabel);
+    const pattern =
+      refRel.direction === 'OUT'
+        ? `-[:${escapedRelType}]->(target)`
+        : `<-[:${escapedRelType}]-(target)`;
+    const result = await transaction.run(
+      `
+      UNWIND $originalIds AS oid
+      MATCH (original {id: oid})
+      WHERE original:${escapedLabel}
+      MATCH (original)${pattern}
+      WHERE target.id IN $originalIds
+      RETURN count(*) AS internal
+      `,
+      { originalIds },
+    );
+    const internal =
+      result.records[0]?.get('internal')?.toNumber?.() ??
+      result.records[0]?.get('internal') ??
+      0;
+    if (internal > 0)
+      strictMode.warn(
+        INTERNAL_REFERENCE_WARN,
+        detail,
+        `$cloneSubgraph from '${sourceRootId}': reference relationship ${refRel.relationshipType} (${refRel.direction}) from ${refRel.fromLabel} joins two owned nodes. ` +
+          'APOC already clones it clone to clone, and 2.x also re-attaches it from the clone to the source subgraph, so the clone has it twice.',
+        'clone it once, clone to clone',
+      );
+  }
 }
 
 /**
@@ -401,8 +535,17 @@ async function reattachReferenceRelationships(
   cloneResult: SubgraphCloneResult,
   transaction: Transaction,
   logger: OGMLogger,
+  /**
+   * vNEXT — strict mode: the element ids of the cloned originals. A target
+   * among them is an owned node, whose relationship APOC already cloned
+   * clone to clone, so it is not re-attached.
+   */
+  ownedElementIds?: string[],
 ): Promise<void> {
   if (!config.referenceRelationships.length) return;
+  const skipOwned = ownedElementIds
+    ? '\n        WHERE NOT elementId(target) IN $ownedElementIds'
+    : '';
 
   const mappings = Array.from(cloneResult.nodeMapping.entries()).map(
     ([originalId, cloneId]) => ({ originalId, cloneId }),
@@ -430,7 +573,7 @@ async function reattachReferenceRelationships(
       WITH original, clone
       CALL {
         WITH original, clone
-        MATCH (original)${matchPattern}
+        MATCH (original)${matchPattern}${skipOwned}
         WITH clone, target, properties(r) AS relProps
         ${createPattern}
         SET newR = relProps
@@ -438,7 +581,7 @@ async function reattachReferenceRelationships(
       }
       RETURN sum(created) AS totalCreated
       `,
-      { mappings },
+      ownedElementIds ? { mappings, ownedElementIds } : { mappings },
     );
 
     const totalCreated =

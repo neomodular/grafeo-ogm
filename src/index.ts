@@ -111,6 +111,7 @@ export type {
 // Subgraph operations
 export { cloneSubgraph, deleteSubgraph } from './subgraph';
 export type {
+  CloneSubgraphOptions,
   SubgraphCloneResult,
   SubgraphConfig,
   SubgraphDeleteResult,

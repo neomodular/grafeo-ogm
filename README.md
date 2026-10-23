@@ -1448,6 +1448,17 @@ await tasks.find({ where: { ttl_GTE: 'P27D' } });
 
 Neo4j does not order durations, so `n.ttl >= $p` is `null` unless the two durations are equal, and `_GTE` / `_LTE` behaved as equality. Strict mode compares them as `_GT` / `_LT` do since 2.15.0 in both modes (see [Duration fields](#where-operators)): both sides are added to the current instant, as in `@neo4j/graphql`. This applies wherever a where is accepted: root, relationship and connection filters (including `Duration` relationship properties in `edge`), nested selection `where`, `<rel>Aggregate(where)`, `aggregate()`, policy `when` partials and connect `where`. **Deprecated:** relying on `_GTE` / `_LTE` to match only equal durations; use the bare field (`{ ttl: 'P27D' }`) for that. The warning code is `duration-range-equality`, logged once per OGM instance, type and field.
 
+#### 41. `$cloneSubgraph` reference relationships between owned nodes (since vNEXT)
+
+```typescript
+// Book A owns chapters c1 and c2, and c1 -[:NEXT]-> c2 is listed in referenceRelationships
+await ogm.$cloneSubgraph('book-a', config);
+// default: c1' -[:NEXT]-> c2' and c1' -[:NEXT]-> c2 (back into the source; warns)
+// strict:  c1' -[:NEXT]-> c2' only
+```
+
+APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship until it has warned, and only when the logger has a `warn` method.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
@@ -1562,6 +1573,8 @@ Clone or delete entire subgraphs using APOC procedures. Requires the APOC plugin
 The traversal starts at the root and follows `ownedRelationships` into nodes carrying one of `ownedLabels`. A bare type such as `'HAS_CHAPTER'` is followed **outgoing only**; write `'<CHILD_OF'` to follow a relationship incoming, or `'<LINKED>'` to follow it both ways. Before v2.5.0 a bare type was followed both ways, so deleting one book could climb from a chapter it shared with another book up to that book and delete it too; add `<…>` to keep the old behavior for a type.
 
 The root is matched as `(:rootLabel {id: rootId})`, with `rootLabel` defaulting to the first entry of `ownedLabels` (v2.5.0; before, a node of any label with that id was a root). Set `rootLabel` when the root is not of that label — a delete whose root isn't found deletes nothing and returns `deletedCount: 0`. `cloneSubgraph` maps every owned node by its `id`, so it refuses, before cloning anything, a subgraph in which an owned node has no `id` or shares one with another owned node.
+
+Every relationship between two owned nodes is cloned clone to clone. `referenceRelationships` are for links to nodes outside the subgraph (an author, a language): the clone is linked to the same target. A reference whose target is itself owned is also re-attached to the source's original in 2.x, so the clone gets it twice; pass `strict` to skip it (see [strict item 41](#41-clonesubgraph-reference-relationships-between-owned-nodes-since-vnext)).
 
 ```typescript
 import { cloneSubgraph, deleteSubgraph } from 'grafeo-ogm';

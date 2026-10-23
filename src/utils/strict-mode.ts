@@ -54,13 +54,28 @@ export class StrictMode {
     this.log(code, detail, `[OGM] ${message}`);
   }
 
+  /**
+   * vNEXT — whether {@link StrictMode.warn} with this code and detail would
+   * log now (default mode, a logger with `warn`, not yet warned). Lets a
+   * caller skip work, such as a detection query, that only feeds a warning.
+   */
+  wouldWarn(code: string, detail: string): boolean {
+    if (this.strict || !this.logger?.warn) return false;
+    return !this.warned.has(this.keyFor(code, detail));
+  }
+
+  private keyFor(code: string, detail: string): string {
+    const key = `${code}\u0000${detail}`;
+    if (!this.warned.has(key) && this.warned.size >= StrictMode.MAX_KEYS)
+      return code;
+    return key;
+  }
+
   private log(code: string, detail: string, message: string): void {
     if (this.strict) return;
     const warn = this.logger?.warn;
     if (!warn) return;
-    let key = `${code}\u0000${detail}`;
-    if (!this.warned.has(key) && this.warned.size >= StrictMode.MAX_KEYS)
-      key = code;
+    const key = this.keyFor(code, detail);
     if (this.warned.has(key)) return;
     this.warned.add(key);
     warn.call(this.logger, message);
