@@ -1,9 +1,9 @@
 /**
  * Live: a `@cypher` field whose type is a node, interface or union type,
  * projected as a whole value (selected bare, or `select: { f: true }`),
- * is filtered by the target type's `read` policy (vNEXT — security).
+ * is filtered by the target type's `read` policy (v2.20.1 — security).
  *
- * Pre-vNEXT the statement's nodes were returned with every property and
+ * Pre-2.20.1 the statement's nodes were returned with every property and
  * no read policy of the target type, in default and strict mode, at the
  * root and nested, through Model and InterfaceModel.
  *

@@ -1837,7 +1837,7 @@ export class SelectionCompiler {
                   ? (propDef.cypherColumnName ?? node.fieldName)
                   : undefined,
               );
-          // vNEXT — security: a node-typed `@cypher` field selected bare
+          // v2.20.1 — security: a node-typed `@cypher` field selected bare
           // returns whole nodes, filtered by the target's read policy.
           parts.push(
             `${escapeIdentifier(key)}: ${this.guardCypherNodeValue(
@@ -2127,7 +2127,7 @@ export class SelectionCompiler {
               `${def.typeName}.${field}`,
               asList ? (prop.cypherColumnName ?? field) : undefined,
             );
-        // vNEXT — security: the target's read policy (see the main path).
+        // v2.20.1 — security: the target's read policy (see the main path).
         expr = this.guardCypherNodeValue(
           expr,
           prop,
@@ -2218,9 +2218,9 @@ export class SelectionCompiler {
   }
 
   /**
-   * vNEXT — security: a `@cypher` field whose type is a node, interface or
+   * v2.20.1 — security: a `@cypher` field whose type is a node, interface or
    * union type, projected as a whole value (selected bare, or
-   * `select: { f: true }`). Pre-vNEXT the statement's nodes were returned
+   * `select: { f: true }`). Pre-2.20.1 the statement's nodes were returned
    * with every property and NO read policy of the target type, so a
    * policy-hidden node leaked through any type declaring such a field.
    *

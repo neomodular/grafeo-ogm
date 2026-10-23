@@ -1,8 +1,8 @@
 /**
- * vNEXT — security: a `@cypher` field whose type is a node, interface or
+ * v2.20.1 — security: a `@cypher` field whose type is a node, interface or
  * union type, projected as a whole value (selected bare or with
  * `select: { f: true }`), is filtered by the target type's `read` policy.
- * Pre-vNEXT it returned the statement's nodes with no policy at all.
+ * Pre-2.20.1 it returned the statement's nodes with no policy at all.
  * Live coverage: tests/integration/nls-cypher-node-field.spec.ts.
  */
 import { Driver } from 'neo4j-driver';
@@ -82,7 +82,7 @@ async function compile(
   return records[0];
 }
 
-describe('policy: node-typed @cypher field projected bare (vNEXT)', () => {
+describe('policy: node-typed @cypher field projected bare (v2.20.1)', () => {
   it('single field: head of the value filtered by the read clause', async () => {
     const { cypher, params } = await compile('{ id topPost }');
     expect(cypher).toMatch(

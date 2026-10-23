@@ -229,7 +229,7 @@ describe('byte-identical Cypher regression', () => {
 });
 
 /**
- * vNEXT — security: a node-typed `@cypher` field projected bare is
+ * v2.20.1 — security: a node-typed `@cypher` field projected bare is
  * filtered by the target's read policy. Without `policies`, with a
  * bypass, an override, or no read clause on the target, the Cypher stays
  * byte for byte what v2.20.0 emitted (goldens captured on 6c556de).
