@@ -213,11 +213,13 @@ describe('Model.explainPolicies — clause forms and no short-circuit (6.2, 6.3)
     await bound.model('Chart').explainPolicies();
     expect(line(recorded[0].cypher, 'WITH n, [')).toBe(
       'WITH n, [' +
+        // v2.12.1 — raw-fragment prefixes draw from the same counter as
+        // `param<N>`, so the two interleave: p2 / p4 / p6.
         '(n.`ownerId` = $param0), ' +
-        '((n.`ownerId` = $param1) OR (n.tenantId = $policy_p0_tid)), ' +
-        '(n.`active` = $param2), ' +
-        '(n.weightZone IN $policy_p1_zones), ' +
-        '((n.`valid` = $param3) AND (n.weightZone = $policy_p2_zone))' +
+        '((n.`ownerId` = $param1) OR (n.tenantId = $policy_p2_tid)), ' +
+        '(n.`active` = $param3), ' +
+        '(n.weightZone IN $policy_p4_zones), ' +
+        '((n.`valid` = $param5) AND (n.weightZone = $policy_p6_zone))' +
         '] AS __explain_outcomes, ' +
         `coalesce((${enforced}), false) AS __explain_visible`,
     );
@@ -619,9 +621,9 @@ describe('Model.explainPolicies — security signalling (6.9)', () => {
     const { bound, recorded } = setup(FORMS);
     await bound.model('Chart').explainPolicies();
     expect(recorded[0].params).toMatchObject({
-      policy_p0_tid: 't1',
-      policy_p1_zones: ['z1'],
-      policy_p2_zone: 'z1',
+      policy_p2_tid: 't1',
+      policy_p4_zones: ['z1'],
+      policy_p6_zone: 'z1',
     });
   });
 

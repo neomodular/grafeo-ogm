@@ -4093,12 +4093,17 @@ function hasNestedCascade(value: unknown): boolean {
  * `params`, for callers that did not thread their own counter (direct
  * `MutationCompiler` use): nested-write filters compiled with it can never
  * collide with the root WHERE's params.
+ *
+ * v2.12.1 — it also continues after every `policy_p<N>_<key>` the root
+ * WHERE's policies bound, since the policy param prefix is now minted from
+ * the same counter: a nested target's raw policy params must not reuse a
+ * prefix the root already used.
  */
 function counterAfter(params: Record<string, unknown>): { count: number } {
   let max = -1;
   for (const key of Object.keys(params)) {
-    const match = /^param(\d+)$/.exec(key);
-    if (match) max = Math.max(max, Number(match[1]));
+    const match = /^(?:param(\d+)|policy_p(\d+)_)/.exec(key);
+    if (match) max = Math.max(max, Number(match[1] ?? match[2]));
   }
   return { count: max + 1 };
 }

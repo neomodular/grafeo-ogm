@@ -174,7 +174,10 @@ describe('WhereCompiler — policy.cypher escape hatch', () => {
       { policyContext },
     );
     expect(result.params.param0).toBe('usr');
-    expect(result.params.policy_p0_id).toBe('pol');
+    // v2.12.1 — the policy prefix index comes from the shared counter, so
+    // it continues after the user where's `param0`.
+    expect(result.params.policy_p1_id).toBe('pol');
+    expect(result.cypher).toContain('n.id = $policy_p1_id');
   });
 
   it('throws when fragment is not a string', () => {

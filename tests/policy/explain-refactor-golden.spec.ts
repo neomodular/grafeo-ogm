@@ -479,6 +479,12 @@ function normalize(recorded: Recorded[]): Recorded[] {
  * Captured from the pre-refactor `compilePolicyClause` (v2.1.1). Do NOT
  * regenerate these to make a failing test pass — a diff here means the
  * fragment/compose split changed emitted Cypher.
+ *
+ * v2.12.1 — the ONLY deliberate edit since capture: raw-fragment param
+ * prefixes (`policy_p<N>_`) now draw `N` from the statement-wide counter
+ * shared with `param<N>`, so where a user where precedes the policy the
+ * indices interleave (`param0`, `policy_p1_…`, `param2`, …). Clause
+ * structure, order and values are unchanged.
  */
 const GOLDEN: Record<string, Recorded[]> = {
   'when-only permissive + restrictive': [
@@ -504,12 +510,12 @@ const GOLDEN: Record<string, Recorded[]> = {
   'both forms inside one permissive and one restrictive': [
     {
       cypher:
-        "MATCH (n:`Chart`)\nWHERE (((n.`ownerId` = $param0) OR (n.tenantId = $policy_p0_tid)) AND (n.`active` = $param1) AND (n.weightZone = $policy_p1_zone))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
+        "MATCH (n:`Chart`)\nWHERE (((n.`ownerId` = $param0) OR (n.tenantId = $policy_p1_tid)) AND (n.`active` = $param2) AND (n.weightZone = $policy_p3_zone))\nRETURN n { __typename: 'Chart', .`id`, .`tenantId`, .`ownerId`, .`active`, .`weightZone` }",
       params: {
         param0: 'u1',
-        policy_p0_tid: 't1',
-        param1: true,
-        policy_p1_zone: 'z1',
+        policy_p1_tid: 't1',
+        param2: true,
+        policy_p3_zone: 'z1',
       },
     },
   ],
@@ -611,10 +617,10 @@ const GOLDEN: Record<string, Recorded[]> = {
   'aggregate op': [
     {
       cypher:
-        'MATCH (n:`Chart`)\nWHERE ((n.`ownerId` = $param0) AND (n.active = $policy_p0_on))\nRETURN count(n) AS count',
+        'MATCH (n:`Chart`)\nWHERE ((n.`ownerId` = $param0) AND (n.active = $policy_p1_on))\nRETURN count(n) AS count',
       params: {
         param0: 'u1',
-        policy_p0_on: true,
+        policy_p1_on: true,
       },
     },
   ],

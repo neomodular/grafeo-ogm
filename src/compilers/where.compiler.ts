@@ -584,8 +584,10 @@ export class WhereCompiler {
    * `resolved.restrictives`: one entry per policy, in order, even when a
    * policy contributes no part.
    *
-   * Permissive `cypher.params` keys are namespaced with `policy_p<n>_`
-   * to guarantee no collision with `param0..N`.
+   * Raw `cypher.params` keys are namespaced with `policy_p<n>_`, `n`
+   * drawn from the shared `paramCounter`, so they collide neither with
+   * `param0..N` / `sel_param0..N` nor with another policy clause's params
+   * anywhere else in the statement (v2.12.1).
    */
   private compilePolicyFragments(
     bundle: PolicyContextBundle,
@@ -598,7 +600,18 @@ export class WhereCompiler {
     const { ctx, resolved } = bundle;
 
     const permissives: CompiledPolicy[] = [];
-    let policyParamIdx = 0;
+    // v2.12.1 — the raw-fragment param prefix is minted from the
+    // statement-wide `paramCounter` (the counter behind `param<N>` and
+    // `sel_param<N>`), so no two policy clauses in one statement can bind
+    // the same `policy_p<N>_<key>`. Pre-2.12.1 a per-call index restarted
+    // at 0 in every frame (root where, nested selection, connection,
+    // traversal filter, nested write, relabel guard, interface member), so
+    // two types whose policies used the same raw key both bound
+    // `$policy_p0_<key>` and the later frame's value silently overwrote
+    // the earlier one in the shared params: a nested selection over type
+    // B replaced root type A's restrictive value, so A's rows were
+    // filtered by B's value — hiding what A allowed and leaking what A hid.
+    const nextPolicyParamPrefix = () => `policy_p${paramCounter.count++}_`;
 
     for (const p of resolved.permissives) {
       const parts: string[] = [];
@@ -627,7 +640,7 @@ export class WhereCompiler {
       }
 
       // `cypher` escape hatch — raw fragment + parameterized params
-      // namespaced with `policy_p<idx>_`.
+      // namespaced with `policy_p<n>_` (`n` from the shared counter).
       if (p.cypher) {
         const fragment = p.cypher.fragment(ctx, { node: nodeVar });
         if (typeof fragment !== 'string')
@@ -638,7 +651,7 @@ export class WhereCompiler {
           const rawParams = p.cypher.params(ctx) ?? {};
           const namespaced = namespacePolicyParams(
             rawParams,
-            `policy_p${policyParamIdx++}_`,
+            nextPolicyParamPrefix(),
           );
           mergeParams(paramsTarget, namespaced.values);
           parts.push(`(${rewritePolicyFragment(fragment, namespaced.map)})`);
@@ -697,7 +710,7 @@ export class WhereCompiler {
           const rawParams = p.cypher.params(ctx) ?? {};
           const namespaced = namespacePolicyParams(
             rawParams,
-            `policy_p${policyParamIdx++}_`,
+            nextPolicyParamPrefix(),
           );
           mergeParams(paramsTarget, namespaced.values);
           parts.push(`(${rewritePolicyFragment(fragment, namespaced.map)})`);
