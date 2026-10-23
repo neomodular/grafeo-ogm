@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.9.1 (2026-10-22) — native Node ESM entry points
+
+> **Patch release.** `import { OGM } from 'grafeo-ogm'` now works in native Node ESM. The CommonJS build and the public API are unchanged.
+
+### Fixed
+
+- **The ESM entry points could not be imported from native Node ESM (since v1.0.0).** The ESM build wrote extensionless relative imports (`export { OGM } from './ogm'`) into a `"type": "module"` tree, so `import … from 'grafeo-ogm'` and `'grafeo-ogm/testing'` threw `ERR_MODULE_NOT_FOUND` in `.mjs` files and `"type": "module"` apps, and a TypeScript `module: nodenext` consumer silently typed every export as `any`. `require()` and bundlers were not affected.
+  - **Node:** the `import` condition now resolves to thin ESM wrappers over the CommonJS build (`dist/node/*.mjs`, under a `node` condition), so `import` and `require` load one copy of the library: `instanceof OGMError`, `Executor.debug` and the compiler caches are shared.
+  - **Bundlers:** the `dist/esm` build keeps every relative import fully specified (`./ogm.js`, `./testing/index.js`), in the `.js` and `.d.ts` files, so webpack's `fullySpecified` mode and TypeScript `nodenext` resolve it. Bundlers that apply the `node` condition for server builds (esbuild `platform=node`, Vite SSR) now get the CommonJS build through the wrapper.
+  - `tests/package-esm-entry.spec.ts` builds the package, installs it into a throwaway `"type": "module"` app and checks both entry points against `require()`, plus a `nodenext` type-check.
+
 ## 2.9.0 (2026-10-22) — update op order, union connections and record-factory time zones
 
 > **Minor release.** Three behaviours that differed from `@neo4j/graphql` 5.x or from the Neo4j driver warn by default and are corrected under `strict: true`: the op order of `update()` (within a nested update item and at the root), a `<rel>Connection` selected under a union, and `Neo4jRecordFactory.dateTime` time-zone strings (its own `{ strict: true }` option). Without `strict`, every input that worked in 2.8.0 compiles to byte-identical Cypher. Generated types are unchanged.
