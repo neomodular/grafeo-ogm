@@ -24,6 +24,7 @@ import {
 } from './schema/types';
 import { typeLabelExpr } from './schema/labels';
 import { CypherFieldScope } from './utils/cypher-field-projection';
+import { selectionSetSource } from './utils/selection-set-source';
 import {
   compileSortClause,
   orderBeforeProjection,
@@ -430,11 +431,7 @@ export class InterfaceModel<
     // RETURN
     let selection: SelectionNode[];
     if (params?.selectionSet) {
-      const selStr =
-        typeof params.selectionSet === 'string'
-          ? params.selectionSet
-          : (params.selectionSet.loc?.source?.body ??
-            String(params.selectionSet));
+      const selStr = selectionSetSource(params.selectionSet);
       selection = this.selectionCompiler.parseSelectionSet(selStr);
       // v2.6.3 — check selectionSet field names against the interface
       // (and fragment types) (#23).

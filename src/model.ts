@@ -1,4 +1,5 @@
 import { DocumentNode } from 'graphql';
+import { selectionSetSource } from './utils/selection-set-source';
 import { Driver, int as neo4jInt, QueryResult } from 'neo4j-driver';
 import { FulltextCompiler } from './compilers/fulltext.compiler';
 import {
@@ -760,10 +761,7 @@ export class Model<
       this._parsedSelection = this.selectionCompiler.parseSelectionSet(value);
     } else {
       // DocumentNode -- convert to string first
-      const str =
-        typeof value === 'object' && 'loc' in value && value.loc?.source?.body
-          ? value.loc.source.body
-          : String(value);
+      const str = selectionSetSource(value);
       this._selectionSet = str;
       this._parsedSelection = this.selectionCompiler.parseSelectionSet(str);
     }
@@ -2391,10 +2389,7 @@ export class Model<
   private parseSelectionSetCached(
     selectionSet: string | DocumentNode,
   ): SelectionNode[] {
-    const selStr =
-      typeof selectionSet === 'string'
-        ? selectionSet
-        : (selectionSet.loc?.source?.body ?? String(selectionSet));
+    const selStr = selectionSetSource(selectionSet);
     // v2.6.0 — strict mode parses some selectionSets differently, and two
     // OGMs may share one schema, so strict entries get their own key.
     // Default-mode keys are unchanged.
