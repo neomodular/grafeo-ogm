@@ -40,6 +40,65 @@ function collect(typeDefs: string) {
   return { schema, warnings };
 }
 
+describe('@fulltext indexName (alias of name)', () => {
+  const sdl = `type Product @node
+    @fulltext(indexes: [{ indexName: "ProductName", queryName: "productsByName", fields: ["name"] }]) {
+    name: String
+  }`;
+
+  it('creates the index under indexName, in both modes, without warning', () => {
+    for (const strict of [undefined, false, true]) {
+      const schema = parseSchema(sdl, { strict });
+      expect(schema.nodes.get('Product')!.fulltextIndexes).toEqual([
+        { name: 'ProductName', fields: ['name'] },
+      ]);
+    }
+    expect(collect(sdl).warnings).toEqual([]);
+  });
+
+  it('accepts the same value under name and indexName', () => {
+    const { schema, warnings } = collect(`type P @node
+      @fulltext(indexes: [{ name: "PIdx", indexName: "PIdx", fields: ["t"] }]) { t: String }`);
+    expect(schema.nodes.get('P')!.fulltextIndexes).toEqual([
+      { name: 'PIdx', fields: ['t'] },
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  it('works on @relationshipProperties types too', () => {
+    const schema =
+      parseSchema(`type A @node { id: ID! b: [B!]! @relationship(type: "R", direction: OUT, properties: "RP") }
+      type B @node { id: ID! }
+      type RP @relationshipProperties
+        @fulltext(indexes: [{ indexName: "RPNote", fields: ["note"] }]) { note: String }`);
+    expect(schema.relationshipProperties.get('RP')!.fulltextIndexes).toEqual([
+      { name: 'RPNote', fields: ['note'] },
+    ]);
+  });
+
+  describe('strict item 37: name and indexName disagree', () => {
+    const conflict = `type P @node
+      @fulltext(indexes: [{ name: "Old", indexName: "New", fields: ["t"] }]) { t: String }`;
+
+    it('default: uses name (2.x) and warns once', () => {
+      const { warn } = build(conflict);
+      expect(warned(warn, 'name: "Old" and indexName: "New"')).toHaveLength(1);
+      expect(warned(warn, 'Enable `strict: true`')).toHaveLength(1);
+      // 2.x behaviour kept: the index is the one named by `name`.
+      expect(parseSchema(conflict).nodes.get('P')!.fulltextIndexes).toEqual([
+        { name: 'Old', fields: ['t'] },
+      ]);
+    });
+
+    it('strict: throws at OGM construction', () => {
+      expect(() => build(conflict, true)).toThrow(OGMError);
+      expect(() => build(conflict, true)).toThrow(
+        /both name "Old" and indexName "New"/,
+      );
+    });
+  });
+});
+
 describe('strict item 38: @relationship without type / direction', () => {
   const sdl = `type Product @node {
     id: ID!

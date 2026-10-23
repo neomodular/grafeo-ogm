@@ -587,3 +587,20 @@ type Toy @node {
     );
   });
 });
+
+// vNEXT — S5t-5: `indexName` (the @neo4j/graphql 4+ spelling) plans the
+// fulltext index; pre-vNEXT it was ignored and no index was made.
+describe('grafeo db push — @fulltext indexName', () => {
+  it('plans a fulltext index declared with indexName', async () => {
+    const mock = makeDriver({ constraints: [], indexes: [] });
+    const io = makeIO(mock.driver);
+    fs.writeFileSync(
+      path.join(io.cwd, 'schema.graphql'),
+      `type Product @node @fulltext(indexes: [{ indexName: "ProductName", fields: ["name"] }]) { name: String }`,
+    );
+    expect(await runDbPush(['--dry-run'], io)).toBe(0);
+    expect(io.stdout.join('\n')).toMatch(
+      /CREATE FULLTEXT INDEX ProductName IF NOT EXISTS/,
+    );
+  });
+});

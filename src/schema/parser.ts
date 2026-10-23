@@ -399,6 +399,7 @@ function parseField(
 /** Parse @fulltext indexes from a type definition */
 function parseFulltextIndexes(
   node: ObjectTypeDefinitionNode | InterfaceTypeDefinitionNode,
+  ctx: ParseContext,
 ): FulltextIndex[] {
   const ftDirective = getDirective(node, 'fulltext');
   if (!ftDirective) return [];
@@ -412,16 +413,40 @@ function parseFulltextIndexes(
     const obj = item as ObjectValueNode;
 
     let name = '';
+    let indexName = '';
     const fields: string[] = [];
 
     for (const field of obj.fields) {
       if (field.name.value === 'name' && field.value.kind === Kind.STRING)
         name = (field.value as StringValueNode).value;
 
+      // vNEXT — `indexName` is the `@neo4j/graphql` 4+ spelling (`name` is
+      // deprecated there). Pre-vNEXT it was ignored and no index was made.
+      if (field.name.value === 'indexName' && field.value.kind === Kind.STRING)
+        indexName = (field.value as StringValueNode).value;
+
       if (field.name.value === 'fields' && field.value.kind === Kind.LIST)
         for (const f of (field.value as ListValueNode).values)
           if (f.kind === Kind.STRING) fields.push((f as StringValueNode).value);
     }
+
+    if (indexName && name && indexName !== name) {
+      // vNEXT — strict item 37: two different names for one index. 2.x
+      // used `name`; upstream prefers `indexName`. Neither is clearly meant.
+      const t = node.name.value;
+      ctx.flag(
+        {
+          code: 'fulltext-name-conflict',
+          detail: `${t}.${name}/${indexName}`,
+          problem:
+            `@fulltext on ${t} gives an index both name: "${name}" and indexName: "${indexName}"; ` +
+            `2.x uses "${name}".`,
+          fix: 'reject the conflicting names',
+        },
+        `@fulltext on ${t}: index has both name "${name}" and indexName "${indexName}". ` +
+          `Use one of them (indexName is the @neo4j/graphql 4+ spelling).`,
+      );
+    } else if (!name) name = indexName;
 
     if (name && fields.length > 0) results.push({ name, fields });
   }
@@ -614,7 +639,7 @@ export function parseSchema(
         if (parsed.property)
           properties.set(parsed.property.name, parsed.property);
       }
-      const fulltextIndexes = parseFulltextIndexes(objDef);
+      const fulltextIndexes = parseFulltextIndexes(objDef, ctx);
       metadata.relationshipProperties.set(typeName, {
         typeName,
         properties,
@@ -659,7 +684,7 @@ export function parseSchema(
       label = typeName;
     }
 
-    const fulltextIndexes = parseFulltextIndexes(objDef);
+    const fulltextIndexes = parseFulltextIndexes(objDef, ctx);
     const vectorIndexes = parseVectorIndexes(objDef, properties, typeName);
 
     const nodeDef: NodeDefinition = {

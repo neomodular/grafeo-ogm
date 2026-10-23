@@ -533,6 +533,8 @@ type WrittenBy @relationshipProperties
 }
 ```
 
+`indexName` (the `@neo4j/graphql` 4+ spelling) is accepted as an alias of `name` since vNEXT: `{ indexName: "BookSearch", queryName: "booksByTitle", fields: ["title"] }` defines the same index (`queryName` is accepted and ignored; search with the index name). Giving both with different values is [strict item 37](#37-fulltext-name-and-indexname-disagree-since-vnext).
+
 ---
 
 ## Query API
@@ -1458,6 +1460,19 @@ await ogm.$cloneSubgraph('book-a', config);
 ```
 
 APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship, once per OGM instance (or logger), and only when the logger has a `warn` method.
+
+#### 37. `@fulltext` `name` and `indexName` disagree (since vNEXT)
+
+```graphql
+type Book @node @fulltext(indexes: [{ name: "BookSearch", indexName: "BookTitles", fields: ["title"] }]) { title: String }
+```
+
+```typescript
+new OGM({ typeDefs, driver, logger });
+// default: index "BookSearch" (and warns once) · strict: OGMError: @fulltext on Book: index has both name "BookSearch" and indexName "BookTitles"
+```
+
+2.x reads `name`; `@neo4j/graphql` 5.x prefers `indexName`. With two different names neither is clearly meant, so strict mode rejects the schema when the OGM is built. The same value in both, or either one alone, is fine in both modes. The warning code is `fulltext-name-conflict`.
 
 #### 38. `@relationship` without `type` or `direction` (since vNEXT)
 
