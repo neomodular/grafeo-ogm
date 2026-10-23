@@ -260,6 +260,11 @@ export function planSchemaSync(
   for (const [, nodeDef] of schema.nodes) {
     knownLabels.add(nodeDef.label);
     for (const label of nodeDef.labels) knownLabels.add(label);
+    // v2.11.0 — strict item 23 moves a custom `@node(labels)` type's
+    // constraints to labels[0]; the one 2.x put on the type name stays
+    // grafeo's (an orphan, dropped only with --force-drop). A no-op in
+    // default mode, where `label` is the type name.
+    knownLabels.add(nodeDef.typeName);
   }
 
   const orphans: PushPlanOrphan[] = [];

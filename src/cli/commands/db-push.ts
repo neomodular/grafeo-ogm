@@ -2,6 +2,10 @@ import * as fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import type { Driver } from 'neo4j-driver';
 import type { VectorIndexCreationConfig } from '../../schema/index-statements';
+import {
+  applyUpstreamNodeLabels,
+  hasCustomNodeLabels,
+} from '../../schema/labels';
 import { parseSchema } from '../../schema/parser';
 import {
   loadConfigFile,
@@ -24,6 +28,7 @@ interface DbPushFlags {
   'force-drop'?: boolean;
   yes?: boolean;
   debug?: boolean;
+  strict?: boolean;
 }
 
 function parseDbPushFlags(argv: string[]): DbPushFlags {
@@ -39,6 +44,7 @@ function parseDbPushFlags(argv: string[]): DbPushFlags {
         'force-drop': { type: 'boolean' },
         yes: { type: 'boolean' },
         debug: { type: 'boolean' },
+        strict: { type: 'boolean' },
       },
       strict: true,
       allowPositionals: false,
@@ -243,6 +249,18 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
   const schemaPath = resolveSchemaPath(flags, config, io.cwd);
   const typeDefs = fs.readFileSync(schemaPath, 'utf-8');
   const schema = parseSchema(typeDefs);
+  // v2.11.0 — strict item 23: plan constraints / indexes on the labels
+  // the app's OGM uses (`strict` in grafeo.config or `--strict`).
+  if (flags.strict === true || config.strict === true)
+    applyUpstreamNodeLabels(schema);
+  else
+    for (const node of schema.nodes.values())
+      if (hasCustomNodeLabels(node))
+        io.err(
+          `warning: ${node.typeName} has @node(labels: [${node.labels.map((l) => `"${l}"`).join(', ')}]) — ` +
+            `planning its constraints and indexes on :${node.typeName} (2.x). An OGM with strict: true ` +
+            `(and @neo4j/graphql) uses :${node.labels[0]}; set strict: true in grafeo.config or pass --strict to match it.`,
+        );
   const connection = resolveConnection(flags, config, io.env);
 
   // GrafeoVectorIndexConfig is structurally a VectorIndexCreationConfig.

@@ -500,3 +500,90 @@ describe('grafeo db push (cli-db-push spec)', () => {
     });
   });
 });
+
+// v2.11.0 — strict item 23: `strict: true` (config or --strict) plans the
+// constraints of a type with custom `@node(labels)` on labels[0], as an
+// OGM built with `strict: true` (and @neo4j/graphql) uses them.
+describe('grafeo db push — @node(labels) and strict (item 23)', () => {
+  const LABELLED = `
+type Person @node(labels: ["Human", "Entity"]) {
+  id: ID! @id @unique
+}
+type Toy @node {
+  id: ID! @id @unique
+}
+`;
+  const labelledIO = (driver: Driver, config?: Record<string, unknown>) => {
+    const io = makeIO(driver);
+    fs.writeFileSync(path.join(io.cwd, 'schema.graphql'), LABELLED);
+    if (config)
+      fs.writeFileSync(
+        path.join(io.cwd, 'grafeo.config.json'),
+        JSON.stringify(config),
+      );
+    return io;
+  };
+
+  it('default: constraints on the type name (unchanged) and a warning', async () => {
+    const mock = makeDriver({ constraints: [], indexes: [] });
+    const io = labelledIO(mock.driver);
+    expect(await runDbPush(['--dry-run'], io)).toBe(0);
+    const out = io.stdout.join('\n');
+    expect(out).toContain(
+      'CREATE CONSTRAINT Person_id_unique IF NOT EXISTS FOR (n:Person) REQUIRE n.id IS UNIQUE',
+    );
+    expect(out).not.toContain('Human_id_unique');
+    const err = io.stderr.join('\n');
+    expect(err).toContain(
+      'warning: Person has @node(labels: ["Human", "Entity"])',
+    );
+    expect(err).toContain('uses :Human');
+    expect(err).not.toContain('Toy');
+  });
+
+  it.each([
+    ['--strict', ['--strict'], undefined],
+    ['strict: true in grafeo.config', [], { strict: true }],
+  ])('%s: constraints on labels[0], no warning', async (_n, flags, config) => {
+    const mock = makeDriver({ constraints: [], indexes: [] });
+    const io = labelledIO(mock.driver, config);
+    expect(await runDbPush(['--dry-run', ...flags], io)).toBe(0);
+    const out = io.stdout.join('\n');
+    expect(out).toContain(
+      'CREATE CONSTRAINT Human_id_unique IF NOT EXISTS FOR (n:Human) REQUIRE n.id IS UNIQUE',
+    );
+    expect(out).toContain('CREATE CONSTRAINT Toy_id_unique');
+    expect(out).not.toContain('(n:Person)');
+    expect(io.stderr.join('\n')).not.toContain('@node(labels');
+  });
+
+  it('strict: the 2.x constraint on the type name is a grafeo orphan, dropped only with --force-drop', async () => {
+    const live: LiveSchema = {
+      constraints: [
+        {
+          name: 'Person_id_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Person'],
+          properties: ['id'],
+        },
+      ],
+      indexes: [],
+    };
+    const kept = makeDriver(live);
+    const io = labelledIO(kept.driver);
+    expect(await runDbPush(['--dry-run', '--strict'], io)).toBe(0);
+    expect(io.stdout.join('\n')).toContain('kept');
+    expect(io.stdout.join('\n')).not.toMatch(/Unmanaged/);
+
+    const dropped = makeDriver(live);
+    expect(
+      await runDbPush(
+        ['--strict', '--force-drop', '--yes'],
+        labelledIO(dropped.driver),
+      ),
+    ).toBe(0);
+    expect(dropped.runs).toContain(
+      'DROP CONSTRAINT Person_id_unique IF EXISTS',
+    );
+  });
+});

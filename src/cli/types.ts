@@ -39,6 +39,14 @@ export interface GrafeoConfig {
   seed?: string;
   /** Vector index creation parameters, keyed by index name. */
   vectorIndexes?: Record<string, GrafeoVectorIndexConfig>;
+  /**
+   * v2.11.0 — set to the same value as the app's `new OGM({ strict })`.
+   * `db push` then plans constraints and indexes the way that OGM uses
+   * the labels: under `strict: true` a type with `@node(labels: [...])`
+   * gets them on the first listed label, as `@neo4j/graphql` does
+   * (strict item 23); otherwise on the type name. Also `--strict`.
+   */
+  strict?: boolean;
 }
 
 /** Identity helper so config files get full type inference. */

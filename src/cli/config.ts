@@ -72,6 +72,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   'database',
   'seed',
   'vectorIndexes',
+  'strict',
 ]);
 
 /**
