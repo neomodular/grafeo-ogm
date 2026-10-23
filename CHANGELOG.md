@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.15.0 (2026-10-23) — Duration range filters
+
+> **Minor release.** Duration `_GT` / `_LT` filters now work in both modes. `_GTE` / `_LTE` warn once by default and, under `strict: true` (strict item 25), compare durations as `@neo4j/graphql` does. Without `strict`, every other input that worked in 2.14.0 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Fixed
+
+- **Duration `_GT` / `_LT` never matched a row.** They compiled to a plain `n.ttl > $p`, and Neo4j does not order two durations (the comparison is `null`), so they always returned nothing. They now compare `datetime() + n.ttl > datetime() + duration($p)`, as `@neo4j/graphql` 5.x does, in root filters, relationship and connection filters, Duration edge properties, nested selection and `<rel>Aggregate` filters, `aggregate()`, policy `when` partials and array `connect` filters. Mixed units are ordered at the current instant (UTC): `P1M` is always longer than `P27D` and shorter than `P32D`, but against `P30D` / `P31D` it depends on the current month, and `P1D` orders equal to `PT24H`. Equality, `_NOT` and `_IN` still compare the durations themselves.
+
+### Strict mode
+
+- **Duration `_GTE` / `_LTE` compare durations** at the current instant, as `_GT` / `_LT` now do. In 2.x they match only an equal duration (`n.ttl >= $p` is `null` otherwise).
+
+### Deprecations
+
+- **`duration-range-equality`** (logged once per OGM, type and field): a Duration `_GTE` / `_LTE` filter matches only an equal duration. 3.0 compares durations, as `strict: true` does today.
+
 ## 2.14.0 (2026-10-23) — list `@cypher` fields under strict mode
 
 > **Minor release.** A list-typed `@cypher` field warns once by default and, under `strict: true` (strict item 24), returns every row its statement produces, as `@neo4j/graphql` does. Without `strict`, every input that worked in 2.13.0 compiles to byte-identical Cypher. Generated types are unchanged.
