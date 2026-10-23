@@ -86,6 +86,9 @@ const TYPE_DEFINITION_KINDS = new Set<string>([
   Kind.INPUT_OBJECT_TYPE_DEFINITION,
 ]);
 
+/** GraphQL root operation types (`@neo4j/graphql` 5.x `isRootType`). */
+const ROOT_OPERATION_TYPES = new Set(['Query', 'Mutation', 'Subscription']);
+
 /**
  * Generate a plural name from a type name following OGM conventions.
  * Uses the `pluralize` npm package for correct English pluralization
@@ -630,6 +633,21 @@ export function parseSchema(
     if (def.kind !== Kind.OBJECT_TYPE_DEFINITION) continue;
     const objDef = def as ObjectTypeDefinitionNode;
     const typeName = objDef.name.value;
+
+    // vNEXT — strict item 40: `@neo4j/graphql` 5.x treats Query / Mutation /
+    // Subscription as root operation types, never as nodes. 2.x makes them
+    // node models (and generated types); strict mode skips them.
+    if (ROOT_OPERATION_TYPES.has(typeName)) {
+      if (ctx.strict) continue;
+      options.onWarning?.({
+        code: 'root-operation-type',
+        detail: typeName,
+        problem:
+          `type ${typeName} is a GraphQL root operation type, but 2.x makes it a node model ` +
+          `(ogm.model('${typeName}') and generated ${typeName} types).`,
+        fix: `skip it, as @neo4j/graphql does`,
+      });
+    }
 
     // Handle @relationshipProperties types
     if (relPropsTypeNames.has(typeName)) {

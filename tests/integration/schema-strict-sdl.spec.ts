@@ -1,5 +1,6 @@
 /**
- * Live `@fulltext(indexes: [{ indexName }])` (vNEXT, scan-5 S5t-5).
+ * Live `@fulltext(indexes: [{ indexName }])` and strict root types (vNEXT,
+ * scan-5 S5t-5 / S5t-14).
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
  * NEO4J_USERNAME and NEO4J_PASSWORD). Every node it creates carries this
@@ -32,6 +33,10 @@ const typeDefs = /* GraphQL */ `
     id: ID! @id
     title: String!
     runId: String
+  }
+
+  type Query {
+    books: [ItSsdlBook!]!
   }
 `;
 
@@ -93,5 +98,17 @@ describeLive('schema strict SDL — live Neo4j', () => {
       if (found.length === 0) await new Promise((r) => setTimeout(r, 200));
     }
     expect(found).toEqual([{ title: `${word} one` }]);
+  });
+
+  it('strict: a type Query in the SDL is skipped and the nodes still work', async () => {
+    const ogm = new OGM({ typeDefs, driver, strict: true });
+    expect(() => ogm.model('Query')).toThrow();
+    const books = ogm.model('ItSsdlBook');
+    await books.create({ input: [{ title: `${word} two`, runId }] });
+    const rows = await books.find({
+      where: { runId, title: `${word} two` },
+      selectionSet: '{ title }',
+    });
+    expect(rows).toEqual([{ title: `${word} two` }]);
   });
 });

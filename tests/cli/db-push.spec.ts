@@ -588,19 +588,59 @@ type Toy @node {
   });
 });
 
-// vNEXT — S5t-5: `indexName` (the @neo4j/graphql 4+ spelling) plans the
-// fulltext index; pre-vNEXT it was ignored and no index was made.
-describe('grafeo db push — @fulltext indexName', () => {
+// vNEXT — S5t-5 / S5t-14: `indexName` plans the fulltext index; malformed
+// SDL (strict items 37–39) and root operation types (item 40) warn in
+// default mode and throw / are skipped with strict, as the app's OGM does.
+describe('grafeo db push — malformed SDL and strict (items 37–40)', () => {
+  const sdlIO = (driver: Driver, sdl: string) => {
+    const io = makeIO(driver);
+    fs.writeFileSync(path.join(io.cwd, 'schema.graphql'), sdl);
+    return io;
+  };
+
   it('plans a fulltext index declared with indexName', async () => {
     const mock = makeDriver({ constraints: [], indexes: [] });
-    const io = makeIO(mock.driver);
-    fs.writeFileSync(
-      path.join(io.cwd, 'schema.graphql'),
+    const io = sdlIO(
+      mock.driver,
       `type Product @node @fulltext(indexes: [{ indexName: "ProductName", fields: ["name"] }]) { name: String }`,
     );
     expect(await runDbPush(['--dry-run'], io)).toBe(0);
     expect(io.stdout.join('\n')).toMatch(
       /CREATE FULLTEXT INDEX ProductName IF NOT EXISTS/,
     );
+  });
+
+  const MALFORMED = `
+type Product @node {
+  id: ID! @id @unique
+  colour: Colour @relationship(type: "OF_COLOUR")
+  weird: Strng
+}
+type Colour @node { id: ID! }
+type Query { products: [Product!]! }
+`;
+
+  it('default: plans as 2.x and prints one warning per shape', async () => {
+    const mock = makeDriver({ constraints: [], indexes: [] });
+    const io = sdlIO(mock.driver, MALFORMED);
+    expect(await runDbPush(['--dry-run'], io)).toBe(0);
+    const err = io.stderr.join('\n');
+    expect(err).toContain(
+      'warning: @relationship on Product.colour has no direction',
+    );
+    expect(err).toContain('warning: Product.weird has type "Strng"');
+    expect(err).toContain(
+      'warning: type Query is a GraphQL root operation type',
+    );
+    expect(err).toContain('pass --strict to');
+  });
+
+  it('--strict: fails before connecting, like a strict OGM', async () => {
+    const mock = makeDriver({ constraints: [], indexes: [] });
+    const io = sdlIO(mock.driver, MALFORMED);
+    await expect(runDbPush(['--dry-run', '--strict'], io)).rejects.toThrow(
+      /missing the required direction argument/,
+    );
+    expect(mock.runs).toEqual([]);
   });
 });

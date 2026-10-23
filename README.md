@@ -1083,7 +1083,7 @@ Some input shapes compile to something other than what they say. A typo'd connec
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
-Generated types are the same in both modes.
+Generated types are the same in both modes, except that root operation types are left out under strict (item 40): pass `strict` to `generateTypes()`, or set it in `grafeo.config.*` for `grafeo generate`, to the same value as your OGM.
 
 #### 1. Unknown keys in connect / disconnect items
 
@@ -1499,6 +1499,23 @@ type Product @node { name: Strng  maker: Persn @relationship(type: "MADE_BY", di
 ```
 
 A field type must be a built-in scalar (`String`, `Int`, `Float`, `Boolean`, `ID`, `BigInt`, the temporal types, `Duration`, `Point`, `CartesianPoint`) or a type, interface, union, enum, input or `scalar` the SDL defines. `@neo4j/graphql` rejects the schema otherwise. The warning code is `unknown-type`.
+
+#### 40. `type Query` / `Mutation` / `Subscription` in the SDL (since vNEXT)
+
+```graphql
+type Movie @node { title: String }
+type Query { movies: [Movie!]! }
+```
+
+```typescript
+ogm.model('Query');
+// default: a node model for (:Query) nodes, plus Query types in the generated file (and warns once)
+// strict:  OGMError (no such model) — root operation types are skipped, as in @neo4j/graphql 5.x
+```
+
+`@neo4j/graphql` 5.x treats these three names as GraphQL root operation types, never as nodes. Strict mode skips them in the OGM, `db push` and the type generator (`strict` in `grafeo.config.*` or `generateTypes({ strict: true })`). The warning code is `root-operation-type`.
+
+**`db push` and `grafeo generate`** read `strict` from `grafeo.config.*` (`db push` also takes `--strict`), and items 37–40 apply there too: default mode prints a `warning:` line per shape, strict fails before connecting (37–39) or skips the type (40).
 
 #### Not behind the switch: `aggregate` on list fields
 

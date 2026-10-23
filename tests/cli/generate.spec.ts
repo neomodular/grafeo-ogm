@@ -66,6 +66,32 @@ describe('grafeo generate (cli-generate spec)', () => {
     );
   });
 
+  // vNEXT — strict items 37–40: default mode warns, `strict: true` in
+  // grafeo.config generates what a strict OGM uses (no Query model).
+  it('warns about root operation types; strict: true in the config skips them', async () => {
+    const sdl = `${VALID_SCHEMA}\ntype Query { books: [Book!]! }`;
+    const io = makeIO();
+    writeSchema(io.cwd, sdl);
+    expect(await runGenerate([], io)).toBe(0);
+    const outPath = path.join(io.cwd, 'grafeo.generated.ts');
+    expect(fs.readFileSync(outPath, 'utf-8')).toContain('QueryModel');
+    expect(io.stderr.join('\n')).toContain(
+      'warning: type Query is a GraphQL root operation type',
+    );
+
+    const strictIO = makeIO();
+    writeSchema(strictIO.cwd, sdl);
+    fs.writeFileSync(
+      path.join(strictIO.cwd, 'grafeo.config.json'),
+      JSON.stringify({ strict: true }),
+    );
+    expect(await runGenerate([], strictIO)).toBe(0);
+    expect(
+      fs.readFileSync(path.join(strictIO.cwd, 'grafeo.generated.ts'), 'utf-8'),
+    ).not.toContain('QueryModel');
+    expect(strictIO.stderr.join('\n')).not.toContain('root operation type');
+  });
+
   it('generation failure writes nothing and names the schema file', async () => {
     const io = makeIO();
     writeSchema(io.cwd, 'type Book @node {{{');

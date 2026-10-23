@@ -13,10 +13,14 @@
  * Default mode keeps the 2.x result and warns once per OGM instance and
  * shape; strict mode throws at construction (or skips root types).
  */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { Driver } from 'neo4j-driver';
 import { OGM } from '../src/ogm';
 import { OGMError } from '../src/errors';
 import { parseSchema, type SchemaWarning } from '../src/schema/parser';
+import { generateTypes } from '../src/generator/generate-types';
 
 const driver = {} as Driver;
 
@@ -183,5 +187,98 @@ describe('strict item 39: unknown type names', () => {
       type B @node { id: ID }
       extend type B { more: Colour }`);
     expect(warnings).toEqual([]);
+  });
+});
+
+describe('strict item 40: root operation types', () => {
+  const sdl = `type Movie @node { title: String }
+    type Query { movies: [Movie!]! }
+    type Mutation { touch: Int }`;
+
+  it('default: Query / Mutation stay node models (2.x) and warn once each', () => {
+    const { ogm, warn } = build(sdl);
+    expect(
+      warned(warn, 'type Query is a GraphQL root operation type'),
+    ).toHaveLength(1);
+    expect(
+      warned(warn, 'type Mutation is a GraphQL root operation type'),
+    ).toHaveLength(1);
+    expect(ogm.model('Query')).toBeDefined();
+    expect([...collect(sdl).schema.nodes.keys()]).toEqual([
+      'Movie',
+      'Query',
+      'Mutation',
+    ]);
+  });
+
+  it('strict: skips them, as @neo4j/graphql 5.x does', () => {
+    const { ogm, warn } = build(sdl, true);
+    expect(() => ogm.model('Query')).toThrow();
+    expect(ogm.model('Movie')).toBeDefined();
+    expect(warn).not.toHaveBeenCalled();
+    expect([...parseSchema(sdl, { strict: true }).nodes.keys()]).toEqual([
+      'Movie',
+    ]);
+  });
+
+  it('Subscription is a root type too', () => {
+    expect(
+      parseSchema(`type Subscription { x: Int } type A @node { id: ID }`, {
+        strict: true,
+      }).nodes.has('Subscription'),
+    ).toBe(false);
+  });
+
+  describe('generateTypes', () => {
+    let dir: string;
+    beforeAll(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'grafeo-root-types-'));
+    });
+    afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    const gen = (strict?: boolean) =>
+      generateTypes({
+        typeDefs: sdl,
+        outFile: path.join(dir, `out-${String(strict)}.ts`),
+        config: { formatOutput: false },
+        strict,
+      });
+
+    it('default: emits Query model types and reports a STRICT_MODE warning', async () => {
+      const result = await gen();
+      const out = fs.readFileSync(result.outputPath, 'utf-8');
+      expect(out).toContain('QueryModel');
+      expect(result.warnings.map((w) => w.code)).toEqual([
+        'STRICT_MODE',
+        'STRICT_MODE',
+      ]);
+    });
+
+    it('strict: no Query / Mutation model types, no warnings', async () => {
+      const result = await gen(true);
+      const out = fs.readFileSync(result.outputPath, 'utf-8');
+      expect(out).not.toContain('QueryModel');
+      expect(out).not.toContain('MutationModel');
+      expect(out).toContain('MovieModel');
+      expect(result.warnings).toEqual([]);
+    });
+  });
+});
+
+describe('warn once per OGM instance', () => {
+  it('a repeated shape is logged once per instance, again for a new one', () => {
+    const sdl = `type Query { a: Int } type A @node { x: Strng }`;
+    const first = build(sdl);
+    expect(warned(first.warn, 'Query')).toHaveLength(1);
+    expect(warned(first.warn, 'Strng')).toHaveLength(1);
+    const second = build(sdl);
+    expect(warned(second.warn, 'Query')).toHaveLength(1);
+  });
+
+  it('a schema with none of the shapes never warns', () => {
+    const { warn } =
+      build(`type A @node { id: ID! b: [B!]! @relationship(type: "R", direction: OUT) }
+      type B @node { id: ID! }`);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
