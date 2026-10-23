@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.18.0 (2026-10-23) — write coercion and disconnect items
+
+> **Minor release.** It adds strict item 31 (a `null` / `undefined` item in a root disconnect array), and writes `@id` on relationship properties, which used to be always null. Without `strict`, inputs that worked in 2.17.0 compile to byte-identical Cypher, except that schemas with an edge `@id` now set it. Generated types are unchanged.
+
+### Fixed
+
+- **An array `connect` with a BigInt / Int `where` links its targets.** On the UNWIND fast path, an integer string or an `_IN` list was bound raw and never matched the stored value. So the array form linked nothing, while a single item linked correctly. Where values are now coerced, as on every other filter path; the Cypher is unchanged. A non-integer string on such a field now throws `OGMError` there too, as the single-item form and every `where` already did.
+- **A JS `Date` can be written to a `DateTime` field.** Every write path used to fail with "Property values can only be of primitive types … Map{}": create, createMany, update, updateMany, upsert, nested writes and edge properties. The Date is now stored as a native DATETIME, which a `where` with the same Date matches. A `Date` on a Date / LocalDateTime / Time / LocalTime / Duration field throws `OGMError` instead of the server error.
+- **`@id` on relationship properties is generated.** It was always null, although the output type is non-null. It is now a `randomUUID()`, set when the relationship is created:
+  - nested create;
+  - connect, ON CREATE only, so an existing relationship keeps its id;
+  - array connect.
+
+  An explicit edge value still wins.
+- **A `null` / `undefined` item in a nested disconnect, nested update or nested create array throws `OGMError`** instead of a raw `TypeError`.
+
+### Strict mode
+
+- **Item 31:** a `null` / `undefined` item in a top-level disconnect array unlinks every related node. This also applies per union / interface member, and to a disconnect inside a disconnect item. Default mode keeps that and warns once (`disconnect-null-item`); `strict: true` throws `OGMError`. `{ rel: null }` and `[{}]` stay the deliberate blanket disconnect in both modes.
+
 ## 2.17.0 (2026-10-23) — schema checks, init and Executor.debug
 
 > **Minor release.** It adds strict items 27–30, which cover SDL that 2.x accepts silently. It also accepts `@fulltext` `indexName`, and makes `Executor.debug` log without a logger. Without `strict`, every compiled query is byte-identical to 2.16.0; the only additions are warnings, newly accepted input, and debug output.
