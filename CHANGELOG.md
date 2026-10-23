@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.12.1 (2026-10-23) — policy `cypher:` params no longer collide across types
+
+> **Security patch.** Policies that use the raw `cypher:` form now get statement-unique parameter names. OGMs without `policies` compile to byte-identical Cypher. Generated types are unchanged.
+
+### Security
+
+- **A policy's raw `cypher:` params could be overwritten by another type's policy in the same statement (medium).** A policy's `cypher: { fragment, params }` binds its params under `policy_p<N>_<key>`. `N` restarted at 0 in every compile frame (root where, nested selection, connection, `_SOME` / `_NONE` / `_ALL` / `_SINGLE` traversal, nested write target, relabel guard, `InterfaceModel` member), so two types whose policies used the same raw key (`$v`) both bound `$policy_p0_v`, and the value compiled last silently replaced the other in the shared params. With a nested selection over type B, root type A's restrictive was evaluated with B's value: rows A allows disappeared and rows A hides were returned. A `_SOME` filter admitted rows through related nodes the context cannot read (an existence oracle), and an `update … connect` filter admitted targets the context cannot read. The prefix index is now drawn from the statement-wide parameter counter (the one behind `param<N>` / `sel_param<N>`), so no two policy clauses in a statement share a name. Only applications whose policies use the raw `cypher:` form with the same param key in more than one type reached by one statement are affected; `when:` policies were never at risk. Present since policies shipped in 1.7.0; affects 1.7.0 through 2.12.0.
+
+### Behavior change
+
+- In statements with policies, the index in `policy_p<N>_<key>` parameter names now follows the statement's parameter counter, so it can differ from 2.12.0 when a user `where` or another policy clause precedes it (visible in `explainPolicies` output and in logged Cypher). Results change only where names collided before.
+
 ## 2.12.0 (2026-10-23) — union member where in selections and connection filters
 
 > **Minor release.** A union member key in a `where` (`{ Doc: { rank: 2 } }`) now filters by that member everywhere, in default and strict mode alike. Before, it worked only in a root `<rel>_SOME` / `_NONE` / `_ALL` / `_SINGLE` filter and was compiled as a node property everywhere else. Every union where input that already worked compiles to byte-identical Cypher. Generated types are unchanged.
