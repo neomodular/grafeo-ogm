@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.11.0 (2026-10-23) — `@node(labels)` as in `@neo4j/graphql`
+
+> **Minor release.** A type whose `@node(labels: [...])` is not just its own name warns once by default and, under `strict: true` (strict item 23), uses the listed labels **instead of** the type name, as `@neo4j/graphql` does. Without `strict`, every input that worked in 2.10.1 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Strict mode
+
+- **`@node(labels: [...])` replaces the type name.** In `@neo4j/graphql` the listed labels are used instead of the type name: reads match all of them, creates write exactly them, and constraints and indexes go on the first one. 2.x matches the type name, creates the type name plus the listed labels, and puts constraints, fulltext and vector indexes on the type name, so nodes written by `@neo4j/graphql` (`:Human` for `type Person @node(labels: ["Human"])`) were invisible to grafeo-ogm. Strict follows upstream everywhere a node's label is used:
+  - root reads and writes, `upsert`, `createMany`, `setLabels`, cascade delete;
+  - relationship targets: selections, connections, `<rel>Aggregate`, filters, connect / disconnect, nested create;
+  - interface and union members (`MATCH (n:((K9&Pet)|Cat))`, per-member policy predicates); `__typename` stays the GraphQL type name, told apart by label set in declaration order;
+  - `db push` / `assertIndexesAndConstraints`: constraints and indexes on the first listed label.
+
+  The runtime `labels` argument is still added on top. `$jwt` / `$context` placeholders in `labels` are not supported: strict throws `OGMError` when the OGM is built.
+- **`db push --strict`** (or `strict: true` in `grafeo.config.*`) plans constraints and indexes the way `new OGM({ strict: true })` uses the labels. `db push` has no OGM to read `strict` from, so set it to the same value as your OGM. Without it, push keeps planning on the type name and warns for each affected type.
+
+  **Switching is a data migration**: nodes grafeo-ogm created carry the extra type-name label, and `db push --strict` reports the old `Person_id_unique` as an orphan. The README (Strict mode, item 23) gives the uniqueness check to run before pushing and the optional relabel.
+
+### Deprecations
+
+- **`node-labels-upstream`** (logged once per OGM and type whose `@node(labels)` is not just its own name): the type name is matched and added on create, and constraints go on the type name. 3.0 uses the listed labels instead, as `strict: true` does today.
+
 ## 2.10.1 (2026-10-23) — runtime labels follow the policies of the type they name
 
 > **Security patch.** A runtime label that names another declared node type now runs that type's policies. OGMs without `policies` (or under a bypass) compile to byte-identical Cypher, and labels that no declared type carries are unchanged. Generated types are unchanged.
