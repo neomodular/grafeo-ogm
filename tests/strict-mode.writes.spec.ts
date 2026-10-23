@@ -289,3 +289,92 @@ describe('item 5 — labels on upsert / createMany relabel matched nodes', () =>
     ).rejects.toThrow(OGMError);
   });
 });
+
+describe('item 26 — a null / undefined item inside a disconnect array (vNEXT)', () => {
+  const cases: [string, string][] = [
+    ['disconnect: null item in an array', 'null'],
+    ['disconnect: undefined item in an array', 'undefined'],
+  ];
+  it.each(cases)('default warns once: %s', (name, got) =>
+    warnsOnce(
+      badWriteShapes[name],
+      `A ${got} item inside the disconnect array of "posts" unlinks EVERY related node`,
+    ),
+  );
+  it.each(cases)('strict throws and runs nothing: %s', async (name, got) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+      new OGMError(
+        `A disconnect item on "posts" is ${got}. An item inside a disconnect array must be ` +
+          `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
+          `{ posts: [{}] } or { posts: null }.`,
+      ),
+    );
+    expect(records).toEqual([]);
+  });
+
+  it('`{ posts: null }` and an `{}` item stay the blanket disconnect, without a warning', async () => {
+    for (const strict of [false, true]) {
+      const { ogm, warnings } = setup(strict);
+      await ogm
+        .model('User')
+        .update({ where: { id: 'u1' }, disconnect: { posts: null } });
+      await ogm
+        .model('User')
+        .update({ where: { id: 'u1' }, disconnect: { posts: [{}] } });
+      expect(warnings()).toEqual([]);
+    }
+  });
+});
+
+describe('a null / undefined item inside a nested write array throws OGMError in both modes (vNEXT)', () => {
+  const shapes: [string, Run, RegExp][] = [
+    [
+      'nested disconnect',
+      (ogm) =>
+        ogm.model('User').update({
+          where: { id: 'u1' },
+          update: {
+            posts: [
+              { disconnect: [{ where: { node: { id: 'p' } } }, undefined] },
+            ],
+          },
+        }),
+      /^A nested disconnect item on "posts" must be an object .*; got undefined\.$/,
+    ],
+    [
+      'nested update item',
+      (ogm) =>
+        ogm
+          .model('User')
+          .update({ where: { id: 'u1' }, update: { posts: [null] } }),
+      /^A nested update item on "posts" must be an object .*; got null\.$/,
+    ],
+    [
+      'nested create (in update)',
+      (ogm) =>
+        ogm.model('User').update({
+          where: { id: 'u1' },
+          update: { posts: [{ create: [null] }] },
+        }),
+      /^A nested create item on "posts" must be an object .*; got null\.$/,
+    ],
+    [
+      'nested create (in create)',
+      (ogm) =>
+        ogm.model('User').create({
+          input: [{ email: 'a@x', posts: { create: [undefined] } }],
+        }),
+      /^A nested create item on "posts" must be an object .*; got undefined\.$/,
+    ],
+  ];
+  it.each(shapes)('%s', async (_name, run, message) => {
+    for (const strict of [false, true]) {
+      const { ogm, records } = setup(strict);
+      const err = await run(ogm).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OGMError);
+      expect((err as Error).message).toMatch(message);
+      expect(records).toEqual([]);
+    }
+  });
+});

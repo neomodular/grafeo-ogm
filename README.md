@@ -1517,6 +1517,17 @@ ogm.model('Query');
 
 **`db push` and `grafeo generate`** read `strict` from `grafeo.config.*` (`db push` also takes `--strict`), and items 27–30 apply there too: default mode prints a `warning:` line per shape, strict fails before connecting (27–29) or skips the type (30).
 
+#### 26. A `null` / `undefined` item in a disconnect array (since vNEXT)
+
+```typescript
+const keep = undefined; // e.g. an unset optional variable
+await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { title: 'p1' } } }, keep] } });
+// default: every post of the author is unlinked, not only p1 (and warns)
+// strict:  OGMError — nothing is unlinked
+```
+
+A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before vNEXT and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

@@ -1878,6 +1878,9 @@ export class MutationCompiler {
 
       for (let ci = 0; ci < createItems.length; ci++) {
         const createSpec = createItems[ci];
+        // vNEXT — pre-vNEXT a raw TypeError reading `.node`.
+        if (createSpec == null)
+          throw nullNestedItemError('create', relDef, createSpec);
         let nodeSpec = (createSpec.node ?? createSpec) as Record<
           string,
           unknown
@@ -2599,6 +2602,36 @@ export class MutationCompiler {
     return lines;
   }
 
+  /**
+   * vNEXT — strict item 26: a `null` / `undefined` ITEM inside a disconnect
+   * array (`disconnect: { posts: [{ where }, undefined] }`, typically an
+   * unset optional variable). It compiles to the blanket form, so every
+   * related node is unlinked, not just the ones the other items name.
+   * `disconnect: { posts: null }` and an `{}` item stay the documented
+   * blanket disconnect in both modes. Default: one warning per OGM and
+   * relationship field, and the blanket disconnect as before; strict:
+   * `OGMError` (as a null connect item has thrown since v2.5.1).
+   */
+  private checkNullDisconnectItem(
+    item: null | undefined,
+    relDef: RelationshipDefinition,
+  ): void {
+    const got = item === null ? 'null' : 'undefined';
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `A disconnect item on "${relDef.fieldName}" is ${got}. An item inside a disconnect array must be ` +
+          `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
+          `{ ${relDef.fieldName}: [{}] } or { ${relDef.fieldName}: null }.`,
+      );
+    this.strictMode.warn(
+      'disconnect-null-item',
+      relDef.fieldName,
+      `A ${got} item inside the disconnect array of "${relDef.fieldName}" unlinks EVERY related node ` +
+        `(it compiles to the blanket disconnect), not only the nodes the other items name.`,
+      'throw an OGMError for a null / undefined disconnect item',
+    );
+  }
+
   /** One relationship's disconnect items; `tag` as in buildRelConnects. */
   private buildRelDisconnects(
     spec: unknown,
@@ -2619,6 +2652,8 @@ export class MutationCompiler {
 
     for (let si = 0; si < specItems.length; si++) {
       const item = specItems[si];
+      if (item == null && Array.isArray(spec))
+        this.checkNullDisconnectItem(item, relDef);
       const relVar = `${varPrefix}r_${tag}_${si}`;
 
       // Wrap in a CALL subquery: the OPTIONAL MATCH yields one row per
@@ -2988,6 +3023,8 @@ export class MutationCompiler {
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
+        // vNEXT — pre-vNEXT a null / undefined item threw a raw TypeError.
+        if (item == null) throw nullNestedItemError('update', relDef, item);
         const itemPrefix = `${relPrefix}_${i}`;
         // v2.10.0 — strict item 22: unknown keys in the item, its create
         // items and its `update` body.
@@ -3022,6 +3059,10 @@ export class MutationCompiler {
 
           for (let di = 0; di < disconnectItems.length; di++) {
             const disconnectSpec = disconnectItems[di];
+            // vNEXT — pre-vNEXT a null / undefined item threw a raw
+            // TypeError reading `.where`.
+            if (disconnectSpec == null)
+              throw nullNestedItemError('disconnect', relDef, disconnectSpec);
             if (isPlainObject(disconnectSpec))
               this.checkLinkItemKeys(disconnectSpec, 'disconnect', relDef);
             const whereSpec = disconnectSpec.where as
@@ -3196,6 +3237,9 @@ export class MutationCompiler {
 
             for (let ci = 0; ci < createItems.length; ci++) {
               const createSpec = createItems[ci];
+              // vNEXT — pre-vNEXT a raw TypeError reading `.node`.
+              if (createSpec == null)
+                throw nullNestedItemError('create', relDef, createSpec);
               let nodeSpec = (createSpec.node ?? createSpec) as Record<
                 string,
                 unknown
@@ -3677,6 +3721,29 @@ export class MutationCompiler {
 
     return keys;
   }
+}
+
+/**
+ * vNEXT — the OGMError for a `null` / `undefined` item inside a nested
+ * write array (`update: { posts: [{ disconnect: [undefined] }] }`). These
+ * items used to reach property reads and throw a raw TypeError.
+ */
+function nullNestedItemError(
+  kind: 'create' | 'update' | 'disconnect',
+  relDef: RelationshipDefinition,
+  item: null | undefined,
+): OGMError {
+  const shape =
+    kind === 'create'
+      ? '{ node: { … }, edge?: { … } }'
+      : kind === 'update'
+        ? '{ where?, update?, connect?, disconnect?, create?, delete? }'
+        : '{ where: { node: { … } } } (or {} to unlink every related node)';
+  return new OGMError(
+    `A nested ${kind} item on "${relDef.fieldName}" must be an object such as ${shape}; got ${
+      item === null ? 'null' : 'undefined'
+    }.`,
+  );
 }
 
 /**

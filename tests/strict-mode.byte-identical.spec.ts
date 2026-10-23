@@ -63,6 +63,11 @@ const V253: Record<string, string> = {
     "MERGE (n:`User` { `email`: $merge_email })\nON CREATE SET n.`name` = $onCreate_name, n.`id` = randomUUID()\nON MATCH SET n.`name` = $onMatch_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'createMany with labels, no skipDuplicates':
     'UNWIND $items AS item\nCREATE (n:`User` { `id`: randomUUID(), `email`: item.`email` })\nSET n:`Vip`\nRETURN count(n) AS count',
+  // vNEXT — strict item 26 (captured from v2.15.0, the same code path as v2.5.3).
+  'disconnect: null item in an array':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(target_posts_0:`Post`)\nWHERE target_posts_0.`id` = $param1\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_1:`WROTE`]->()\nDELETE r_posts_1\nRETURN count(*) AS _r_posts_1\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'disconnect: undefined item in an array':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->()\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create with labels':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nSET n:`Vip`\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
 };
