@@ -75,6 +75,17 @@ function isTemporalStringInput(value: unknown): boolean {
 }
 
 /**
+ * vNEXT — `DateTime` also wraps a JS `Date`: `coerceWriteValue` binds it as
+ * its ISO string (the same conversion the where path applies), so the
+ * stored value is a native DATETIME that a `where: { at: date }` filter
+ * matches. Pre-vNEXT the Date was bound raw and every write path crashed
+ * with "Property values can only be of primitive types ... Map{}".
+ */
+function isDateTimeWriteInput(value: unknown): boolean {
+  return typeof value === 'string' || value instanceof Date;
+}
+
+/**
  * A plain object shaped like `point()` input: cartesian (`x`/`y`) or
  * geographic (`longitude`/`latitude`), optionally with `z`/`height` and
  * `srid`/`crs`. Driver Point instances are NOT inputs — they pack
@@ -98,7 +109,14 @@ function resolveWriteConstructor(
 ): WriteConstructor | undefined {
   const temporal = TEMPORAL_CONSTRUCTORS[propDef.type];
   if (temporal !== undefined)
-    return { fn: temporal, wraps: isTemporalStringInput, arrayMode: 'any' };
+    return {
+      fn: temporal,
+      wraps:
+        propDef.type === 'DateTime'
+          ? isDateTimeWriteInput
+          : isTemporalStringInput,
+      arrayMode: 'any',
+    };
   if (POINT_SCALAR_TYPES.has(propDef.type))
     return { fn: 'point', wraps: isPointWriteInput, arrayMode: 'all' };
   return undefined;
@@ -156,6 +174,13 @@ export function coerceWriteValue(
 ): unknown {
   if (propDef === undefined || value === null || value === undefined)
     return value;
+  if (TEMPORAL_CONSTRUCTORS[propDef.type] !== undefined) {
+    if (propDef.isArray)
+      return Array.isArray(value)
+        ? value.map((element) => coerceTemporalWriteElement(element, propDef))
+        : value;
+    return coerceTemporalWriteElement(value, propDef);
+  }
   if (!INTEGER_SCALAR_TYPES.has(propDef.type)) return value;
 
   if (propDef.isArray) {
@@ -164,6 +189,35 @@ export function coerceWriteValue(
   }
 
   return coerceIntegerElement(value, propDef);
+}
+
+/**
+ * vNEXT — a JS `Date` for a temporal field. The driver cannot pack a `Date`
+ * (it is sent as an empty map, which Neo4j rejects as a property value),
+ * so pre-vNEXT every write path crashed with a server error. `DateTime`
+ * converts it to its ISO string — exactly what the where path does
+ * (`coerceWhereElement`), so what is stored is what a Date filter
+ * matches. The other temporal types have no single correct reading of an
+ * instant (`Date` / `LocalDateTime` / `LocalTime` would have to pick a
+ * timezone, `Duration` is not an instant), so they reject a `Date` with a
+ * clear error instead of guessing.
+ */
+function coerceTemporalWriteElement(
+  value: unknown,
+  propDef: PropertyDefinition,
+): unknown {
+  if (!(value instanceof Date)) return value;
+  if (propDef.type !== 'DateTime')
+    throw new OGMError(
+      `A JS Date cannot be written to ${propDef.type} field "${propDef.name}": ` +
+        `it has no timezone-free ${propDef.type} reading. Pass an ISO-8601 string ` +
+        `or a neo4j-driver ${propDef.type} value instead.`,
+    );
+  if (Number.isNaN(value.getTime()))
+    throw new OGMError(
+      `Invalid Date given for DateTime field "${propDef.name}".`,
+    );
+  return value.toISOString();
 }
 
 function coerceIntegerElement(
