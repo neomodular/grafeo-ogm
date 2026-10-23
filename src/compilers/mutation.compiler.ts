@@ -679,6 +679,21 @@ export class MutationCompiler {
     const edge = isPlainObject(edgeInput) ? edgeInput : {};
     const items: string[] = [];
     for (const [, propDef] of propsDef.properties) {
+      // vNEXT — an `@id` relationship property is generated when the
+      // relationship is created, as a node's `@id` is (`randomUUID()`), in
+      // every mode. Pre-vNEXT nothing generated it: it was always null,
+      // though the generated output type declares it non-null. A value the
+      // edge input supplies (null included) wins, as for nodes; on a
+      // connect's MERGE the item lands in ON CREATE SET, so an existing
+      // relationship keeps its id.
+      if (propDef.isGenerated && !propDef.isCypher) {
+        if (edge[propDef.name] !== undefined) continue;
+        assertSafePropertyName(propDef.name, 'edge property');
+        items.push(
+          `${relVar}.${escapeIdentifier(propDef.name)} = randomUUID()`,
+        );
+        continue;
+      }
       if (propDef.defaultValue === undefined) continue;
       if (propDef.isGenerated || propDef.isCypher) continue;
       if (edge[propDef.name] !== undefined) continue;
