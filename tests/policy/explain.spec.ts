@@ -660,7 +660,12 @@ describe('Model.explainPolicies — security signalling (6.9)', () => {
     const { bound, logger } = setup(FORMS);
     await bound.model('Chart').explainPolicies();
     await bound.model('Chart').explainPolicies();
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    // v2.11.0 — minus the construction-time strict item 23 warning.
+    expect(
+      (logger.warn as jest.Mock).mock.calls.filter((c) =>
+        String(c[0]).includes('explainPolicies'),
+      ),
+    ).toHaveLength(2);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('explainPolicies'),
       'Chart',

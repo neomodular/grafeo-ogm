@@ -257,8 +257,12 @@ describe('Interface inheritance', () => {
         // Article is intentionally NOT registered → warning expected.
       },
     });
-    expect(warn).toHaveBeenCalledTimes(1);
-    const [message, typeName, missing] = warn.mock.calls[0];
+    // v2.11.0 — strict item 23 also warns once per @node(labels) type.
+    const calls = warn.mock.calls.filter(
+      (c) => !String(c[0]).includes('@node(labels'),
+    );
+    expect(calls).toHaveLength(1);
+    const [message, typeName, missing] = calls[0];
     expect(message).toContain('interface');
     expect(typeName).toBe('Resource');
     expect(missing).toContain('Article');
@@ -280,7 +284,10 @@ describe('Interface inheritance', () => {
         Article: [permissive({ operations: ['read'], when: () => ({}) })],
       },
     });
-    expect(warn).not.toHaveBeenCalled();
+    // v2.11.0 — only the strict item 23 @node(labels) warnings.
+    expect(
+      warn.mock.calls.filter((c) => !String(c[0]).includes('@node(labels')),
+    ).toHaveLength(0);
   });
 
   // Regression — nested-selection read-policy on InterfaceModel reads. The

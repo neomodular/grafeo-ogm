@@ -59,6 +59,12 @@ export interface NodeDefinition {
   typeName: string; // e.g., 'Book' (the GraphQL type name)
   label: string; // Primary label (usually same as typeName)
   labels: string[]; // All labels from @node(labels: [...]) e.g., ['Entity', 'User']
+  /**
+   * v2.11.0 — strict item 23: the exact labels of a type with custom
+   * `@node(labels)` under `strict: true` (match all, create exactly
+   * these, `label` = labels[0]). Unset in default mode.
+   */
+  strictLabels?: string[];
   pluralName: string; // e.g., 'books'
   properties: Map<string, PropertyDefinition>;
   relationships: Map<string, RelationshipDefinition>;

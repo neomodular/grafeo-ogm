@@ -37,7 +37,11 @@ export interface VectorIndexCreationConfig {
   similarity?: 'cosine' | 'euclidean';
 }
 
-/** Grafeo's unique-constraint naming convention: `{Label}_{prop}_unique`. */
+/**
+ * Grafeo's unique-constraint naming convention: `{Label}_{prop}_unique`.
+ * Every statement here uses `nodeDef.label`: the type name in 2.x, the
+ * first `@node(labels)` label under strict item 23 (v2.11.0), as upstream.
+ */
 export function uniqueConstraintName(label: string, prop: string): string {
   return `${label}_${prop}_unique`;
 }

@@ -18,6 +18,7 @@ import {
   getTargetLabelString,
   resolveTargetDef,
 } from '../schema/utils';
+import { typeLabelExpr } from '../schema/labels';
 import { CypherFieldScope } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
@@ -410,7 +411,7 @@ export class WhereCompiler {
             `one to stored properties.`,
         );
       preludes.push(...clause.preludes);
-      const labelTest = `${varName}:${escapeIdentifier(member)}`;
+      const labelTest = `${varName}:${typeLabelExpr(member, this.schema)}`;
       labelTests.push(labelTest);
       if (clause.cypher !== null)
         guards.push(`(NOT ${labelTest} OR ${clause.cypher})`);
@@ -840,7 +841,7 @@ export class WhereCompiler {
       this.schema.nodes.has(m),
     );
     if (!members || members.length === 0) return '';
-    return `(${members.map((m) => `${varName}:${escapeIdentifier(m)}`).join(' OR ')})`;
+    return `(${members.map((m) => `${varName}:${typeLabelExpr(m, this.schema)}`).join(' OR ')})`;
   }
 
   private compileConditions(

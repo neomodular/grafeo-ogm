@@ -22,6 +22,12 @@ import type {
 } from '../schema/types';
 import { buildRelPattern, resolveTargetDef } from '../schema/utils';
 import {
+  nodeLabelExpr,
+  nodeLabelList,
+  typeLabelExpr,
+  typenameByLabels,
+} from '../schema/labels';
+import {
   CypherFieldScope,
   buildInlineCypherFieldExpr,
 } from '../utils/cypher-field-projection';
@@ -1777,7 +1783,7 @@ export class SelectionCompiler {
       let expr: string;
       if (prop.isCypher && prop.cypherStatement)
         expr = cypherScope
-          ? cypherScope.register(field, prop, def.label)
+          ? cypherScope.register(field, prop, nodeLabelList(def))
           : buildInlineCypherFieldExpr(
               prop.cypherStatement,
               nodeVar,
@@ -1794,7 +1800,7 @@ export class SelectionCompiler {
               policyContext,
             )
           : '';
-      return `WHEN ${nodeVar}:${escapeIdentifier(def.label)}${guard} THEN ${expr}`;
+      return `WHEN ${nodeVar}:${nodeLabelExpr(def)}${guard} THEN ${expr}`;
     });
     return `${escapeIdentifier(key)}: CASE ${branches.join(' ')} END`;
   }
@@ -2350,9 +2356,7 @@ export class SelectionCompiler {
           policyContext,
         );
         if (expr)
-          branches.push(
-            `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`,
-          );
+          branches.push(`WHEN ${nodeVar}:${nodeLabelExpr(def)} THEN ${expr}`);
         continue;
       }
       const relDef = def?.relationships.get(relField);
@@ -2380,9 +2384,7 @@ export class SelectionCompiler {
             policyContext,
           );
       if (expr)
-        branches.push(
-          `WHEN ${nodeVar}:${escapeIdentifier(def.label)} THEN ${expr}`,
-        );
+        branches.push(`WHEN ${nodeVar}:${nodeLabelExpr(def)} THEN ${expr}`);
     }
     return { branches, singular };
   }
@@ -2908,7 +2910,7 @@ export class SelectionCompiler {
       // v2.8.0 — strict: the typed select `orderBy`, per member.
       if (strict && hasOrderBy && relDef.isArray) {
         branches.push(
-          `WHEN ${nodeVar}:${escapeIdentifier(memberName)} THEN ${this.compileSortedComprehension(
+          `WHEN ${nodeVar}:${typeLabelExpr(memberName, this.schema)} THEN ${this.compileSortedComprehension(
             `${pattern}${memberPolicyWhere}`,
             innerProjection,
             childVar,
@@ -2928,7 +2930,7 @@ export class SelectionCompiler {
       const comprehension = isSingular
         ? `head([${pattern}${memberPolicyWhere} | ${innerProjection}])`
         : `[${pattern}${memberPolicyWhere} | ${innerProjection}]`;
-      const memberLabel = escapeIdentifier(memberName);
+      const memberLabel = typeLabelExpr(memberName, this.schema);
       branches.push(`WHEN ${nodeVar}:${memberLabel} THEN ${comprehension}`);
     }
 
@@ -3007,14 +3009,14 @@ export class SelectionCompiler {
     }
 
     const excluded = sharing
-      .map((def) => ` AND NOT ${nodeVar}:${escapeIdentifier(def.label)}`)
+      .map((def) => ` AND NOT ${nodeVar}:${nodeLabelExpr(def)}`)
       .join('');
     const branches: string[] = [];
     for (const def of differing) {
       const expr = compileFor(def);
       if (expr)
         branches.push(
-          `WHEN ${nodeVar}:${escapeIdentifier(def.label)}${excluded} THEN ${expr}`,
+          `WHEN ${nodeVar}:${nodeLabelExpr(def)}${excluded} THEN ${expr}`,
         );
     }
     if (branches.length === 0) return fallback;
@@ -3738,6 +3740,10 @@ export class SelectionCompiler {
   private compileTypename(nodeVar: string, nodeDef: NodeDefinition): string {
     const unionMembers = this.schema.unions?.get(nodeDef.typeName);
     if (unionMembers && unionMembers.length > 0) {
+      // v2.11.0 — strict item 23: a member whose labels exclude its type
+      // name is told apart by its label set.
+      const byLabels = typenameByLabels(nodeVar, unionMembers, this.schema);
+      if (byLabels) return byLabels;
       const memberList = unionMembers.map((m) => `'${m}'`).join(', ');
       return `head([__label IN labels(${nodeVar}) WHERE __label IN [${memberList}]])`;
     }
@@ -3747,6 +3753,12 @@ export class SelectionCompiler {
       interfaceDef.implementedBy &&
       interfaceDef.implementedBy.length > 0
     ) {
+      const byLabels = typenameByLabels(
+        nodeVar,
+        interfaceDef.implementedBy,
+        this.schema,
+      );
+      if (byLabels) return byLabels;
       const memberList = interfaceDef.implementedBy
         .map((m) => `'${m}'`)
         .join(', ');

@@ -5,6 +5,7 @@ import {
   FulltextInput,
   FulltextIndexEntry,
 } from '../model';
+import { nodeLabelExpr } from '../schema/labels';
 import { FulltextIndex, NodeDefinition, SchemaMetadata } from '../schema/types';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import {
@@ -12,7 +13,6 @@ import {
   assertSafeIdentifier,
   assertSingleFulltextKey,
   assertSingleFulltextOperator,
-  escapeIdentifier,
   mergeParams,
 } from '../utils/validation';
 
@@ -569,7 +569,7 @@ export class FulltextCompiler {
     const allParams: Record<string, unknown> = { ...innerResult.params };
 
     const cypher = [
-      `MATCH (${nodeVar}:${escapeIdentifier(nodeDef.label)})`,
+      `MATCH (${nodeVar}:${nodeLabelExpr(nodeDef)})`,
       `CALL {`,
       `  WITH ${nodeVar}`,
       ...this.joinBranchOn(innerResult.cypher, innerVar, nodeVar, tag),

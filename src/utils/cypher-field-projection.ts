@@ -25,8 +25,9 @@ export function buildCypherFieldCall(
    * v2.4.8 — run the statement only for nodes carrying this label (an
    * implementer's field selected through an inline fragment on an
    * abstract type). Other rows still keep their row, with `null`.
+   * v2.11.0 — or all of these labels (strict `@node(labels)`).
    */
-  guardLabel?: string,
+  guardLabel?: string | readonly string[],
   /**
    * v2.5.3 — name the reduced column with this (unique) alias instead of
    * `columnName`. Pre-2.5.3 the CALL returned `AS <columnName>` and the
@@ -51,7 +52,9 @@ export function buildCypherFieldCall(
     `  WITH ${nodeVar}`,
     ...(shadows ? [`  WITH ${nodeVar} AS ${inner}`] : []),
     ...(guardLabel !== undefined
-      ? [`  WITH ${inner} WHERE ${inner}:${escapeIdentifier(guardLabel)}`]
+      ? [
+          `  WITH ${inner} WHERE ${inner}:${(typeof guardLabel === 'string' ? [guardLabel] : guardLabel).map((l) => escapeIdentifier(l)).join(':')}`,
+        ]
       : []),
     `  CALL {`,
     `    WITH ${inner}`,
@@ -190,12 +193,17 @@ export class CypherFieldScope {
     /**
      * v2.4.8 — project only for nodes with this label (see
      * `buildCypherFieldCall`); keyed and aliased separately per label.
+     * v2.11.0 — or all of these labels (strict `@node(labels)`), keyed
+     * and aliased by the labels joined with `_`.
      */
-    guardLabel?: string,
+    guardLabels?: string | readonly string[],
   ): string {
     assertSafeIdentifier(fieldName, '@cypher field');
-    if (guardLabel !== undefined)
-      assertSafeIdentifier(guardLabel, '@cypher guard label');
+    const guards =
+      typeof guardLabels === 'string' ? [guardLabels] : guardLabels;
+    if (guards !== undefined)
+      for (const l of guards) assertSafeIdentifier(l, '@cypher guard label');
+    const guardLabel = guards === undefined ? undefined : guards.join('_');
 
     const key =
       guardLabel === undefined ? fieldName : `${guardLabel}:${fieldName}`;
@@ -224,7 +232,7 @@ export class CypherFieldScope {
         propDef.cypherStatement,
         this.nodeVar,
         columnName,
-        guardLabel,
+        guards,
         alias,
       ),
     );

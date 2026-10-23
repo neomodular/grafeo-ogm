@@ -1,0 +1,87 @@
+{
+  "find (default selection)": [
+    "MATCH (n:`Person`)\nWHERE n.`id` = $param0\nRETURN n { __typename: 'Person', .`id`, .`email`, .`name`, .`embedding` }"
+  ],
+  "find with runtime labels": [
+    "MATCH (n:`Person`:`Vip`)\nWHERE n.`id` = $param0\nRETURN n { __typename: 'Person', .`id`, .`email`, .`name`, .`embedding` }"
+  ],
+  "find: concrete, interface, union and connection selections": [
+    "MATCH (n:`Person`)\nWHERE n.`id` = $param0\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN toLower(this.name) AS v\n  }\n  RETURN head(collect(`v`)) AS __sel_n_nameLower\n}\nWITH n, __sel_n_nameLower\nRETURN n { .`id`, `nameLower`: __sel_n_nameLower, favorite: head([(n)-[:`FAV`]->(n0:`Dog`) | n0 { .`id`, `bark`: head(COLLECT { WITH n0 AS this\n  RETURN 'woof' AS v\n}) }]), friends: [(n)-[:`KNOWS`]->(n0:`Person`) | n0 { .`id` }], pets: [(n)-[:`OWNS`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['Dog', 'Cat']]), .`id`, .`name`, `bark`: CASE WHEN n0:`Dog` THEN head(COLLECT { WITH n0 AS this\n  RETURN 'woof' AS v\n}) END }], things: [(n)-[:`HAS`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['Dog', 'Toy']]), .`id`, .`name` }], friendsConnection: { edges: [(n)-[e0:`KNOWS`]->(n0:`Person`) | { node: n0 { .`id` } }], totalCount: size([(n)-[e0:`KNOWS`]->(n0:`Person`) | 1]) }, petsConnection: { edges: [(n)-[e0:`OWNS`]->(n0) | { node: n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['Dog', 'Cat']]), .`id` } }], totalCount: size([(n)-[e0:`OWNS`]->(n0) | 1]) }, friendsAggregate: { `count`: COUNT { (n)-[e0:`KNOWS`]->(n0:`Person`) } } }"
+  ],
+  "find: typed select": [
+    "MATCH (n:`Dog`)\nRETURN n { .`id`, owner: head([(n)<-[:`OWNS`]-(n0:`Person`) | n0 { .`id` }]), toys: [(n)-[:`PLAYS`]->(n0:`Toy`) | n0 { .`id`, .`name` }] }"
+  ],
+  "where: quantifiers, abstract and union filters": [
+    "MATCH (n:`Person`)\nWHERE EXISTS { MATCH (n)-[:`FAV`]->(r0:`Dog`) WHERE r0.`id` = $param1 } AND EXISTS { MATCH (n)-[:`KNOWS`]->(r2:`Person`) WHERE r2.`id` = $param3 } AND NOT EXISTS { MATCH (n)-[:`OWNS`]->(r4) WHERE r4.`name` = $param5 } AND EXISTS { MATCH (n)-[:`HAS`]->(r6:`Dog`:`K9`:`Pet`) WHERE r6.`id` = $param7 } AND NOT EXISTS { MATCH (n)-[e8:`KNOWS`]->(r8:`Person`) WHERE NOT (r8.`name` = $param9) }\nRETURN n { .`id` }"
+  ],
+  "findFirst": [
+    "MATCH (n:`Dog`)\nWHERE n.`name` = $param0\nWITH *\nLIMIT $options_limit\nRETURN n { __typename: 'Dog', .`id`, .`name`, .`tenantId` }"
+  ],
+  "count": [
+    "MATCH (n:`Dog`)\nWHERE n.`name` = $param0\nRETURN count(n) AS count"
+  ],
+  "aggregate": [
+    "MATCH (n:`Dog`)\nWHERE n.`name` = $param0\nRETURN count(n) AS count"
+  ],
+  "fulltext find": [
+    "CALL db.index.fulltext.queryNodes('PersonName', $ft_phrase)\nYIELD node AS n, score\nWHERE n:`Person`\nRETURN n { .`id` }"
+  ],
+  "fulltext NOT": [
+    "MATCH (n:`Person`)\nCALL {\n  WITH n\n  CALL {\n    CALL db.index.fulltext.queryNodes('PersonName', $ft_phrase_0)\n    YIELD node AS __ft_not_1_v, score\n    RETURN __ft_not_1_v AS __ft_not_1_m, score AS __ft_not_1_s\n  }\n  WITH n, __ft_not_1_m, __ft_not_1_s\n  WHERE __ft_not_1_m = n\n  RETURN count(*) AS __ft_not_1_hits\n}\nWITH n, __ft_not_1_hits\nWHERE __ft_not_1_hits = 0\nWITH n, 0 AS score\nWHERE n:`Person`\nRETURN n { .`id` }"
+  ],
+  "searchByVector": [
+    "CALL db.index.vector.queryNodes($v_name_0, $v_k_0, $v_vector_0) YIELD node AS n, score\nWHERE n:`Person`\nRETURN n { .`id` }, score"
+  ],
+  "create": [
+    "CREATE (n:`Dog`:`K9`:`Pet` { `id`: randomUUID(), `name`: $create0_name })\nWITH n\nCALL {\nWITH n\nMATCH (n_cn0:`Person`:`Human`)\nWHERE n_cn0.`id` = $param0\nMERGE (n)<-[:`OWNS`]-(n_cn0)\nRETURN count(*) AS _ccn_create0_owner_0\n}\nWITH n\nCREATE (n_c1:`Toy` { `id`: randomUUID(), `name`: $create0_toys_create0_name })\nCREATE (n)-[:`PLAYS`]->(n_c1)\nRETURN n { .`id` }"
+  ],
+  "create with labels": [
+    "CREATE (n:`Person`:`Human` { `id`: randomUUID(), `name`: $create0_name })\nWITH n\nCREATE (n_c0:`Cat`:`Pet` { `id`: randomUUID(), `name`: $create0_pets_create0_name })\nCREATE (n)-[:`OWNS`]->(n_c0)\nSET n:`Vip`\nRETURN n { .`id` }"
+  ],
+  "createMany": [
+    "UNWIND $items AS item\nCREATE (n:`Dog`:`K9`:`Pet` { `id`: randomUUID(), `name`: item.`name` })\nRETURN count(n) AS count"
+  ],
+  "createMany skipDuplicates": [
+    "UNWIND $items AS item\nMERGE (n:`Dog`:`K9`:`Pet` { `id`: item.`id` })\nON CREATE SET n.`name` = item.`name`\nRETURN count(n) AS count"
+  ],
+  "update: set, connect, disconnect, nested update / delete": [
+    "MATCH (n:`Person`:`Human`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nWITH n\nCALL {\nWITH n\nMATCH (n)-[r_friends_0:`KNOWS`]->(n_u0:`Person`)\nSET n_u0.`name` = $update_friends_0_set_name\nRETURN count(*) AS _uc_friends_0\n}\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_disc_favorite_0_0:`FAV`]->(n_disc1:`Dog`)\nWHERE n_disc1.`id` = $param1\nDELETE r_disc_favorite_0_0\nRETURN count(*) AS _r_disc_favorite_0_0\n}\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_friends_0:`KNOWS`]->(target_friends_0:`Person`)\nWHERE target_friends_0.`id` = $param2\nDELETE r_friends_0\nRETURN count(*) AS _r_friends_0\n}\nWITH n\nCALL {\nWITH n\nMATCH (target:`Dog`:`K9`:`Pet`)\nWHERE target.`id` = $param3\nMERGE (n)-[:`FAV`]->(target)\nRETURN count(*) AS _conn_favorite\n}\nWITH n\nCALL {\nWITH n\nMATCH (target_pets_0)\nWHERE (target_pets_0:`Dog`:`K9`:`Pet` OR target_pets_0:`Cat`:`Pet`) AND target_pets_0.`id` = $param4\nMERGE (n)-[:`OWNS`]->(target_pets_0)\nRETURN count(*) AS _ccn_pets_0\n}\nRETURN n { .`id` }"
+  ],
+  "updateMany": [
+    "MATCH (n:`Dog`:`K9`:`Pet`)\nWHERE n.`name` = $param0\nSET n.`name` = $update_name\nRETURN count(n) AS count"
+  ],
+  "delete with cascade": [
+    "MATCH (n:`Person`:`Human`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`FAV`]->(cascade_0:`Dog`)\nWHERE cascade_0.`id` = $param1\nDETACH DELETE cascade_0\nRETURN count(*) AS _del_favorite_0\n}\nDETACH DELETE n"
+  ],
+  "deleteMany": [
+    "MATCH (n:`Dog`:`K9`:`Pet`)\nWHERE n.`name` = $param0\nDETACH DELETE n"
+  ],
+  "upsert": [
+    "MERGE (n:`Dog`:`K9`:`Pet` { `id`: $merge_id })\nON CREATE SET n.`name` = $onCreate_name\nON MATCH SET n.`name` = $onMatch_name\nRETURN n { .`id` }"
+  ],
+  "setLabels": [
+    "MATCH (n:`Dog`:`K9`:`Pet`)\nWHERE n.`id` = $param0\nSET n:`Good`\nREMOVE n:`Bad`"
+  ],
+  "interface find": [
+    "MATCH (n:(`Dog`|`Cat`))\nWHERE n.`name` = $param0\nWITH n, CASE WHEN n:`Dog` THEN 'Dog' WHEN n:`Cat` THEN 'Cat' END AS __typename\nCALL {\n  WITH n\n  WITH n WHERE n:`Dog`\n  CALL {\n    WITH n\n    WITH n AS this\n    RETURN 'woof' AS v\n  }\n  RETURN head(collect(`v`)) AS __sel_n_Dog_bark\n}\nWITH n, __typename, __sel_n_Dog_bark\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Dog', 'Cat']]), .`id`, `bark`: CASE WHEN n:`Dog` THEN __sel_n_Dog_bark END , __typename: __typename }"
+  ],
+  "interface count with labels": [
+    "MATCH (n:(`Dog`|`Cat`)&`Vip`)\nRETURN count(n) AS count"
+  ],
+  "policies: find, update and delete": [
+    "MATCH (n:`Person`)\nWHERE (EXISTS { MATCH (n)-[:`OWNS`]->(r0) WHERE (r0.`name` = $param1) AND ((r0:`Dog` OR r0:`Cat`) AND (NOT r0:`Dog` OR (r0.`tenantId` = $param2)) AND (NOT r0:`Cat` OR true)) }) AND true\nRETURN n { .`id`, favorite: head([(n)-[:`FAV`]->(n0:`Dog`) WHERE (n0.`tenantId` = $param3) | n0 { .`id` }]), pets: [(n)-[:`OWNS`]->(n0) WHERE ((n0:`Dog` OR n0:`Cat`) AND (NOT n0:`Dog` OR (n0.`tenantId` = $param4)) AND (NOT n0:`Cat` OR true)) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['Dog', 'Cat']]), .`id` }] }",
+    "MATCH (n:`Dog`:`K9`:`Pet`)\nWHERE (n.`id` = $param0) AND (n.`tenantId` = $param1)\nSET n.`name` = $update_name\nWITH n\nWHERE (n.`tenantId` = $param2)\nRETURN n { .`id` }",
+    "MATCH (n:`Person`:`Human`)\nWHERE (n.`id` = $param0) AND true\nWITH n\nCALL {\nWITH n\nMATCH (target:`Dog`:`K9`:`Pet`)\nWHERE target.`id` = $param1 AND (target.`tenantId` = $param2)\nMERGE (n)-[:`FAV`]->(target)\nRETURN count(*) AS _conn_favorite\n}\nWITH n\nWHERE true\nRETURN n { .`id` }",
+    "MATCH (n:`Dog`:`K9`:`Pet`)\nWHERE (n.`id` = $param0) AND (n.`tenantId` = $param1)\nDETACH DELETE n",
+    "MATCH (n:(`Dog`|`Cat`))\nWHERE ((n:`Dog` OR n:`Cat`) AND (NOT n:`Dog` OR (n.`tenantId` = $param0)) AND (NOT n:`Cat` OR true))\nWITH n, CASE WHEN n:`Dog` THEN 'Dog' WHEN n:`Cat` THEN 'Cat' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['Dog', 'Cat']]), .`id` , __typename: __typename }"
+  ],
+  "index statements": [
+    "CREATE FULLTEXT INDEX PersonName IF NOT EXISTS FOR (n:Person) ON EACH [n.name]",
+    "CREATE CONSTRAINT Person_id_unique IF NOT EXISTS FOR (n:Person) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT Person_email_unique IF NOT EXISTS FOR (n:Person) REQUIRE n.email IS UNIQUE",
+    "CREATE CONSTRAINT Dog_id_unique IF NOT EXISTS FOR (n:Dog) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT Cat_id_unique IF NOT EXISTS FOR (n:Cat) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT Toy_id_unique IF NOT EXISTS FOR (n:Toy) REQUIRE n.id IS UNIQUE",
+    "CREATE VECTOR INDEX PersonEmb IF NOT EXISTS FOR (n:Person) ON (n.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 2, `vector.similarity_function`: 'cosine'}}"
+  ]
+}

@@ -33,6 +33,7 @@ import {
   buildUniqueConstraintStatements,
 } from './schema/index-statements';
 import { parseSchema } from './schema/parser';
+import { applyUpstreamNodeLabels, hasCustomNodeLabels } from './schema/labels';
 import { SchemaMetadata } from './schema/types';
 import { clearResolveTargetDefCache } from './schema/utils';
 import { cloneSubgraph, deleteSubgraph } from './subgraph/subgraph-operations';
@@ -165,6 +166,40 @@ function warnAbstractReadsSharedTypes(
     }
 }
 
+/**
+ * v2.11.0 — strict item 23: warn once per type whose `@node(labels)` list
+ * is not just its type name. 2.x matches `(n:<TypeName>)`, creates
+ * `:<TypeName>:<labels…>` and puts constraints on the type name;
+ * `@neo4j/graphql` (and strict mode) uses exactly the listed labels.
+ */
+function warnCustomNodeLabels(
+  schema: SchemaMetadata,
+  strictMode: StrictMode,
+): void {
+  if (strictMode.strict) return;
+  for (const node of schema.nodes.values()) {
+    if (!hasCustomNodeLabels(node)) continue;
+    const t = node.typeName;
+    const listed = node.labels.map((l) => `:${l}`).join('');
+    const created = [...new Set([t, ...node.labels])]
+      .map((l) => `:${l}`)
+      .join('');
+    const effect = node.labels.includes(t)
+      ? `so it does not match :${t} nodes that lack the other labels, as 2.x does`
+      : `so nodes written without :${t} (by @neo4j/graphql) are not found, and the nodes grafeo-ogm created carry an ` +
+        `extra :${t}`;
+    strictMode.warn(
+      'node-labels-upstream',
+      t,
+      `${t} @node(labels: [${node.labels.map((l) => `"${l}"`).join(', ')}]): 2.x matches (n:${t}), creates ${created} ` +
+        `and puts constraints / indexes on :${t}; @neo4j/graphql uses exactly ${listed}, with constraints on ` +
+        `:${node.labels[0]}, ${effect}. Switching changes the labels new nodes get and where db push puts ` +
+        `constraints: a data-migration decision (see "Strict mode", item 23, in the README).`,
+      `use exactly the listed labels, as @neo4j/graphql does`,
+    );
+  }
+}
+
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
   C extends PolicyContext = PolicyContext,
@@ -263,6 +298,8 @@ export class OGM<
           };
     // Parse schema synchronously so model() works before init()
     this.schema = parseSchema(this.config.typeDefs);
+    // v2.11.0 — strict item 23: `@node(labels)` replaces the type name.
+    if (config.strict === true) applyUpstreamNodeLabels(this.schema);
 
     const whereOptions: WhereCompilerOptions = {};
     if (config.features?.filters?.String?.MATCHES === false)
@@ -305,6 +342,7 @@ export class OGM<
 
     warnSharedRelationshipTypes(this.schema, strictMode);
     warnAbstractReadsSharedTypes(this.schema, strictMode);
+    warnCustomNodeLabels(this.schema, strictMode);
 
     // Build the policy registry and validate against the schema. An OGM
     // configured WITHOUT policies builds an empty registry — all model

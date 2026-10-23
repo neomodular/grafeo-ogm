@@ -22,6 +22,7 @@ import {
   SchemaMetadata,
   WhereInput,
 } from './schema/types';
+import { typeLabelExpr } from './schema/labels';
 import { CypherFieldScope } from './utils/cypher-field-projection';
 import {
   compileSortClause,
@@ -374,7 +375,8 @@ export class InterfaceModel<
 
     // __typename resolution via CASE
     const caseLines = this.interfaceDef.implementedBy.map(
-      (typeName) => `WHEN n:${escapeIdentifier(typeName)} THEN '${typeName}'`,
+      (typeName) =>
+        `WHEN n:${typeLabelExpr(typeName, this.schema)} THEN '${typeName}'`,
     );
     // v2.5.3 — an interface with no implementers has no branch: emit a
     // null `__typename` instead of `CASE  END`, a syntax error.
@@ -729,9 +731,16 @@ export class InterfaceModel<
    */
   private compileMatch(extraLabels?: string[]): string {
     const extras = (extraLabels ?? []).map((l) => assertSafeLabel(l));
-    const members = this.interfaceDef.implementedBy.map((typeName) =>
-      escapeIdentifier(this.schema.nodes.get(typeName)?.label ?? typeName),
-    );
+    // v2.11.0 — strict item 23: a member with custom `@node(labels)` is
+    // matched by all of them, `(A&B)`.
+    const members = this.interfaceDef.implementedBy.map((typeName) => {
+      const strictLabels = this.schema.nodes.get(typeName)?.strictLabels;
+      if (strictLabels && strictLabels.length > 1)
+        return `(${strictLabels.map((l) => escapeIdentifier(l)).join('&')})`;
+      return escapeIdentifier(
+        strictLabels?.[0] ?? this.schema.nodes.get(typeName)?.label ?? typeName,
+      );
+    });
     if (members.length === 0)
       return `MATCH (n:${[escapeIdentifier(this.interfaceDef.label), ...extras].join(':')})`;
     const memberExpr =

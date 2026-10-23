@@ -47,6 +47,7 @@ import type {
   PolicyExplanation,
   ResolvedPolicies,
 } from './policy/types';
+import { nodeLabelExpr } from './schema/labels';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
 import { getTargetLabelString } from './schema/utils';
 import { CypherFieldScope } from './utils/cypher-field-projection';
@@ -692,9 +693,7 @@ export class Model<
       mergeParams(allParams, ft.params);
 
       // Add label filter in WHERE for fulltext queries
-      const labelFilters: string[] = [
-        `n:${escapeIdentifier(this.nodeDef.label)}`,
-      ];
+      const labelFilters: string[] = [`n:${nodeLabelExpr(this.nodeDef)}`];
       if (params.labels)
         for (const label of params.labels)
           labelFilters.push(`n:${assertSafeLabel(label)}`);
@@ -727,7 +726,7 @@ export class Model<
       const validatedLabels = (params?.labels ?? []).map((l) =>
         assertSafeLabel(l),
       );
-      const labels = [escapeIdentifier(this.nodeDef.label), ...validatedLabels];
+      const labels = [nodeLabelExpr(this.nodeDef), ...validatedLabels];
       cypherParts.push(`MATCH (n:${labels.join(':')})`);
 
       // WHERE
@@ -876,7 +875,7 @@ export class Model<
     const validatedLabels = (params?.labels ?? []).map((l) =>
       assertSafeLabel(l),
     );
-    const labels = [escapeIdentifier(this.nodeDef.label), ...validatedLabels];
+    const labels = [nodeLabelExpr(this.nodeDef), ...validatedLabels];
     cypherParts.push(`MATCH (n:${labels.join(':')})`);
 
     // Candidate WHERE — compiled exactly as `find` compiles it (same
@@ -1262,7 +1261,7 @@ export class Model<
       cypherParts.push(ft.cypher);
       mergeParams(allParams, ft.params);
 
-      const labelFilters = [`n:${escapeIdentifier(this.nodeDef.label)}`];
+      const labelFilters = [`n:${nodeLabelExpr(this.nodeDef)}`];
       if (params.labels)
         for (const label of params.labels)
           labelFilters.push(`n:${assertSafeLabel(label)}`);
@@ -1290,7 +1289,7 @@ export class Model<
       const validatedLabels = (params.labels ?? []).map((l) =>
         assertSafeLabel(l),
       );
-      const labels = [escapeIdentifier(this.nodeDef.label), ...validatedLabels];
+      const labels = [nodeLabelExpr(this.nodeDef), ...validatedLabels];
       cypherParts.push(`MATCH (n:${labels.join(':')})`);
 
       const whereResult = this.whereCompiler.compile(
@@ -2027,9 +2026,7 @@ export class Model<
 
     // 3. Build the label filter. The vector index can match anything with
     //    the indexed property, so we constrain to the expected label(s).
-    const labelFilters: string[] = [
-      `n:${escapeIdentifier(this.nodeDef.label)}`,
-    ];
+    const labelFilters: string[] = [`n:${nodeLabelExpr(this.nodeDef)}`];
     if (params.labels)
       for (const label of params.labels)
         labelFilters.push(`n:${assertSafeLabel(label)}`);

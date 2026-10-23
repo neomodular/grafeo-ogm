@@ -122,7 +122,8 @@ export interface BuildRelPatternOptions {
   edgeVar?: string;
   /**
    * Target label strategy:
-   * - `'auto'` — use `relDef.target` escaped as a label
+   * - `'auto'` — use `relDef.target` escaped as a label (v2.11.0: its
+   *   strict `@node(labels)` when `schema` is passed)
    * - a string — validated and escaped via assertSafeLabel
    * - `undefined` / omit — no label on the target node
    */
@@ -178,7 +179,15 @@ export function buildRelPattern(opts: BuildRelPatternOptions): string {
     else {
       const rawLabel =
         opts.targetLabel === 'auto' ? opts.relDef.target : opts.targetLabel;
-      const escapedLabel = assertSafeLabel(rawLabel);
+      // v2.11.0 — strict item 23: a target with custom `@node(labels)` is
+      // matched by all of its upstream labels (validated at construction).
+      const strictLabels =
+        opts.targetLabel === 'auto'
+          ? opts.schema?.nodes.get(rawLabel)?.strictLabels
+          : undefined;
+      const escapedLabel = strictLabels
+        ? strictLabels.map((l) => escapeIdentifier(l)).join(':')
+        : assertSafeLabel(rawLabel);
       targetPart = opts.targetVar
         ? `(${opts.targetVar}:${escapedLabel})`
         : `(:${escapedLabel})`;
