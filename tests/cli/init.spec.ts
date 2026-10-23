@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { runInit } from '../../src/cli/commands/init';
 import { detectProject } from '../../src/cli/detect';
+import { parseSchema } from '../../src/schema/parser';
 import type { CliIO } from '../../src/cli/types';
 
 interface TestIO extends CliIO {
@@ -236,6 +237,20 @@ describe('grafeo init (cli-init spec)', () => {
     expect(config).toContain(`schema: ${JSON.stringify(`./${evil}.graphql`)}`);
     // …never as the raw single-quoted break-out form.
     expect(config).not.toContain(`schema: './${evil}.graphql'`);
+  });
+
+  it('starter Person keeps name a user-supplied field with a separate generated id (vNEXT)', async () => {
+    const io = makeIO();
+    await runInit([], io);
+    const person = parseSchema(read(io.cwd, 'schema.graphql')).nodes.get(
+      'Person',
+    )!;
+    const name = person.properties.get('name')!;
+    expect(name.isGenerated).toBe(false);
+    expect(name.required).toBe(true);
+    const id = person.properties.get('id')!;
+    expect(id.isGenerated).toBe(true);
+    expect(id.isUnique).toBe(true);
   });
 
   it('keeps an absolute --schema / --out absolute in the config (vNEXT)', async () => {

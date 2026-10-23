@@ -41,6 +41,8 @@ function parseInitFlags(argv: string[]): InitFlags {
 
 // The classic Neo4j movie graph, expressed in grafeo SDL — recognizable to
 // Neo4j users and it exercises relationship arity/direction both ways.
+// vNEXT — Person has its own generated `id`; pre-vNEXT `name` carried
+// `@id`, so it was left out of the create input and stored as a UUID.
 const MOVIE_SCHEMA = `# grafeo schema — the Neo4j movie example.
 # Run \`npx grafeo generate\` (or \`npm run generate\`) to emit typed models.
 
@@ -53,7 +55,8 @@ type Movie @node {
 }
 
 type Person @node {
-  name: String! @id @unique
+  id: ID! @id @unique
+  name: String!
   born: Int
   actedIn: [Movie!]! @relationship(type: "ACTED_IN", direction: OUT)
   directed: [Movie!]! @relationship(type: "DIRECTED", direction: OUT)
