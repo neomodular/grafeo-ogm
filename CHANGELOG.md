@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.12.3 (2026-10-23) — `count` restrictives are enforced
+
+> **Security patch.** A policy restrictive that lists `count` now applies to `count()`. Policy sets with no restrictive listing `count` compile to byte-identical Cypher, and OGMs without `policies` are unaffected. Generated types are unchanged.
+
+### Security
+
+- **Restrictives that listed only `count` were never enforced (medium).** `Model.count` and `InterfaceModel.count` run through the aggregate path, which resolves the `aggregate` policies and falls back to `read`, and never looked at `count`. So `restrictive({ operations: ['count'], … })` was ignored and `count()` returned the size of a set the restrictive was meant to narrow. `count()` now resolves exactly as before (`aggregate`, falling back to `read`: permissives, overrides, default deny and the `onDeny: 'throw'` pre-check are unchanged) and then ANDs in every restrictive that lists `count`. A restrictive already applied by that resolution (for example `['read', 'count']`) is not added twice. On `InterfaceModel`, this happens in each implementer's branch, and an interface-level `count` restrictive reaches every implementer. `aggregate({ aggregate: { count: true } })`, `<rel>Aggregate { count }` and connection `totalCount` keep following the `aggregate` / `read` policies. Present since policies shipped in 1.7.0; affects 1.7.0 through 2.12.2.
+
+### Behavior change
+
+- With a restrictive that lists `count`, `count()` returns only the rows that restrictive admits. On `Model.count`, the applied `count` restrictives are also listed in `policiesEvaluated`; `InterfaceModel.count` metadata is unchanged.
+
+### Deprecations
+
+- **`count-permissive-ignored`** (logged once per OGM and policy, in default mode): a permissive that lists `count` but not `read`, `aggregate` or `*` grants nothing to `count()`, which takes its permissives from `aggregate`, falling back to `read`, as it always has. 2.x keeps it that way, since honouring it could return rows that are denied today.
+
 ## 2.12.2 (2026-10-23) — `where` depth limit counts relationship and connection hops
 
 > **Security patch.** The `where` nesting limit (10) now counts relationship and connection hops as well as `AND` / `OR` / `NOT` levels, on every path that compiles a filter. Every filter within the limit compiles to byte-identical Cypher. Generated types are unchanged.
