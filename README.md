@@ -1337,6 +1337,29 @@ Strict also spells a zone id as Neo4j does: ids match case-insensitively and kee
 
 By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE` or `_DATE_ONLY_ZONE`. Strings that threw before 2.9.0 read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read.
 
+#### 22. Unknown keys in nested write inputs (since 2.10.0)
+
+```typescript
+// the user wrote posts A and B ("old")
+await users.update({
+  where: { id },
+  update: { posts: [{ wher: { node: { id: 'A' } }, update: { node: { title: 'new' } } }] },
+});
+// default: A and B are both renamed — "wher" is ignored, so the update has no filter (and warns)
+// strict:  OGMError: Unknown key(s) "wher" in a nested update item on "posts". Allowed: "where", "update", …
+```
+
+The nested write objects are compiled from a fixed set of keys, and before 2.10.0 any other key was ignored. A typo'd `wher` widens the item's `update` to every related node. `updat`, `creat`, `egde` next to `node`, and a node field next to `edge` in a nested `update` are dropped. Allowed keys, which are exactly the keys of the generated input types:
+
+| Input | Allowed keys |
+|---|---|
+| nested update item (`update: { posts: [ … ] }`, also per union / interface member) | `where`, `update`, `connect`, `disconnect`, `create`, `delete` |
+| relationship field in `create()` or in a nested create's `node` | `create`, `connect` |
+| nested create item, when it has `node` | `node`, `edge` |
+| an item's `update`, when it has `node` or `edge` | `node`, `edge` |
+
+A nested create item without `node` and an `update` without `node` / `edge` are the flat forms: every key is a field of the target type, and an unknown one throws in both modes (since 2.5.0). Keys set to `undefined` are ignored. Connect / disconnect items are [item 1](#1-unknown-keys-in-connect--disconnect-items). The warning code is `nested-write-unknown-key`, logged once per OGM instance, input shape, field and key set.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

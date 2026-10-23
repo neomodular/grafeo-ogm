@@ -455,12 +455,10 @@ export class MutationCompiler {
   ): void {
     const allowed =
       kind === 'connect' ? CONNECT_ITEM_KEYS : DISCONNECT_ITEM_KEYS;
-    const unknown = Object.keys(item).filter(
-      (k) => item[k] !== undefined && !allowed.has(k),
-    );
+    const unknown = unknownInputKeys(item, allowed);
     if (unknown.length === 0) return;
-    const list = unknown.map((k) => `"${k}"`).join(', ');
-    const allowedList = [...allowed].map((k) => `"${k}"`).join(', ');
+    const list = quoteKeys(unknown);
+    const allowedList = quoteKeys(allowed);
     if (this.strictMode.strict)
       throw new OGMError(
         `Unknown key(s) ${list} in a ${kind} item on "${relDef.fieldName}". Allowed: ${allowedList}.`,
@@ -481,6 +479,88 @@ export class MutationCompiler {
         ` Allowed: ${allowedList}.`,
       `throw an OGMError for unknown ${kind} item keys`,
     );
+  }
+
+  /**
+   * v2.10.0 — strict item 22. Keys of a nested write object that the
+   * compiler does not read (connect / disconnect items are
+   * {@link checkLinkItemKeys}). Pre-2.10.0 (and still by default) they are
+   * ignored: a typo'd `wher` in a nested update item leaves its `update`
+   * with no filter, so it rewrites EVERY related node; `creat`, `updat`,
+   * `egde` beside `node`, or a node field beside `edge` in a nested update
+   * are dropped. Default: one warning per OGM and shape; strict:
+   * `OGMError`, like an unknown write field.
+   */
+  private checkNestedWriteKeys(
+    input: unknown,
+    shape: NestedWriteShape,
+    relDef: RelationshipDefinition,
+  ): void {
+    if (!isPlainObject(input)) return;
+    const { keys: allowed, what } = NESTED_WRITE_SHAPES[shape];
+    const unknown = unknownInputKeys(input, allowed);
+    if (unknown.length === 0) return;
+    const list = quoteKeys(unknown);
+    const allowedList = quoteKeys(allowed);
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `Unknown key(s) ${list} in ${what} on "${relDef.fieldName}". Allowed: ${allowedList}.`,
+      );
+    let effect: string;
+    if (shape === 'update item')
+      effect =
+        input.update != null && input.where == null
+          ? `; with no "where", the item's "update" applies to EVERY related "${relDef.target}" node.`
+          : '.';
+    else if (shape === 'create field input')
+      effect = `: only "create" and "connect" are written, nothing for ${unknown.length > 1 ? 'these keys' : 'this key'}.`;
+    else if (shape === 'create item')
+      effect = ': with "node" given, only "node" and "edge" are read.';
+    else
+      effect =
+        ': with "node" or "edge" given, node fields are read only from "node".';
+    this.strictMode.warn(
+      'nested-write-unknown-key',
+      `${shape}\u0000${relDef.fieldName}\u0000${unknown.join(',')}`,
+      `Unknown key(s) ${list} in ${what} on "${relDef.fieldName}" ` +
+        `${unknown.length > 1 ? 'are' : 'is'} ignored${effect} Allowed: ${allowedList}.`,
+      'throw an OGMError for unknown keys in nested write inputs',
+    );
+  }
+
+  /**
+   * v2.10.0 — strict item 22: key-check one nested update item, the
+   * create items it carries and its `update` body (when that body uses the
+   * `node` / `edge` wrapper; the flat form is checked field by field by
+   * `assertKnownField`). Connect / disconnect items are checked where they
+   * are compiled.
+   */
+  private checkUpdateItemKeys(
+    item: unknown,
+    relDef: RelationshipDefinition,
+  ): void {
+    if (!isPlainObject(item)) return;
+    this.checkNestedWriteKeys(item, 'update item', relDef);
+    this.checkCreateItemKeys(item.create, relDef);
+    const body = item.update;
+    if (isPlainObject(body) && (body.node != null || body.edge))
+      this.checkNestedWriteKeys(body, 'update body', relDef);
+  }
+
+  /**
+   * v2.10.0 — strict item 22: key-check the nested create items of a
+   * `create` value that use the `node` wrapper (`createSpec.node ??
+   * createSpec`: without `node`, every key is a node field and checked by
+   * `assertKnownField`).
+   */
+  private checkCreateItemKeys(
+    create: unknown,
+    relDef: RelationshipDefinition,
+  ): void {
+    if (create == null) return;
+    for (const spec of Array.isArray(create) ? create : [create])
+      if (isPlainObject(spec) && spec.node != null)
+        this.checkNestedWriteKeys(spec, 'create item', relDef);
   }
 
   /**
@@ -1763,6 +1843,10 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
+    // v2.10.0 — strict item 22: only `create` / `connect` are read here.
+    this.checkNestedWriteKeys(relInput, 'create field input', relDef);
+    this.checkCreateItemKeys(relInput.create, relDef);
+
     // A flat interface input (v2.4.8): each create names its implementer.
     const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
 
@@ -2884,6 +2968,9 @@ export class MutationCompiler {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const itemPrefix = `${relPrefix}_${i}`;
+        // v2.10.0 — strict item 22: unknown keys in the item, its create
+        // items and its `update` body.
+        this.checkUpdateItemKeys(item, relDef);
 
         // --- delete (detach delete target nodes) ---
         // Shared with `compileDelete`'s cascade: where + target `delete`
@@ -3571,6 +3658,67 @@ const DISCONNECT_ITEM_KEYS: ReadonlySet<string> = new Set([
   'where',
   'disconnect',
 ]);
+
+/**
+ * v2.10.0 — strict item 22: the keys each nested write object is compiled
+ * from, which are also exactly the keys its generated input type offers
+ * (`input-emitter.ts`). `edge` is read whether or not the relationship
+ * declares properties; `checkEdgeKeys` reports what is inside it.
+ *
+ * - `update item` — `<Type><Field>UpdateFieldInput` (and per member);
+ * - `create field input` — `<Type><Field>FieldInput`, a relationship field
+ *   in `create()` and in a nested create's `node` (and per member);
+ * - `create item` — `<Type><Field>CreateFieldInput`, when `node` is given;
+ * - `update body` — `<Type><Field>UpdateConnectionInput`, when `node` or
+ *   `edge` is given.
+ */
+type NestedWriteShape =
+  | 'update item'
+  | 'create field input'
+  | 'create item'
+  | 'update body';
+const NESTED_WRITE_SHAPES: Record<
+  NestedWriteShape,
+  { keys: ReadonlySet<string>; what: string }
+> = {
+  'update item': {
+    keys: new Set([
+      'where',
+      'update',
+      'connect',
+      'disconnect',
+      'create',
+      'delete',
+    ]),
+    what: 'a nested update item',
+  },
+  'create field input': {
+    keys: new Set(['create', 'connect']),
+    what: 'the nested create input',
+  },
+  'create item': {
+    keys: new Set(['node', 'edge']),
+    what: 'a nested create item',
+  },
+  'update body': {
+    keys: new Set(['node', 'edge']),
+    what: 'the "update" of a nested update item',
+  },
+};
+
+/** Defined keys of a write input object that `allowed` does not contain. */
+function unknownInputKeys(
+  input: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+): string[] {
+  return Object.keys(input).filter(
+    (k) => input[k] !== undefined && !allowed.has(k),
+  );
+}
+
+function quoteKeys(keys: Iterable<string>): string {
+  return [...keys].map((k) => `"${k}"`).join(', ');
+}
 
 /** Keys that make a nested-mutation `where` connection-shaped. */
 const CONNECTION_WHERE_KEYS: ReadonlySet<string> = new Set([
