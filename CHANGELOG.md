@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.12.4 (2026-10-23) — caches no longer shared between OGMs with different schemas
+
+> **Patch release.** Two process-wide caches are now kept per schema. A single OGM compiles byte-identical Cypher and keeps its cache hit rate. Generated types are unchanged.
+
+### Fixed
+
+- **Two OGMs with different schemas in one process could read each other's cached definitions (since v1.0.0).** The resolved-definition cache for interface and union targets was keyed by type name only, so an interface resolved by one OGM was served to another OGM whose interface of the same name had different fields: a `String` field could be checked as the other schema's `Int` (`Expected an integer …`), and typed `select` could warn about (or, under `strict: true`, reject) a field that exists. It is now kept per parsed schema.
+- **The `selectionSet` parse cache was shared by every OGM in the process (since v2.6.0).** A selection parsed against one OGM's schema was reused by another, so the duplicate-field conflict check and its warning (strict item 9) were decided by the first OGM's schema. It is now kept per parsed schema, with the same 500-entry cap per schema.
+
 ## 2.12.3 (2026-10-23) — `count` restrictives are enforced
 
 > **Security patch.** A policy restrictive that lists `count` now applies to `count()`. Policy sets with no restrictive listing `count` compile to byte-identical Cypher, and OGMs without `policies` are unaffected. Generated types are unchanged.
