@@ -34,6 +34,34 @@ import {
   escapeIdentifier,
   mergeParams,
 } from './utils/validation';
+import {
+  checkParamKeys,
+  lenientStrictMode,
+  StrictMode,
+} from './utils/strict-mode';
+
+/**
+ * vNEXT — strict item 30: the top-level params each method reads
+ * (`checkParamKeys`). findFirst / findUnique and the *OrThrow variants
+ * pass their params on to find(). There is no `select` / `fulltext`.
+ */
+const FIND_PARAMS = [
+  'where',
+  'selectionSet',
+  'options',
+  'labels',
+  'context',
+  'unsafe',
+] as const;
+const PARAMS = {
+  find: FIND_PARAMS,
+  findFirst: FIND_PARAMS,
+  findUnique: FIND_PARAMS,
+  findFirstOrThrow: FIND_PARAMS,
+  findUniqueOrThrow: FIND_PARAMS,
+  aggregate: ['where', 'aggregate', 'labels', 'context', 'unsafe'],
+  count: ['where', 'labels', 'context', 'unsafe'],
+} as const satisfies Record<string, readonly string[]>;
 
 interface FindOptions<TSort = Record<string, 'ASC' | 'DESC'>> {
   limit?: number;
@@ -133,6 +161,7 @@ export class InterfaceModel<
 
   private policyBinding: ModelPolicyBinding | undefined;
   private logger: import('./execution/executor').OGMLogger | undefined;
+  private strictMode: StrictMode;
 
   constructor(
     private interfaceDef: InterfaceDefinition,
@@ -149,6 +178,7 @@ export class InterfaceModel<
     this.syntheticNodeDef = this.buildSyntheticNodeDef();
     this.policyBinding = policyBinding;
     this.logger = policyBinding?.logger;
+    this.strictMode = compilers?.strictMode ?? lenientStrictMode();
   }
 
   /**
@@ -311,6 +341,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string })[]> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'find',
+      params,
+      PARAMS.find,
+    );
     const policyContext = this.resolveInterfacePolicy('read', params?.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'read');
 
@@ -505,6 +542,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<Record<string, unknown>> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'aggregate',
+      params,
+      PARAMS.aggregate,
+    );
     return this.runAggregate(params, false);
   }
 
@@ -677,6 +721,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'findFirst',
+      params,
+      PARAMS.findFirst,
+    );
     const results = await this.find({
       ...params,
       options: { ...params?.options, limit: 1 },
@@ -691,6 +742,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<(T & { __typename: string }) | null> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'findUnique',
+      params,
+      PARAMS.findUnique,
+    );
     return this.findFirst(params);
   }
 
@@ -702,6 +760,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'findFirstOrThrow',
+      params,
+      PARAMS.findFirstOrThrow,
+    );
     const result = await this.findFirst(params);
     if (result === null)
       throw new RecordNotFoundError(
@@ -718,6 +783,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T & { __typename: string }> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'findUniqueOrThrow',
+      params,
+      PARAMS.findUniqueOrThrow,
+    );
     const result = await this.findUnique(params);
     if (result === null)
       throw new RecordNotFoundError(
@@ -735,6 +807,13 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number> {
+    checkParamKeys(
+      this.strictMode,
+      this.interfaceDef.name,
+      'count',
+      params,
+      PARAMS.count,
+    );
     // v2.12.3 — `count()` also enforces each implementer's `count`
     // restrictives; pre-2.12.3 this called `aggregate()`, which never
     // resolved them.

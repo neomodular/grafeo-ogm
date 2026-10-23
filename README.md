@@ -1556,6 +1556,16 @@ await users.update({ where: { id }, update: { double: 98 } });
 
 A `@cypher` field is computed when it is read, and the generated create and update inputs leave it out. Before vNEXT every write path accepted it anyway and stored it as a property of the same name, which reads never return (they run the statement). This applies to `create()`, `update()`, `updateMany()`, `createMany()`, both branches of `upsert()`, and nested creates and updates at any depth. A key set to `undefined` is ignored. The warning code is `cypher-field-write`, logged once per OGM instance, type and field.
 
+#### 30. Unknown parameters of `Model` / `InterfaceModel` methods (since vNEXT)
+
+```typescript
+await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1' } } }] } });
+// default: deletes nothing — "delete" is ignored (and warns)
+// strict:  OGMError: Unknown parameter "delete" of User.update(). Allowed: "where", "update", … update() has no root "delete": …
+```
+
+Each method reads a fixed set of top-level parameters (the ones in its signature), and before vNEXT any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

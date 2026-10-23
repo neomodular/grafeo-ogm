@@ -56,13 +56,122 @@ import {
   compileSortClause,
   orderBeforeProjection,
 } from './utils/cypher-sort-projection';
-import { lenientStrictMode, StrictMode } from './utils/strict-mode';
+import {
+  checkParamKeys,
+  lenientStrictMode,
+  StrictMode,
+} from './utils/strict-mode';
 import {
   assertSafeIdentifier,
   assertSafeLabel,
   escapeIdentifier,
   mergeParams,
 } from './utils/validation';
+
+/**
+ * vNEXT — strict item 30: the top-level params each method reads
+ * (`checkParamKeys`). findFirst / findUnique and the *OrThrow variants
+ * pass their params on to find(), which honours every find key.
+ */
+const FIND_PARAMS = [
+  'where',
+  'selectionSet',
+  'select',
+  'labels',
+  'options',
+  'fulltext',
+  'context',
+  'unsafe',
+] as const;
+const PARAMS = {
+  find: FIND_PARAMS,
+  findFirst: FIND_PARAMS,
+  findUnique: FIND_PARAMS,
+  findFirstOrThrow: FIND_PARAMS,
+  findUniqueOrThrow: FIND_PARAMS,
+  explainPolicies: [
+    'where',
+    'selectionSet',
+    'select',
+    'labels',
+    'options',
+    'context',
+  ],
+  create: ['input', 'labels', 'selectionSet', 'select', 'context', 'unsafe'],
+  update: [
+    'where',
+    'update',
+    'connect',
+    'disconnect',
+    'labels',
+    'selectionSet',
+    'select',
+    'context',
+    'unsafe',
+  ],
+  delete: ['where', 'delete', 'context', 'unsafe'],
+  aggregate: ['where', 'aggregate', 'labels', 'fulltext', 'context', 'unsafe'],
+  count: ['where', 'labels', 'fulltext', 'context', 'unsafe'],
+  setLabels: ['where', 'addLabels', 'removeLabels', 'context', 'unsafe'],
+  upsert: [
+    'where',
+    'create',
+    'update',
+    'selectionSet',
+    'select',
+    'labels',
+    'context',
+    'unsafe',
+  ],
+  createMany: ['data', 'skipDuplicates', 'labels', 'context', 'unsafe'],
+  updateMany: ['where', 'data', 'labels', 'context', 'unsafe'],
+  deleteMany: ['where', 'context', 'unsafe'],
+  searchByVector: [
+    'indexName',
+    'vector',
+    'k',
+    'where',
+    'selectionSet',
+    'select',
+    'labels',
+    'context',
+    'unsafe',
+  ],
+  searchByPhrase: [
+    'indexName',
+    'phrase',
+    'k',
+    'providerConfig',
+    'where',
+    'selectionSet',
+    'select',
+    'labels',
+    'context',
+    'unsafe',
+  ],
+} as const satisfies Record<string, readonly string[]>;
+
+/** Advice for unknown params that name an upstream / sibling feature. */
+const NESTED_ONLY = (op: string) =>
+  `update() has no root "${op}": put it in a relationship field of "update", e.g. ` +
+  `\`update: { posts: [{ ${op}: … }] }\`.`;
+const PARAM_HINTS = {
+  update: {
+    create: NESTED_ONLY('create'),
+    delete: NESTED_ONLY('delete'),
+    connectOrCreate: 'connectOrCreate is not supported.',
+    data: 'update() takes "update", not "data" (that is updateMany()).',
+  },
+  delete: {
+    labels:
+      'delete() takes no runtime "labels": the label filter is not applied.',
+  },
+  deleteMany: {
+    delete: 'deleteMany() does not cascade: use delete({ where, delete }).',
+    labels:
+      'deleteMany() takes no runtime "labels": the label filter is not applied.',
+  },
+};
 
 /**
  * Internal binding handed to `Model` by `OGM.withContext(ctx)`. Carries
@@ -676,6 +785,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T[]> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'find',
+      params,
+      PARAMS.find,
+    );
     if (params?.select && params?.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -838,6 +954,13 @@ export class Model<
     options?: FindOptions<TSort>;
     context?: ExecutionContext;
   }): Promise<PolicyExplanation<T>[]> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'explainPolicies',
+      params,
+      PARAMS.explainPolicies,
+    );
     if (params?.select && params?.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -975,6 +1098,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'create',
+      params,
+      PARAMS.create,
+    );
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -1081,6 +1211,14 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<MutationResponse<T, TPluralKey>> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'update',
+      params,
+      PARAMS.update,
+      PARAM_HINTS.update,
+    );
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -1197,6 +1335,14 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ nodesDeleted: number; relationshipsDeleted: number }> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'delete',
+      params,
+      PARAMS.delete,
+      PARAM_HINTS.delete,
+    );
     const policyContext = this.resolvePolicyContext('delete', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'delete');
     // Note: WriteRestrictives do not target 'delete' (deletes have no
@@ -1248,6 +1394,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'aggregate',
+      params,
+      PARAMS.aggregate,
+    );
     return this.runAggregate(params, false);
   }
 
@@ -1447,6 +1600,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<void> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'setLabels',
+      params,
+      PARAMS.setLabels,
+    );
     const policyContext = this.resolvePolicyContext('update', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'update');
 
@@ -1537,6 +1697,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T | null> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'findFirst',
+      params,
+      PARAMS.findFirst,
+    );
     const results = await this.find({
       ...params,
       options: { ...params?.options, limit: 1 },
@@ -1552,6 +1719,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T | null> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'findUnique',
+      params,
+      PARAMS.findUnique,
+    );
     return this.findFirst(params);
   }
 
@@ -1565,6 +1739,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'findFirstOrThrow',
+      params,
+      PARAMS.findFirstOrThrow,
+    );
     const result = await this.findFirst(params);
     if (result === null)
       throw new RecordNotFoundError(
@@ -1582,6 +1763,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'findUniqueOrThrow',
+      params,
+      PARAMS.findUniqueOrThrow,
+    );
     const result = await this.findUnique(params);
     if (result === null)
       throw new RecordNotFoundError(
@@ -1600,6 +1788,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'count',
+      params,
+      PARAMS.count,
+    );
     // v2.12.3 — `count()` also enforces the type's `count` restrictives;
     // pre-2.12.3 this called `aggregate()`, which never resolved them.
     const result = await this.runAggregate(
@@ -1628,6 +1823,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<T> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'upsert',
+      params,
+      PARAMS.upsert,
+    );
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -1751,6 +1953,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'createMany',
+      params,
+      PARAMS.createMany,
+    );
     const policyContext = this.resolvePolicyContext('create', params.unsafe);
     this.evaluateCreatePolicies(
       policyContext,
@@ -1843,6 +2052,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'updateMany',
+      params,
+      PARAMS.updateMany,
+    );
     const policyContext = this.resolvePolicyContext('update', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'update');
     this.evaluateWriteRestrictives(
@@ -1910,6 +2126,14 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count: number }> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'deleteMany',
+      params,
+      PARAMS.deleteMany,
+      PARAM_HINTS.deleteMany,
+    );
     const policyContext = this.resolvePolicyContext('delete', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'delete');
     // Note: WriteRestrictives do not target 'delete'. ReadRestrictives
@@ -1979,6 +2203,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'searchByVector',
+      params,
+      PARAMS.searchByVector,
+    );
     return this.runVectorSearch({
       params,
       compile: (paramCounter) =>
@@ -2024,6 +2255,13 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<Array<{ node: T; score: number }>> {
+    checkParamKeys(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'searchByPhrase',
+      params,
+      PARAMS.searchByPhrase,
+    );
     return this.runVectorSearch({
       params,
       compile: (paramCounter) =>

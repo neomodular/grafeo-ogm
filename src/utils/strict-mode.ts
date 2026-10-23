@@ -1,3 +1,4 @@
+import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
 
 /**
@@ -80,6 +81,53 @@ export class StrictMode {
     this.warned.add(key);
     warn.call(this.logger, message);
   }
+}
+
+/**
+ * vNEXT — strict item 30: top-level keys of a `Model` /
+ * `InterfaceModel` method's params object that the method does not read.
+ * Pre-vNEXT (and still by default) they are ignored, so an upstream-style
+ * `update({ where, delete })` or a `deleteMany({ where, delete })` cascade
+ * silently does nothing, and `delete({ where, labels })` deletes without
+ * the label filter. Default: one warning per OGM, owner and key set (not
+ * per method, so a find routed through findFirst warns once);
+ * strict: `OGMError`. Keys set to `undefined` are ignored in both modes.
+ *
+ * @param owner   the type or interface name
+ * @param method  the method the caller invoked
+ * @param allowed the keys the method reads
+ * @param hints   per-key advice appended to the message
+ */
+export function checkParamKeys(
+  strictMode: StrictMode,
+  owner: string,
+  method: string,
+  params: unknown,
+  allowed: readonly string[],
+  hints: Readonly<Record<string, string>> = {},
+): void {
+  if (params === null || typeof params !== 'object' || Array.isArray(params))
+    return;
+  const record = params as Record<string, unknown>;
+  const unknown = Object.keys(record).filter(
+    (k) => record[k] !== undefined && !allowed.includes(k),
+  );
+  if (unknown.length === 0) return;
+  const quote = (keys: readonly string[]) =>
+    keys.map((k) => `"${k}"`).join(', ');
+  const advice = unknown
+    .filter((k) => Object.prototype.hasOwnProperty.call(hints, k))
+    .map((k) => ` ${hints[k]}`)
+    .join('');
+  const what = `parameter${unknown.length > 1 ? 's' : ''} ${quote(unknown)} of ${owner}.${method}()`;
+  if (strictMode.strict)
+    throw new OGMError(`Unknown ${what}. Allowed: ${quote(allowed)}.${advice}`);
+  strictMode.warn(
+    'unknown-param',
+    `${owner}\u0000${unknown.join(',')}`,
+    `Unknown ${what} ${unknown.length > 1 ? 'are' : 'is'} ignored. Allowed: ${quote(allowed)}.${advice}`,
+    'throw an OGMError for unknown parameters',
+  );
 }
 
 /** Lenient, silent instance for compilers constructed without an OGM. */
