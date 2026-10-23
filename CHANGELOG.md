@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.16.0 (2026-10-23) — testing helpers, cloneSubgraph references
+
+> **Minor release.** It adds strict item 26 (`cloneSubgraph` reference relationships between owned nodes), a new exported `CloneSubgraphOptions` type, and new default-mode warnings. Without `strict`, every compiled query is byte-identical to 2.15.0.
+
+### Fixed
+
+- **`CypherAssert.assertParams` reports a missing param key when the actual params hold a bigint** (or can't be written as JSON). It used to throw a raw `TypeError` from `JSON.stringify`. Messages for other params are unchanged.
+- **`Neo4jRecordFactory.dateTime` reads every date form Neo4j accepts:** week dates (`2024-W01-1`), quarter dates (`2024-Q1-01`), ordinal dates with a time, and one-digit fields (`2024-1-1T1:2:3`). These used to throw. With `{ strict: true }` it now also throws where Neo4j does:
+  - a day the month lacks (`2024-02-30`);
+  - a space before the time, or surrounding whitespace;
+  - more than nine fractional digits;
+  - a mixed basic/extended time;
+  - an unsigned 5-digit year, or non-ISO text.
+
+  Strict also reads `2024-001` and `202402` as UTC midnight, and `+20240101` as the year 20240101. The default keeps its previous value for such strings and warns once (`GRAFEO_RECORD_FACTORY_INVALID_DATE`, `_UNPARSEABLE`, `_LEGACY_PARSE`, `_READ_DIFFERS`).
+
+### Strict mode
+
+- **Item 26: `$cloneSubgraph` / `cloneSubgraph` no longer re-attaches a reference relationship whose target is itself an owned node.** APOC already clones that relationship clone to clone. The 2.x default also linked the clone back into the source subgraph, so the clone had the relationship twice. The default keeps that behaviour and warns once (`subgraph-internal-reference`).
+  - To detect it, default mode runs one read-only query per reference relationship. It runs once per OGM instance (or per logger, for the standalone function), and only when the logger has `warn`.
+  - The standalone function takes `{ strict: true }` as a fifth argument (new `CloneSubgraphOptions` type).
+
+### Docs
+
+- The strict-mode section no longer claims the default compiles "exactly as in v2.5.4". The default is byte-identical to the previous release for inputs that already worked, apart from the fixes in the CHANGELOG.
+
 ## 2.15.0 (2026-10-23) — Duration range filters
 
 > **Minor release.** Duration `_GT` / `_LT` filters now work in both modes. `_GTE` / `_LTE` warn once by default and, under `strict: true` (strict item 25), compare durations as `@neo4j/graphql` does. Without `strict`, every other input that worked in 2.14.0 compiles to byte-identical Cypher. Generated types are unchanged.
