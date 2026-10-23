@@ -1,6 +1,44 @@
 import { OGMError } from '../errors';
 import type { PropertyDefinition } from '../schema/types';
+import type { StrictMode } from './strict-mode';
 import { assertSafeIdentifier, escapeIdentifier } from './validation';
+
+/**
+ * v2.14.0 — whether a `@cypher` field is projected as a LIST (strict item
+ * 24). `@neo4j/graphql` 5.x resolves a list-typed scalar `@cypher` field
+ * by `UNWIND`ing the statement's column and `collect`ing every element
+ * (`CustomCypherSelection` + `CypherScalarOperation` / `CypherFilter`), so
+ * a statement returning one row per element yields the whole list, one
+ * returning a single list row yields that list, and no rows yield `[]`.
+ * 2.x reduces every column with `head(collect(...))`, which keeps only
+ * the first row's value. Strict mode follows upstream; default mode keeps
+ * the 2.x Cypher byte for byte and warns once per OGM, type and field.
+ * Non-list fields always take the scalar path.
+ */
+export function cypherFieldAsList(
+  strictMode: StrictMode,
+  typeName: string,
+  fieldName: string,
+  propDef: PropertyDefinition,
+): boolean {
+  if (!propDef.isArray) return false;
+  if (strictMode.strict) return true;
+  strictMode.warn(
+    'cypher-list-field',
+    `${typeName}.${fieldName}`,
+    `@cypher list field "${typeName}.${fieldName}" resolves to its statement's first row only: ` +
+      `a statement that returns one row per element yields a single element (from an unspecified row), not the list.`,
+    `collect every row into the list, as @neo4j/graphql does`,
+  );
+  return false;
+}
+
+/** v2.14.0 — the private name each list element is `UNWIND`ed into. */
+function listElementVar(base: string): string {
+  const name = `${base}__cf_el`;
+  assertSafeIdentifier(name, '@cypher list element');
+  return name;
+}
 
 /**
  * Builds the `CALL { ... }` subquery that projects a `@cypher` field (used
@@ -36,6 +74,12 @@ export function buildCypherFieldCall(
    * query with "Variable already declared".
    */
   outputAlias?: string,
+  /**
+   * v2.14.0 — strict item 24 (see `cypherFieldAsList`): `UNWIND` the
+   * column and `collect` every element, as `@neo4j/graphql` does. Still a
+   * grouping-free aggregation, so still exactly one row per outer row.
+   */
+  asList: boolean = false,
 ): string {
   const col = escapeIdentifier(columnName);
   if (outputAlias !== undefined)
@@ -61,7 +105,17 @@ export function buildCypherFieldCall(
     `    WITH ${inner} AS this`,
     `    ${statement}`,
     `  }`,
-    `  RETURN head(collect(${col})) AS ${out}`,
+    ...(asList
+      ? (() => {
+          const el = escapeIdentifier(
+            listElementVar(outputAlias ?? columnName),
+          );
+          return [
+            `  UNWIND ${col} AS ${el}`,
+            `  RETURN collect(${el}) AS ${out}`,
+          ];
+        })()
+      : [`  RETURN head(collect(${col})) AS ${out}`]),
     `}`,
   ].join('\n');
 }
@@ -95,10 +149,25 @@ export function buildInlineCypherFieldExpr(
    * v2.4.8 — optional so ad-hoc callers keep compiling.
    */
   fieldLabel?: string,
+  /**
+   * v2.14.0 — strict item 24: the `columnName` of a list field, projected
+   * as the whole list. The statement runs in an inner `CALL` so its column
+   * can be `UNWIND`ed; `COLLECT { }` keeps `null` elements, which upstream's
+   * `collect()` drops, so they are filtered out. Verified on 5.26 inside a
+   * pattern comprehension (the statement still must not aggregate).
+   */
+  listColumn?: string,
 ): string {
   if (fieldLabel !== undefined)
     assertInlineableCypherField(fieldLabel, statement);
-  return `head(COLLECT { WITH ${nodeVar} AS this\n  ${statement}\n})`;
+  if (listColumn === undefined)
+    return `head(COLLECT { WITH ${nodeVar} AS this\n  ${statement}\n})`;
+  const col = escapeIdentifier(listColumn);
+  const el = escapeIdentifier(listElementVar(listColumn));
+  return (
+    `COLLECT { WITH ${nodeVar} AS this\n  CALL {\n    WITH this\n    ${statement}\n  }\n` +
+    `  UNWIND ${col} AS ${el}\n  WITH ${el} WHERE ${el} IS NOT NULL\n  RETURN ${el}\n}`
+  );
 }
 
 /**
@@ -197,6 +266,8 @@ export class CypherFieldScope {
      * and aliased by the labels joined with `_`.
      */
     guardLabels?: string | readonly string[],
+    /** v2.14.0 — strict item 24: project the whole list (see `cypherFieldAsList`). */
+    asList: boolean = false,
   ): string {
     assertSafeIdentifier(fieldName, '@cypher field');
     const guards =
@@ -234,6 +305,7 @@ export class CypherFieldScope {
         columnName,
         guards,
         alias,
+        asList,
       ),
     );
     this.callLines.push(`WITH ${this.nodeVar}${carryStr}, ${alias}`);

@@ -20,7 +20,10 @@ import {
   resolveTargetDef,
 } from '../schema/utils';
 import { typeLabelExpr } from '../schema/labels';
-import { CypherFieldScope } from '../utils/cypher-field-projection';
+import {
+  CypherFieldScope,
+  cypherFieldAsList,
+} from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
   assertSafeKey,
@@ -1275,7 +1278,22 @@ export class WhereCompiler {
   ): string {
     const propDef = propsHolder?.properties.get(fieldName);
     if (scope && propDef?.isCypher && propDef.cypherStatement)
-      return scope.register(fieldName, propDef);
+      // v2.14.0 — strict item 24: a list field is filtered as the whole
+      // list (as `@neo4j/graphql`'s `CypherFilter` does), so `tags: [...]`
+      // and `tags_IN` compare what the selection returns.
+      return scope.register(
+        fieldName,
+        propDef,
+        undefined,
+        cypherFieldAsList(
+          this.strictMode,
+          (propsHolder as { typeName?: string; name?: string }).typeName ??
+            (propsHolder as { name?: string }).name ??
+            '?',
+          fieldName,
+          propDef,
+        ),
+      );
 
     return `${nodeVar}.${escapeIdentifier(fieldName)}`;
   }

@@ -30,6 +30,7 @@ import {
 import {
   CypherFieldScope,
   buildInlineCypherFieldExpr,
+  cypherFieldAsList,
 } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
@@ -1558,8 +1559,20 @@ export class SelectionCompiler {
         // outer comprehension.
         const propDef = nodeDef.properties.get(node.fieldName);
         if (propDef?.isCypher && propDef.cypherStatement) {
+          // v2.14.0 — strict item 24: a list field projects the whole list.
+          const asList = cypherFieldAsList(
+            this.strictMode,
+            nodeDef.typeName,
+            node.fieldName,
+            propDef,
+          );
           if (cypherScope) {
-            const alias = cypherScope.register(node.fieldName, propDef);
+            const alias = cypherScope.register(
+              node.fieldName,
+              propDef,
+              undefined,
+              asList,
+            );
             parts.push(`${escapeIdentifier(key)}: ${alias}`);
           } else
             parts.push(
@@ -1567,6 +1580,9 @@ export class SelectionCompiler {
                 propDef.cypherStatement,
                 nodeVar,
                 `${nodeDef.typeName}.${node.fieldName}`,
+                asList
+                  ? (propDef.cypherColumnName ?? node.fieldName)
+                  : undefined,
               )}`,
             );
 
@@ -1781,15 +1797,23 @@ export class SelectionCompiler {
 
     const branches = members.map(({ def, prop, field }) => {
       let expr: string;
-      if (prop.isCypher && prop.cypherStatement)
+      if (prop.isCypher && prop.cypherStatement) {
+        // v2.14.0 — strict item 24 (see the main projection path).
+        const asList = cypherFieldAsList(
+          this.strictMode,
+          def.typeName,
+          field,
+          prop,
+        );
         expr = cypherScope
-          ? cypherScope.register(field, prop, nodeLabelList(def))
+          ? cypherScope.register(field, prop, nodeLabelList(def), asList)
           : buildInlineCypherFieldExpr(
               prop.cypherStatement,
               nodeVar,
               `${def.typeName}.${field}`,
+              asList ? (prop.cypherColumnName ?? field) : undefined,
             );
-      else expr = `${nodeVar}.${escapeIdentifier(field)}`;
+      } else expr = `${nodeVar}.${escapeIdentifier(field)}`;
       const guard =
         prop.isCypher && prop.cypherStatement
           ? this.memberReadGuard(

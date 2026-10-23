@@ -1,0 +1,50 @@
+{
+  "root typed select": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __sel_n_tags\n}\nWITH n, __sel_n_tags\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) WITH t ORDER BY t.pos RETURN collect(t.name) AS list\n  }\n  RETURN head(collect(`list`)) AS __sel_n_tagList\n}\nWITH n, __sel_n_tags, __sel_n_tagList\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS firstTag ORDER BY t.pos\n  }\n  RETURN head(collect(`firstTag`)) AS __sel_n_firstTag\n}\nWITH n, __sel_n_tags, __sel_n_tagList, __sel_n_firstTag\nRETURN n { .`id`, `tags`: __sel_n_tags, `tagList`: __sel_n_tagList, `firstTag`: __sel_n_firstTag }"
+  ],
+  "root selectionSet (aliased)": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __sel_n_tags\n}\nWITH n, __sel_n_tags\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) WITH t ORDER BY t.pos RETURN collect(t.name) AS list\n  }\n  RETURN head(collect(`list`)) AS __sel_n_tagList\n}\nWITH n, __sel_n_tags, __sel_n_tagList\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS firstTag ORDER BY t.pos\n  }\n  RETURN head(collect(`firstTag`)) AS __sel_n_firstTag\n}\nWITH n, __sel_n_tags, __sel_n_tagList, __sel_n_firstTag\nRETURN n { .`id`, `tags`: __sel_n_tags, `labels`: __sel_n_tags, `tagList`: __sel_n_tagList, `firstTag`: __sel_n_firstTag }"
+  ],
+  "findUnique selectionSet": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __sel_n_tags\n}\nWITH n, __sel_n_tags\nWITH *\nLIMIT $options_limit\nRETURN n { .`id`, `tags`: __sel_n_tags }"
+  ],
+  "nested relationship typed select": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, posts: [(n)-[:`ITLF_WROTE`]->(n0:`ItLfPost`) | n0 { .`id`, `words`: head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) }] }"
+  ],
+  "nested relationship selectionSet": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, posts: [(n)-[:`ITLF_WROTE`]->(n0:`ItLfPost`) | n0 { .`id`, `words`: head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) }] }"
+  ],
+  "connection edges node": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, postsConnection: { edges: [(n)-[e0:`ITLF_WROTE`]->(n0:`ItLfPost`) | { node: n0 { .`id`, `words`: head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) }, properties: e0 { .`note` } }], totalCount: size([(n)-[e0:`ITLF_WROTE`]->(n0:`ItLfPost`) | 1]) } }"
+  ],
+  "typed select connection": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, postsConnection: { edges: [(n)-[e0:`ITLF_WROTE`]->(n0:`ItLfPost`) | { node: n0 { .`id`, `words`: head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) } }] } }"
+  ],
+  "InterfaceModel fragments": [
+    "MATCH (n:(`ItLfPost`|`ItLfNote`))\nWHERE n.`runId` = $param0\nWITH n, CASE WHEN n:`ItLfPost` THEN 'ItLfPost' WHEN n:`ItLfNote` THEN 'ItLfNote' END AS __typename\nCALL {\n  WITH n\n  WITH n WHERE n:`ItLfPost`\n  CALL {\n    WITH n\n    WITH n AS this\n    UNWIND split(this.title, ' ') AS w RETURN w AS words\n  }\n  RETURN head(collect(`words`)) AS __sel_n_ItLfPost_words\n}\nWITH n, __typename, __sel_n_ItLfPost_words\nCALL {\n  WITH n\n  WITH n WHERE n:`ItLfNote`\n  CALL {\n    WITH n\n    WITH n AS this\n    UNWIND split(this.body, ' ') AS w RETURN w AS words\n  }\n  RETURN head(collect(`words`)) AS __sel_n_ItLfNote_words\n}\nWITH n, __typename, __sel_n_ItLfPost_words, __sel_n_ItLfNote_words\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['ItLfPost', 'ItLfNote']]), .`id`, `words`: CASE WHEN n:`ItLfPost` THEN __sel_n_ItLfPost_words WHEN n:`ItLfNote` THEN __sel_n_ItLfNote_words END , __typename: __typename }"
+  ],
+  "nested interface fragments": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, things: [(n)-[:`ITLF_HAS`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['ItLfPost', 'ItLfNote']]), .`id`, `words`: CASE WHEN n0:`ItLfPost` THEN head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) END }] }"
+  ],
+  "nested union fragments": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, items: [(n)-[:`ITLF_HAS`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['ItLfPost', 'ItLfNote']]), .`id`, `words`: head(COLLECT { WITH n0 AS this\n  UNWIND split(this.title, ' ') AS w RETURN w AS words\n}) }] }"
+  ],
+  "where list equality": [
+    "MATCH (n:`ItLfUser`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __where_n_tags\n}\nWITH n, __where_n_tags\nWHERE n.`runId` = $param0 AND __where_n_tags = $param1\nRETURN n { .`id` }"
+  ],
+  "where list _IN": [
+    "MATCH (n:`ItLfUser`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __where_n_tags\n}\nWITH n, __where_n_tags\nWHERE n.`runId` = $param0 AND __where_n_tags IN $param1\nRETURN n { .`id` }"
+  ],
+  "where through a relationship": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`runId` = $param0 AND EXISTS { MATCH (n)-[:`ITLF_WROTE`]->(r1:`ItLfPost`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    UNWIND split(this.title, ' ') AS w RETURN w AS words\n  }\n  RETURN head(collect(`words`)) AS __where_r1_words\n} WITH r1, __where_r1_words WHERE __where_r1_words = $param2 }\nRETURN n { .`id` }"
+  ],
+  "count with list where": [
+    "MATCH (n:`ItLfUser`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __where_n_tags\n}\nWITH n, __where_n_tags\nWHERE n.`runId` = $param0 AND __where_n_tags <> $param1\nRETURN count(n) AS count"
+  ],
+  "sort by a scalar @cypher field, list selected": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`runId` = $param0\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __sel_n_tags\n}\nWITH n, __sel_n_tags\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS firstTag ORDER BY t.pos\n  }\n  RETURN head(collect(`firstTag`)) AS __sel_n_firstTag\n}\nWITH n, __sel_n_tags, __sel_n_firstTag\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS firstTag ORDER BY t.pos\n  }\n  RETURN head(collect(`firstTag`)) AS __sort_firstTag\n}\nWITH n, __sel_n_tags, __sel_n_firstTag, __sort_firstTag\nWITH *\nORDER BY __sort_firstTag ASC\nRETURN n { .`id`, `tags`: __sel_n_tags, `firstTag`: __sel_n_firstTag }"
+  ],
+  "update response": [
+    "MATCH (n:`ItLfUser`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nWITH n\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (this)-[:ITLF_TAG]->(t:ItLfTag) RETURN t.name AS tags ORDER BY t.pos\n  }\n  RETURN head(collect(`tags`)) AS __sel_n_tags\n}\nWITH n, __sel_n_tags\nRETURN n { .`id`, `tags`: __sel_n_tags }"
+  ]
+}

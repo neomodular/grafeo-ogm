@@ -1414,6 +1414,23 @@ MATCH (n:Human:Person) REMOVE n:Person;
 
 Staying on the default instead and reading nodes written by `@neo4j/graphql`? Add the type name to them (only if every `:Human` node is a `Person`): `MATCH (n:Human) WHERE NOT n:Person SET n:Person`.
 
+#### 24. List `@cypher` fields (since 2.14.0)
+
+```graphql
+type User @node {
+  id: ID! @unique
+  tags: [String] @cypher(statement: "MATCH (this)-[:TAGGED]->(t) RETURN t.name AS tags ORDER BY t.pos", columnName: "tags")
+}
+```
+
+```typescript
+await users.find({ where: { id }, select: { tags: true } });
+// default: [{ tags: 'x' }]               — one element, from whichever row comes first (and warns)
+// strict:  [{ tags: ['x', 'y', 'x'] }]   — every row, in order, duplicates kept, as in @neo4j/graphql
+```
+
+Since 2.4.0 every `@cypher` field is reduced to its statement's first row (`head(collect(tags))`), which suits a scalar but cuts a list field that returns one row per element down to a single element. `@neo4j/graphql` 5.x `UNWIND`s the column and `collect`s every element, and strict mode does the same: a statement that returns one row per element gives the whole list, one that returns a single row holding a list gives that list (as in default mode), several list rows are concatenated, `null` elements are dropped, and no rows give `[]` (default mode: `null`). Each node is still returned exactly once. This applies everywhere the field is read: `select` / `selectionSet` at the root, through relationships and connections, in interface / union fragments and `InterfaceModel`, in mutation responses, and in `where` (`tags: ['x', 'y']`, `tags_IN`, `posts_SOME: { tags: … }`), which then compares the list the field returns. Scalar `@cypher` fields are unchanged in both modes, and list fields are not sortable (the generated sort input leaves them out). Through a relationship the field is projected inline, so an aggregating statement still throws there in both modes (see [Limitations](#limitations)). The warning code is `cypher-list-field`, logged once per OGM instance, type and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
@@ -1602,6 +1619,7 @@ type Book @node {
 
 - If the statement returns **no rows**, the field is `null` and the node is still returned. A filter like `where: { status: null }` matches it, and it sorts as `null`.
 - If the statement returns **several rows**, the field takes the **first** row's `columnName` value, and the node is returned once. Add an `ORDER BY` to the statement when it matters which row is first.
+- **List fields** (`tags: [String] @cypher(…)`) follow the same rule by default, so a statement that returns one row per element yields only the first element. This is deprecated: with `strict: true` (the default in 3.0) a list field collects every row into the list, as `@neo4j/graphql` does. See [Strict mode, item 24](#24-list-cypher-fields-since-2140).
 
 Before v2.4.0, top-level fields dropped nodes whose statement returned no rows and duplicated nodes whose statement returned several. See the [2.4.0 changelog](CHANGELOG.md).
 
