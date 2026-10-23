@@ -331,10 +331,12 @@ npx grafeo db push --force-drop --yes # also drop orphaned grafeo-managed items
 - **create** — declared in SDL, missing in the database
 - **in sync** — already present with the declared definition. A unique constraint is also in sync when an equivalent constraint (same label and property) exists under another name, such as one a DBA created; push prints `X covered by <name>` instead of creating it. Before v2.4.8 push printed "created X" on every run while Neo4j created nothing.
 - **changed** — an index present under the SDL name whose definition differs (fulltext fields or label, vector dimensions or similarity, index type). The output says the schema is **NOT in sync**; the index is **kept as-is** unless you pass `--force-drop`, which drops and recreates it under the same consent rules as orphans. Before v2.4.8 indexes were matched by name only, so a changed definition was reported as in sync and never applied.
-- **orphans** — grafeo-named (`{Label}_{prop}_unique`) constraints no longer in your SDL; **reported and kept** unless you pass `--force-drop`
+- **orphans** — grafeo-named (`{Label}_{prop}_unique`) single-property unique constraints no longer in your SDL, on a label grafeo puts constraints on (a type name, or a type's first `@node(labels)` label); **reported and kept** unless you pass `--force-drop`. A constraint on a type's other `@node(labels)` labels is never grafeo's, so it is unmanaged; before v2.12.5 `--force-drop` dropped it.
 - **unmanaged** — constraints/indexes that don't follow grafeo's naming convention (hand-created DBA indexes, etc.); **never touched, never counted as drift**
 
 If a plain RANGE index already covers a property you mark `@unique`, Neo4j refuses the constraint until that index is dropped. Push reports this as a warning (the index isn't grafeo's, so it is never dropped) and applies the rest of the plan; before v2.4.8 the push crashed with exit 1. "created X" is printed only when Neo4j reports that something was added.
+
+If two SDL declarations produce the same name (a generated `A_b_c_unique` from both `A_b.c` and `A.b_c`, or one `@fulltext` name on two types), Neo4j keeps only the first. Since v2.12.5 push reports the later one as a warning (schema **NOT in sync**) instead of "in sync", and `--force-drop` no longer recreates a shared fulltext name back and forth between the types.
 
 It is **additive by default** and **idempotent** — a second run with no schema change is a no-op. Dropping orphans and recreating changed indexes is destructive and gated: `--force-drop` lists the exact drops (shown in `--dry-run` too) and requires interactive confirmation, or `--yes` in non-interactive sessions like CI.
 

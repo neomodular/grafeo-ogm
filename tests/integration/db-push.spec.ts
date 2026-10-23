@@ -253,4 +253,71 @@ describeLive('grafeo db push — live Neo4j', () => {
     // grafeo never drops the index it does not manage.
     expect(await indexRow('la_dba_code_range')).toBeDefined();
   });
+
+  // v2.12.5 — S5t-6: `--force-drop` dropped a DBA constraint on a type's
+  // SECONDARY `@node` label as if grafeo had created it. grafeo puts
+  // constraints only on the type name (2.x) or labels[0] (strict item 23).
+  it.each([
+    ['default', [] as string[]],
+    ['--strict', ['--strict']],
+  ])(
+    '%s: --force-drop keeps a DBA constraint on a secondary @node label',
+    async (_mode, flags) => {
+      await run(
+        'CREATE CONSTRAINT LaPushEnt_email_unique IF NOT EXISTS FOR (n:LaPushEnt) REQUIRE n.email IS UNIQUE',
+      );
+      const schema = `type LaPushSec @node(labels: ["LaPushSecMain", "LaPushEnt"]) {
+        id: ID! @unique
+        email: String
+      }`;
+      const forced = await push(schema, [...flags, '--force-drop', '--yes']);
+      expect(forced.code).toBe(0);
+      expect(forced.out).not.toContain('dropped LaPushEnt_email_unique');
+      expect(forced.out).toMatch(/Unmanaged.*LaPushEnt_email_unique/);
+      expect(await constraintNames()).toContain('LaPushEnt_email_unique');
+      await dropOurs();
+    },
+  );
+
+  it('--strict --force-drop still drops the 2.x constraint grafeo put on the type name', async () => {
+    const schema = `type LaPushTn @node(labels: ["LaPushTnMain", "LaPushTnEnt"]) {
+      id: ID! @unique
+    }`;
+    expect((await push(schema)).out).toContain('✓ created LaPushTn_id_unique');
+    const forced = await push(schema, ['--strict', '--force-drop', '--yes']);
+    expect(forced.out).toContain('✓ created LaPushTnMain_id_unique');
+    expect(forced.out).toContain('✓ dropped LaPushTn_id_unique');
+    expect(await constraintNames()).not.toContain('LaPushTn_id_unique');
+  });
+
+  // v2.12.5 — S5t-7: `LaPushCol_b.c` and `LaPushCol.b_c` both name their
+  // constraint `LaPushCol_b_c_unique`; only the first existed while push
+  // said "No changes".
+  it('reports a generated constraint name declared twice instead of "in sync"', async () => {
+    const schema = `type LaPushCol_b @node { c: String @unique }
+      type LaPushCol @node { b_c: String @unique }`;
+    for (let i = 0; i < 2; i++) {
+      const res = await push(schema);
+      expect(res.code).toBe(0);
+      expect(res.out).not.toContain('No changes');
+      expect(res.err).toMatch(/LaPushCol_b_c_unique.*LaPushCol_b\.c/);
+    }
+  });
+
+  // v2.12.5 — S5t-8: one @fulltext name on two types flipped between them
+  // on every --force-drop run.
+  it('a fulltext name declared on two types is never recreated back and forth', async () => {
+    const schema = `type LaPushDupA @node @fulltext(indexes: [{ name: "LaPushDupSearch", fields: ["title"] }]) { title: String }
+      type LaPushDupB @node @fulltext(indexes: [{ name: "LaPushDupSearch", fields: ["name"] }]) { name: String }`;
+    expect((await push(schema)).code).toBe(0);
+    for (let i = 0; i < 2; i++) {
+      const forced = await push(schema, ['--force-drop', '--yes']);
+      expect(forced.code).toBe(0);
+      expect(forced.out).not.toContain('recreated LaPushDupSearch');
+      expect(forced.err).toMatch(/LaPushDupSearch/);
+      expect((await indexRow('LaPushDupSearch'))?.properties).toEqual([
+        'title',
+      ]);
+    }
+  });
 });

@@ -3,6 +3,7 @@ import {
   type LiveSchema,
   type LiveSchemaItem,
 } from '../../src/cli/push-planner';
+import { applyUpstreamNodeLabels } from '../../src/schema/labels';
 import { parseSchema } from '../../src/schema/parser';
 
 const EMPTY: LiveSchema = { constraints: [], indexes: [] };
@@ -504,5 +505,128 @@ describe('planSchemaSync (cli-db-push spec)', () => {
       EMPTY,
     );
     expect(plan.create).toEqual([]);
+  });
+
+  // v2.12.5 — S5t-6: any label a type carried counted as grafeo's, so
+  // `--force-drop` dropped a DBA constraint on a SECONDARY `@node` label
+  // (`Entity_email_unique` on `:Entity`). grafeo only ever puts a constraint
+  // on the type name (2.x) or labels[0] (strict item 23).
+  describe('constraints on a secondary @node label', () => {
+    const PERSON = `
+type Person @node(labels: ["Human", "Entity"]) {
+  id: ID! @id @unique
+  email: String
+}`;
+    const strictSchema = () => {
+      const s = parseSchema(PERSON);
+      applyUpstreamNodeLabels(s);
+      return s;
+    };
+
+    it('default mode: a DBA constraint on the secondary label is unmanaged', () => {
+      const plan = planSchemaSync(parseSchema(PERSON), {
+        constraints: [uniq('Person', 'id'), uniq('Entity', 'email')],
+        indexes: [],
+      });
+      expect(plan.orphans).toEqual([]);
+      expect(plan.unmanaged).toEqual(['Entity_email_unique']);
+    });
+
+    it('strict mode: a DBA constraint on the secondary label is unmanaged', () => {
+      const plan = planSchemaSync(strictSchema(), {
+        constraints: [uniq('Human', 'id'), uniq('Entity', 'email')],
+        indexes: [],
+      });
+      expect(plan.orphans).toEqual([]);
+      expect(plan.unmanaged).toEqual(['Entity_email_unique']);
+    });
+
+    it('keeps the labels grafeo writes constraints on attributable in both modes', () => {
+      // Strict: the 2.x constraint on the type name stays grafeo's (v2.11.0).
+      const strict = planSchemaSync(strictSchema(), {
+        constraints: [uniq('Human', 'id'), uniq('Person', 'id')],
+        indexes: [],
+      });
+      expect(strict.orphans.map((o) => o.name)).toEqual(['Person_id_unique']);
+      // Default: a strict run's constraint on labels[0] stays grafeo's.
+      const dflt = planSchemaSync(parseSchema(PERSON), {
+        constraints: [uniq('Person', 'id'), uniq('Human', 'id')],
+        indexes: [],
+      });
+      expect(dflt.orphans.map((o) => o.name)).toEqual(['Human_id_unique']);
+    });
+
+    it("a secondary label that is another type's own label stays attributable", () => {
+      const plan = planSchemaSync(
+        parseSchema(`${PERSON}\ntype Entity @node { id: ID! @unique }`),
+        {
+          constraints: [
+            uniq('Person', 'id'),
+            uniq('Entity', 'id'),
+            uniq('Entity', 'email'),
+          ],
+          indexes: [],
+        },
+      );
+      expect(plan.orphans.map((o) => o.name)).toEqual(['Entity_email_unique']);
+    });
+  });
+
+  // v2.12.5 — S5t-7 / S5t-8: two SDL statements under one name. Neo4j keeps
+  // the first (`IF NOT EXISTS` is a no-op on the second), so push reported
+  // "in sync" for a constraint that never existed, and a fulltext name
+  // declared on two types flipped between them on every --force-drop.
+  describe('one name declared twice in the SDL', () => {
+    it('blocks the second unique constraint with the same generated name', () => {
+      const schema = parseSchema(`
+type A_b { c: String @unique }
+type A { b_c: String @unique }`);
+      const first =
+        'CREATE CONSTRAINT A_b_c_unique IF NOT EXISTS FOR (n:A_b) REQUIRE n.c IS UNIQUE';
+      const fresh = planSchemaSync(schema, EMPTY);
+      expect(fresh.create.map((s) => s.cypher)).toEqual([first]);
+      expect(fresh.blocked).toEqual([
+        expect.objectContaining({ reason: 'name-collision', by: 'A_b.c' }),
+      ]);
+      expect(fresh.blocked[0].statement.cypher).toContain('(n:A)');
+
+      const rerun = planSchemaSync(schema, {
+        constraints: [uniq('A_b', 'c')],
+        indexes: [],
+      });
+      expect(rerun.inSync.map((s) => s.cypher)).toEqual([first]);
+      expect(rerun.blocked).toHaveLength(1);
+      expect(rerun.orphans).toEqual([]);
+    });
+
+    it('a fulltext name on two types is stable: never changed, the second blocked', () => {
+      const schema = parseSchema(`
+type Book @fulltext(indexes: [{ name: "Search", fields: ["title"] }]) { title: String }
+type Film @fulltext(indexes: [{ name: "Search", fields: ["name"] }]) { name: String }`);
+      const fresh = planSchemaSync(schema, EMPTY);
+      expect(fresh.create.map((s) => s.cypher)).toEqual([
+        'CREATE FULLTEXT INDEX Search IF NOT EXISTS FOR (n:Book) ON EACH [n.title]',
+      ]);
+      expect(fresh.blocked).toEqual([
+        expect.objectContaining({ reason: 'name-collision', by: 'Book' }),
+      ]);
+      const ft = (label: string, prop: string): LiveSchemaItem => ({
+        name: 'Search',
+        type: 'FULLTEXT',
+        entityType: 'NODE',
+        labelsOrTypes: [label],
+        properties: [prop],
+      });
+      // Whichever of the two declarations the live index holds is in sync.
+      for (const live of [ft('Book', 'title'), ft('Film', 'name')]) {
+        const plan = planSchemaSync(schema, {
+          constraints: [],
+          indexes: [live],
+        });
+        expect(plan.changed).toEqual([]);
+        expect(plan.inSync.map((s) => s.name)).toEqual(['Search']);
+        expect(plan.blocked).toHaveLength(1);
+      }
+    });
   });
 });

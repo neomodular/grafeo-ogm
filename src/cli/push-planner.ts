@@ -97,14 +97,19 @@ export interface PushPlanCovered {
  */
 export interface PushPlanBlocked {
   statement: SchemaStatement;
-  /** Live index name (from introspection — sanitize before printing). */
+  /**
+   * Live index name (from introspection — sanitize before printing), or,
+   * for `name-collision`, the SDL origin of the first declaration.
+   */
   by: string;
   /**
    * `range-index` — a plain RANGE index blocks a unique constraint.
    * `equivalent-index` — a fulltext/vector index with the same definition
    * exists under another name, so Neo4j will not create the SDL-named one.
+   * `name-collision` (v2.12.5) — an earlier SDL statement has the same
+   * name; Neo4j keeps that one and never creates this.
    */
-  reason: 'range-index' | 'equivalent-index';
+  reason: 'range-index' | 'equivalent-index' | 'name-collision';
 }
 
 export interface PushPlan {
@@ -120,7 +125,8 @@ export interface PushPlan {
   blocked: PushPlanBlocked[];
   /**
    * Present in the database, attributable to grafeo by naming convention
-   * (`{Label}_{prop}_unique` over a label the schema still defines), but
+   * (`{Label}_{prop}_unique` over a label grafeo puts constraints on: a
+   * type name or a type's first `@node(labels)` label), but
    * no longer declared. Reported always; dropped only under --force-drop.
    */
   orphans: PushPlanOrphan[];
@@ -144,7 +150,8 @@ export interface PushPlan {
  * Orphan scoping (design decision): SDL index names are user-chosen, so a
  * live index absent from the SDL cannot be attributed to grafeo — those
  * are always `unmanaged`. Only `{Label}_{prop}_unique` constraints over a
- * label the current schema defines are safe to call orphans. LOOKUP
+ * label grafeo creates constraints on (a type name, or a type's first
+ * `@node(labels)` label — never a secondary one) are safe to call orphans. LOOKUP
  * indexes are Neo4j system infrastructure and are excluded from the
  * report entirely.
  */
@@ -180,13 +187,29 @@ export function planSchemaSync(
         i.type === definition.type &&
         sameSchema(definition, i, definition.unorderedProperties),
     );
+  const seen = new Set<string>();
   for (const statement of desired) {
     const isConstraint = statement.kind === 'unique-constraint';
+    // v2.12.5 — a name the SDL declares more than once (a generated
+    // `A_b_c_unique` from both `A_b.c` and `A.b_c`, or one @fulltext name
+    // on two types). Neo4j keeps only the first: the later `CREATE … IF
+    // NOT EXISTS` is a silent no-op. Report the later ones as blocked
+    // instead of "in sync" / "created".
+    const sameName = definitions.get(statement.name) ?? [];
+    if (seen.has(statement.name)) {
+      blocked.push({
+        statement,
+        by: sameName[0]?.owner ?? statement.name,
+        reason: 'name-collision',
+      });
+      continue;
+    }
+    seen.add(statement.name);
     const present = isConstraint
       ? liveConstraintNames.has(statement.name)
       : liveIndexNames.has(statement.name);
     if (!present) {
-      const definition = definitions.get(statement.name);
+      const definition = sameName[0];
       if (isConstraint && definition) {
         // v2.4.8 — match by definition, not only by name.
         const equivalent = live.constraints.find(
@@ -223,13 +246,18 @@ export function planSchemaSync(
     // Constraints stay name-matched: grafeo names them `{Label}_{prop}_unique`
     // itself, and a same-named constraint with another definition is not
     // provably grafeo's, so it must never become a drop (v2.4.7 rule).
-    const definition = isConstraint
-      ? undefined
-      : definitions.get(statement.name);
+    const definition = isConstraint ? undefined : sameName[0];
     const liveItem = liveIndexesByName.get(statement.name);
     const differences =
       liveItem && definition ? diffDefinition(definition, liveItem) : [];
-    if (differences.length === 0) {
+    // v2.12.5 — under a name declared more than once, a live index holding
+    // ANY of the declarations is in sync: recreating it as the first one
+    // made --force-drop flip it between types on every run.
+    const holdsADeclaration =
+      liveItem &&
+      sameName.length > 1 &&
+      sameName.some((d) => diffDefinition(d, liveItem).length === 0);
+    if (differences.length === 0 || holdsADeclaration) {
       inSync.push(statement);
       continue;
     }
@@ -256,15 +284,17 @@ export function planSchemaSync(
     desired.filter((s) => s.kind !== 'unique-constraint').map((s) => s.name),
   );
 
+  // Labels grafeo itself puts unique constraints on: the type name (2.x)
+  // and labels[0] (strict item 23, v2.11.0) — in either mode, so a mode
+  // switch leaves the other mode's constraints grafeo's (orphans, dropped
+  // only with --force-drop). v2.12.5 — the other `@node(labels)` labels
+  // no longer count: grafeo never creates a constraint on a secondary
+  // label, so `Entity_email_unique` on `:Entity` is a DBA's, not an orphan.
   const knownLabels = new Set<string>();
   for (const [, nodeDef] of schema.nodes) {
     knownLabels.add(nodeDef.label);
-    for (const label of nodeDef.labels) knownLabels.add(label);
-    // v2.11.0 — strict item 23 moves a custom `@node(labels)` type's
-    // constraints to labels[0]; the one 2.x put on the type name stays
-    // grafeo's (an orphan, dropped only with --force-drop). A no-op in
-    // default mode, where `label` is the type name.
     knownLabels.add(nodeDef.typeName);
+    if (nodeDef.labels.length > 0) knownLabels.add(nodeDef.labels[0]);
   }
 
   const orphans: PushPlanOrphan[] = [];
@@ -350,6 +380,8 @@ interface DesiredDefinition {
   /** Fulltext `ON EACH [...]` order carries no meaning. */
   unorderedProperties?: boolean;
   vector?: { dimensions: number; similarity: string };
+  /** SDL origin, for messages: `Type.prop` (constraint) or the type name. */
+  owner: string;
 }
 
 /**
@@ -361,30 +393,52 @@ interface DesiredDefinition {
 function describeDesired(
   schema: SchemaMetadata,
   vectorConfig: Record<string, VectorIndexCreationConfig> | undefined,
-): Map<string, DesiredDefinition> {
-  const defs = new Map<string, DesiredDefinition>();
-  for (const [, nodeDef] of schema.nodes) {
+): Map<string, DesiredDefinition[]> {
+  // v2.12.5 — every declaration under a name, in the order of `desired`
+  // (constraints, node fulltext, relationship fulltext, vector), so the
+  // k-th statement with a name pairs with the k-th definition here.
+  const defs = new Map<string, DesiredDefinition[]>();
+  const add = (name: string, def: DesiredDefinition) => {
+    const list = defs.get(name);
+    if (list) list.push(def);
+    else defs.set(name, [def]);
+  };
+  for (const [, nodeDef] of schema.nodes)
     for (const [, prop] of nodeDef.properties)
       if (prop.isUnique)
-        defs.set(uniqueConstraintName(nodeDef.label, prop.name), {
+        add(uniqueConstraintName(nodeDef.label, prop.name), {
           type: 'UNIQUENESS',
           entityType: 'NODE',
           labelsOrTypes: [nodeDef.label],
           properties: [prop.name],
+          owner: `${nodeDef.typeName}.${prop.name}`,
         });
+  for (const [, nodeDef] of schema.nodes)
     for (const ftIndex of nodeDef.fulltextIndexes)
       if (ftIndex.fields.length > 0)
-        defs.set(ftIndex.name, {
+        add(ftIndex.name, {
           type: 'FULLTEXT',
           entityType: 'NODE',
           labelsOrTypes: [nodeDef.label],
           properties: [...ftIndex.fields],
           unorderedProperties: true,
+          owner: nodeDef.typeName,
         });
+  for (const [, relPropsDef] of schema.relationshipProperties)
+    for (const ftIndex of relPropsDef.fulltextIndexes ?? [])
+      add(ftIndex.name, {
+        type: 'FULLTEXT',
+        entityType: 'RELATIONSHIP',
+        labelsOrTypes: [resolveRelTypeForProps(schema, relPropsDef.typeName)],
+        properties: [...ftIndex.fields],
+        unorderedProperties: true,
+        owner: relPropsDef.typeName,
+      });
+  for (const [, nodeDef] of schema.nodes)
     for (const vIndex of nodeDef.vectorIndexes ?? []) {
       const cfg = vectorConfig?.[vIndex.indexName];
       if (!cfg) continue;
-      defs.set(vIndex.indexName, {
+      add(vIndex.indexName, {
         type: 'VECTOR',
         entityType: 'NODE',
         labelsOrTypes: [nodeDef.label],
@@ -393,18 +447,9 @@ function describeDesired(
           dimensions: cfg.dimensions,
           similarity: cfg.similarity ?? 'cosine',
         },
+        owner: nodeDef.typeName,
       });
     }
-  }
-  for (const [, relPropsDef] of schema.relationshipProperties)
-    for (const ftIndex of relPropsDef.fulltextIndexes ?? [])
-      defs.set(ftIndex.name, {
-        type: 'FULLTEXT',
-        entityType: 'RELATIONSHIP',
-        labelsOrTypes: [resolveRelTypeForProps(schema, relPropsDef.typeName)],
-        properties: [...ftIndex.fields],
-        unorderedProperties: true,
-      });
   return defs;
 }
 

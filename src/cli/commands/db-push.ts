@@ -287,13 +287,19 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
     // drop) instead of letting the CREATE crash the whole push.
     // v2.5.1 — same for a fulltext/vector index whose definition another
     // index already holds under a different name.
+    // v2.12.5 — and for a name the SDL declares twice: Neo4j keeps the
+    // first, so the later declaration is never created.
     for (const block of plan.blocked)
       io.err(
         block.reason === 'range-index'
           ? `warning: ${block.statement.name} not created — index "${safeDisplay(block.by)}" ` +
               `already covers the same label and property, and Neo4j will not add a ` +
               `unique constraint until that index is dropped. Schema is NOT in sync.`
-          : `warning: ${block.statement.name} not created or updated — index "${safeDisplay(block.by)}" ` +
+          : block.reason === 'name-collision'
+            ? `warning: ${block.statement.name} is declared more than once in the SDL ` +
+              `(first by ${block.by}); only that one is created, so this is skipped: ` +
+              `${block.statement.cypher}. Rename one of them. Schema is NOT in sync.`
+            : `warning: ${block.statement.name} not created or updated — index "${safeDisplay(block.by)}" ` +
               `already has the SDL definition, and Neo4j will not create an equivalent ` +
               `index under another name. Drop it, or name the SDL index after it. Schema is NOT in sync.`,
       );
