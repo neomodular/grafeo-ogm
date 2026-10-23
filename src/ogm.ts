@@ -337,8 +337,17 @@ export class OGM<
             ...config,
             driver: withDefaultDatabase(config.driver, config.database),
           };
-    // Parse schema synchronously so model() works before init()
-    this.schema = parseSchema(this.config.typeDefs);
+    // v2.6.0 — one strict-mode switch + warn-once log per OGM instance,
+    // shared by every compiler (bypassed clones share it too).
+    const strictMode = new StrictMode(config.strict === true, config.logger);
+
+    // Parse schema synchronously so model() works before init().
+    // vNEXT — strict items 37–40 (malformed SDL, root operation types):
+    // strict throws / skips here, default mode warns once through `logger`.
+    this.schema = parseSchema(this.config.typeDefs, {
+      strict: strictMode.strict,
+      onWarning: (w) => strictMode.warn(w.code, w.detail, w.problem, w.fix),
+    });
     // v2.11.0 — strict item 23: `@node(labels)` replaces the type name.
     if (config.strict === true) applyUpstreamNodeLabels(this.schema);
 
@@ -348,9 +357,6 @@ export class OGM<
     if (config.features?.strictWhere === true) whereOptions.strictWhere = true;
     if (config.logger) whereOptions.logger = config.logger;
 
-    // v2.6.0 — one strict-mode switch + warn-once log per OGM instance,
-    // shared by every compiler (bypassed clones share it too).
-    const strictMode = new StrictMode(config.strict === true, config.logger);
     whereOptions.strictMode = strictMode;
 
     const where = new WhereCompiler(this.schema, whereOptions);

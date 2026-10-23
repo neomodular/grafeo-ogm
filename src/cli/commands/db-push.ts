@@ -248,11 +248,19 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
   const { config } = await loadConfigFile(io.cwd);
   const schemaPath = resolveSchemaPath(flags, config, io.cwd);
   const typeDefs = fs.readFileSync(schemaPath, 'utf-8');
-  const schema = parseSchema(typeDefs);
+  const strict = flags.strict === true || config.strict === true;
+  // vNEXT — strict items 37–40: malformed SDL throws under strict (as the
+  // app's strict OGM would at construction); default mode prints a warning.
+  const schema = parseSchema(typeDefs, {
+    strict,
+    onWarning: (w) =>
+      io.err(
+        `warning: ${w.problem} Set strict: true in grafeo.config or pass --strict to ${w.fix}.`,
+      ),
+  });
   // v2.11.0 — strict item 23: plan constraints / indexes on the labels
   // the app's OGM uses (`strict` in grafeo.config or `--strict`).
-  if (flags.strict === true || config.strict === true)
-    applyUpstreamNodeLabels(schema);
+  if (strict) applyUpstreamNodeLabels(schema);
   else
     for (const node of schema.nodes.values())
       if (hasCustomNodeLabels(node))

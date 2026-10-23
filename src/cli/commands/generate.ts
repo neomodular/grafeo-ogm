@@ -30,7 +30,14 @@ async function runGenerator(
   schemaPath: string,
 ): Promise<Awaited<ReturnType<typeof generateTypes>>> {
   try {
-    return await generateTypes({ typeDefs, outFile, config: config.generate });
+    // vNEXT — `strict` in grafeo.config applies the strict schema rules
+    // (items 37–40) so the types match a strict OGM.
+    return await generateTypes({
+      typeDefs,
+      outFile,
+      config: config.generate,
+      strict: config.strict === true,
+    });
   } catch (error) {
     if (error instanceof SchemaParseError)
       throw new SchemaParseError(`${schemaPath}: ${error.message}`);

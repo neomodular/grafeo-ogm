@@ -1459,6 +1459,32 @@ await ogm.$cloneSubgraph('book-a', config);
 
 APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship, once per OGM instance (or logger), and only when the logger has a `warn` method.
 
+#### 38. `@relationship` without `type` or `direction` (since vNEXT)
+
+```graphql
+type Product @node { colour: Colour @relationship(type: "OF_COLOUR") }
+```
+
+```typescript
+// default: the field is left out of the model — it cannot be selected, filtered or written (and warns once)
+// strict:  OGMError: @relationship on Product.colour is missing the required direction argument.
+```
+
+Both arguments are required in `@neo4j/graphql`. The warning code is `relationship-missing-argument`.
+
+#### 39. Unknown type names (since vNEXT)
+
+```graphql
+type Product @node { name: Strng  maker: Persn @relationship(type: "MADE_BY", direction: OUT) }
+```
+
+```typescript
+// default: the fields are kept as declared — `name` as a property of type Strng, `maker` as a relationship to a missing type (and warns once per field)
+// strict:  OGMError: Unknown type "Strng" on Product.name: the schema does not define it and it is not a built-in scalar.
+```
+
+A field type must be a built-in scalar (`String`, `Int`, `Float`, `Boolean`, `ID`, `BigInt`, the temporal types, `Duration`, `Point`, `CartesianPoint`) or a type, interface, union, enum, input or `scalar` the SDL defines. `@neo4j/graphql` rejects the schema otherwise. The warning code is `unknown-type`.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

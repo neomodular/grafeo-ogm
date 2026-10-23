@@ -43,6 +43,14 @@ export interface GenerateTypesOptions {
   outFile: string;
   /** Optional configuration */
   config?: GenerateTypesConfig;
+  /**
+   * vNEXT — apply the strict-mode schema rules (items 37–40), as an OGM
+   * built with `strict: true` does: malformed SDL throws and root
+   * operation types (`Query`, `Mutation`) get no model types. Set it to
+   * the same value as your OGM's `strict`. Default `false`: 2.x output,
+   * with a `STRICT_MODE` warning per affected shape.
+   */
+  strict?: boolean;
 }
 
 export interface GenerateTypesConfig {
@@ -76,7 +84,8 @@ export interface GeneratorWarning {
     | 'UNKNOWN_DIRECTIVE'
     | 'UNSUPPORTED_TYPE'
     | 'CIRCULAR_REFERENCE'
-    | 'FORMATTING_SKIPPED';
+    | 'FORMATTING_SKIPPED'
+    | 'STRICT_MODE';
   message: string;
   location?: { typeName: string; fieldName?: string };
 }
@@ -234,7 +243,14 @@ export async function generateTypes(
   // 1. Parse schema --------------------------------------------------------
   let metadata: SchemaMetadata;
   try {
-    metadata = parseSchema(options.typeDefs);
+    metadata = parseSchema(options.typeDefs, {
+      strict: options.strict === true,
+      onWarning: (w) =>
+        warnings.push({
+          code: 'STRICT_MODE',
+          message: `${w.problem} Enable \`strict: true\` (default in 3.0) to ${w.fix}.`,
+        }),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new SchemaParseError(`Failed to parse schema: ${message}`);

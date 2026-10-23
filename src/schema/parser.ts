@@ -35,6 +35,58 @@ import { OGMError } from '../errors';
 import { mergeTypeExtensions } from './type-extensions';
 
 /**
+ * vNEXT — a schema shape whose 2.x handling `strict: true` changes
+ * (strict items 37–40). Default mode keeps the 2.x behaviour and reports
+ * it through {@link ParseSchemaOptions.onWarning}; strict mode throws or
+ * takes the corrected path instead.
+ */
+export interface SchemaWarning {
+  /** Stable kebab-case item code, e.g. `relationship-missing-direction`. */
+  code: string;
+  /** What makes this occurrence distinct (type, field). */
+  detail: string;
+  /** What is wrong and what 2.x does about it. */
+  problem: string;
+  /** What `strict: true` does instead. */
+  fix: string;
+}
+
+export interface ParseSchemaOptions {
+  /** vNEXT — apply the strict-mode schema rules (items 37–40). */
+  strict?: boolean;
+  /** Called once per occurrence in default mode; never in strict mode. */
+  onWarning?: (warning: SchemaWarning) => void;
+}
+
+/** Strict / warn switch threaded through one parse. */
+interface ParseContext {
+  strict: boolean;
+  /** Throw `strictMessage` in strict mode, else report the warning. */
+  flag(warning: SchemaWarning, strictMessage: string): void;
+}
+
+function makeContext(options: ParseSchemaOptions): ParseContext {
+  const strict = options.strict === true;
+  return {
+    strict,
+    flag(warning, strictMessage) {
+      if (strict) throw new OGMError(strictMessage);
+      options.onWarning?.(warning);
+    },
+  };
+}
+
+/** Definition kinds that declare a named type. */
+const TYPE_DEFINITION_KINDS = new Set<string>([
+  Kind.SCALAR_TYPE_DEFINITION,
+  Kind.OBJECT_TYPE_DEFINITION,
+  Kind.INTERFACE_TYPE_DEFINITION,
+  Kind.UNION_TYPE_DEFINITION,
+  Kind.ENUM_TYPE_DEFINITION,
+  Kind.INPUT_OBJECT_TYPE_DEFINITION,
+]);
+
+/**
  * Generate a plural name from a type name following OGM conventions.
  * Uses the `pluralize` npm package for correct English pluralization
  * (handles uncountable words like "equipment", irregular plurals, etc.)
@@ -171,10 +223,30 @@ function parseField(
   field: FieldDefinitionNode,
   enumNames: Set<string>,
   ownerName: string,
+  ctx: ParseContext,
+  knownTypes: Set<string>,
 ): { property?: PropertyDefinition; relationship?: RelationshipDefinition } {
   const { typeName, isArray, isRequired, isListItemRequired } = unwrapType(
     field.type,
   );
+  const where = `${ownerName}.${field.name.value}`;
+
+  // vNEXT — strict item 39: a type name the SDL never defines (a typo such
+  // as `Strng` or `Persn`) is a GraphQL validation error upstream. 2.x
+  // keeps the field (as a property, or a relationship to a missing type).
+  if (!SCALAR_TYPES.has(typeName) && !knownTypes.has(typeName))
+    ctx.flag(
+      {
+        code: 'unknown-type',
+        detail: where,
+        problem:
+          `${where} has type "${typeName}", which the schema does not define; ` +
+          `2.x keeps the field as declared.`,
+        fix: 'reject the schema, as @neo4j/graphql does',
+      },
+      `Unknown type "${typeName}" on ${where}: the schema does not define it ` +
+        `and it is not a built-in scalar.`,
+    );
 
   const relationshipDirective = getDirective(field, 'relationship');
   const declareRelDirective = getDirective(field, 'declareRelationship');
@@ -191,9 +263,25 @@ function parseField(
       'properties',
     );
 
-    if (!relType || !direction)
-      // Malformed directive, skip
+    if (!relType || !direction) {
+      // vNEXT — strict item 38: `type` and `direction` are required
+      // arguments upstream. 2.x drops the field silently.
+      const missing = [!relType && 'type', !direction && 'direction']
+        .filter(Boolean)
+        .join(' and ');
+      ctx.flag(
+        {
+          code: 'relationship-missing-argument',
+          detail: where,
+          problem:
+            `@relationship on ${where} has no ${missing}; 2.x leaves the field out ` +
+            `of the model (it cannot be read, filtered or written).`,
+          fix: 'reject the schema, as @neo4j/graphql does',
+        },
+        `@relationship on ${where} is missing the required ${missing} argument.`,
+      );
       return {};
+    }
 
     // Through v2.4.7 any value was cast to 'IN' | 'OUT' unchecked. Reads
     // treat anything but 'IN' as OUT while writes treat anything but 'OUT'
@@ -420,9 +508,19 @@ function parseNodeLabels(node: ObjectTypeDefinitionNode): string[] | undefined {
 /**
  * Parse a GraphQL schema string into SchemaMetadata.
  */
-export function parseSchema(schemaSource: string): SchemaMetadata {
+export function parseSchema(
+  schemaSource: string,
+  options: ParseSchemaOptions = {},
+): SchemaMetadata {
   // v2.13.0 — `extend type X { … }` and friends are folded into X first.
   const document: DocumentNode = mergeTypeExtensions(parse(schemaSource));
+  const ctx = makeContext(options);
+
+  // Every type name the SDL defines (built-in scalars are checked apart).
+  const knownTypes = new Set<string>();
+  for (const def of document.definitions)
+    if (TYPE_DEFINITION_KINDS.has(def.kind))
+      knownTypes.add((def as { name: { value: string } }).name.value);
 
   const customScalars = new Set<string>();
   const metadata: SchemaMetadata = {
@@ -477,7 +575,13 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
       const relationships = new Map<string, RelationshipDefinition>();
 
       for (const field of intDef.fields ?? []) {
-        const parsed = parseField(field, enumNames, intDef.name.value);
+        const parsed = parseField(
+          field,
+          enumNames,
+          intDef.name.value,
+          ctx,
+          knownTypes,
+        );
         if (parsed.property)
           properties.set(parsed.property.name, parsed.property);
 
@@ -506,7 +610,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     if (relPropsTypeNames.has(typeName)) {
       const properties = new Map<string, PropertyDefinition>();
       for (const field of objDef.fields ?? []) {
-        const parsed = parseField(field, enumNames, typeName);
+        const parsed = parseField(field, enumNames, typeName, ctx, knownTypes);
         if (parsed.property)
           properties.set(parsed.property.name, parsed.property);
       }
@@ -524,7 +628,7 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
     const relationships = new Map<string, RelationshipDefinition>();
 
     for (const field of objDef.fields ?? []) {
-      const parsed = parseField(field, enumNames, typeName);
+      const parsed = parseField(field, enumNames, typeName, ctx, knownTypes);
       if (parsed.property)
         properties.set(parsed.property.name, parsed.property);
 
