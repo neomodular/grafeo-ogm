@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.12.5 (2026-10-23) — `db push` leaves constraints on secondary `@node` labels alone
+
+> **Patch release.** `db push --force-drop` no longer drops a constraint it did not create, and a name the schema declares twice is reported instead of shown as in sync. Everything else `db push` plans is unchanged. Runtime and generated types are unchanged.
+
+### Fixed
+
+- **`db push --force-drop` dropped DBA constraints on a secondary `@node` label.** Orphan attribution treated every label a type carries as grafeo's, so for `type Person @node(labels: ["Person", "Entity"])` a hand-made `Entity_email_unique` on `:Entity` was listed as an orphan and dropped under `--force-drop`. grafeo only creates unique constraints on the type name (2.x) or on the first `@node(labels)` label (strict item 23), so only those labels are attributable now, in either mode. A constraint on any other label is reported as unmanaged and never dropped. A mode switch still leaves the other mode's constraints as orphans, as in 2.11.0.
+- **A name declared twice was reported as in sync.** Two unique fields whose generated names collide (`A_b.c` and `A.b_c` both give `A_b_c_unique`), or one `@fulltext` name on two types, made Neo4j keep only the first declaration while `db push` printed "in sync". The later declarations are now listed as blocked (`name-collision`, naming the first declaration) with a warning that the schema is not in sync; the database ends up as before. A live index that holds any of the declarations under such a name counts as in sync, so `--force-drop` no longer recreates a shared fulltext name back and forth between the types on every run.
+
 ## 2.12.4 (2026-10-23) — caches no longer shared between OGMs with different schemas
 
 > **Patch release.** Two process-wide caches are now kept per schema. A single OGM compiles byte-identical Cypher and keeps its cache hit rate. Generated types are unchanged.
