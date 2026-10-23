@@ -84,9 +84,9 @@ export class StrictMode {
 }
 
 /**
- * vNEXT — strict item 30: top-level keys of a `Model` /
+ * v2.19.0 — strict item 34: top-level keys of a `Model` /
  * `InterfaceModel` method's params object that the method does not read.
- * Pre-vNEXT (and still by default) they are ignored, so an upstream-style
+ * Pre-v2.19.0 (and still by default) they are ignored, so an upstream-style
  * `update({ where, delete })` or a `deleteMany({ where, delete })` cascade
  * silently does nothing, and `delete({ where, labels })` deletes without
  * the label filter. Default: one warning per OGM, owner and key set (not

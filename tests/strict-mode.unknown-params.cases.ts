@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 30: top-level params a Model / InterfaceModel method
+ * v2.19.0 — strict item 34: top-level params a Model / InterfaceModel method
  * does not read, shared by the unit spec and its byte-identical guard.
  */
 import { OGM } from '../src/ogm';

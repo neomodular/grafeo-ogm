@@ -1,7 +1,7 @@
 /**
- * vNEXT — strict item 29: a `@cypher` field given as write input. The
+ * v2.19.0 — strict item 33: a `@cypher` field given as write input. The
  * field is computed when read and the generated write inputs leave it
- * out, but pre-vNEXT every write path stored it as a property that no
+ * out, but pre-v2.19.0 every write path stored it as a property that no
  * read returns.
  *
  * - Default mode: byte-identical to v2.15.0 (hard-coded below, captured
@@ -79,7 +79,7 @@ describe('strict mode off: Cypher is byte-identical to v2.15.0', () => {
   });
 });
 
-describe('item 29 — @cypher fields in write inputs', () => {
+describe('item 33 — @cypher fields in write inputs', () => {
   it.each(bad)('default warns once: %s', async (_name, s) => {
     const { ogm, warnings } = setup();
     await s.run(ogm);

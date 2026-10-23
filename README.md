@@ -1528,7 +1528,7 @@ await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { t
 
 A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field.
 
-#### 28. An unknown relationship in a connect / disconnect map (since vNEXT)
+#### 32. An unknown relationship in a connect / disconnect map (since 2.19.0)
 
 ```typescript
 await users.update({ where: { id }, connect: { post: [{ where: { node: { id: 'p1' } } }] } });
@@ -1536,9 +1536,9 @@ await users.update({ where: { id }, connect: { post: [{ where: { node: { id: 'p1
 // strict:  OGMError: Unknown relationship "post" in the connect input of User: it is not a relationship field of the type. …
 ```
 
-The keys of a `connect` / `disconnect` map name relationship fields of the type. Before vNEXT a key that is not one (a typo, a scalar field) was skipped, so the write ran without it and reported success, while a cascade `delete` threw for the same mistake. This applies to the root `connect` / `disconnect` of `update()` and to the nested `connect` / `disconnect` of a connect or disconnect item at any depth (in `update()`, in a nested update item, in `create()`). Keys set to `undefined` are ignored. The warning codes are `connect-unknown-relationship` and `disconnect-unknown-relationship`, logged once per OGM instance, type and key.
+The keys of a `connect` / `disconnect` map name relationship fields of the type. Before v2.19.0 a key that is not one (a typo, a scalar field) was skipped, so the write ran without it and reported success, while a cascade `delete` threw for the same mistake. This applies to the root `connect` / `disconnect` of `update()` and to the nested `connect` / `disconnect` of a connect or disconnect item at any depth (in `update()`, in a nested update item, in `create()`). Keys set to `undefined` are ignored. The warning codes are `connect-unknown-relationship` and `disconnect-unknown-relationship`, logged once per OGM instance, type and key.
 
-#### 29. `@cypher` fields in write inputs (since vNEXT)
+#### 33. `@cypher` fields in write inputs (since 2.19.0)
 
 ```graphql
 type User @node {
@@ -1554,9 +1554,9 @@ await users.update({ where: { id }, update: { double: 98 } });
 // strict:  OGMError: Field "double" in the update input of User is a @cypher field: it is computed when read and cannot be written. …
 ```
 
-A `@cypher` field is computed when it is read, and the generated create and update inputs leave it out. Before vNEXT every write path accepted it anyway and stored it as a property of the same name, which reads never return (they run the statement). This applies to `create()`, `update()`, `updateMany()`, `createMany()`, both branches of `upsert()`, and nested creates and updates at any depth. A key set to `undefined` is ignored. The warning code is `cypher-field-write`, logged once per OGM instance, type and field.
+A `@cypher` field is computed when it is read, and the generated create and update inputs leave it out. Before v2.19.0 every write path accepted it anyway and stored it as a property of the same name, which reads never return (they run the statement). This applies to `create()`, `update()`, `updateMany()`, `createMany()`, both branches of `upsert()`, and nested creates and updates at any depth. A key set to `undefined` is ignored. The warning code is `cypher-field-write`, logged once per OGM instance, type and field.
 
-#### 30. Unknown parameters of `Model` / `InterfaceModel` methods (since vNEXT)
+#### 34. Unknown parameters of `Model` / `InterfaceModel` methods (since 2.19.0)
 
 ```typescript
 await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1' } } }] } });
@@ -1564,7 +1564,7 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 // strict:  OGMError: Unknown parameter "delete" of User.update(). Allowed: "where", "update", … update() has no root "delete": …
 ```
 
-Each method reads a fixed set of top-level parameters (the ones in its signature), and before vNEXT any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
+Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
 #### Not behind the switch: `aggregate` on list fields
 

@@ -1,6 +1,6 @@
 /**
- * Live suite — unknown top-level params of Model methods (vNEXT, strict
- * item 30).
+ * Live suite — unknown top-level params of Model methods (v2.19.0, strict
+ * item 34).
  *
  * Opt-in: runs only when NEO4J_URI is set. Every node carries this run's
  * `runId` and is removed in `afterAll`.

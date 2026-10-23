@@ -69,7 +69,7 @@ import {
 } from './utils/validation';
 
 /**
- * vNEXT — strict item 30: the top-level params each method reads
+ * v2.19.0 — strict item 34: the top-level params each method reads
  * (`checkParamKeys`). findFirst / findUnique and the *OrThrow variants
  * pass their params on to find(), which honours every find key.
  */

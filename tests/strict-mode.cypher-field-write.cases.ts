@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 29: `@cypher` fields given as write input, shared by
+ * v2.19.0 — strict item 33: `@cypher` fields given as write input, shared by
  * the unit spec and its byte-identical guard.
  */
 import { OGM } from '../src/ogm';

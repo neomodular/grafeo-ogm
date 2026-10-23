@@ -487,9 +487,9 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 28. A key of a connect / disconnect map (root,
+   * v2.19.0 — strict item 32. A key of a connect / disconnect map (root,
    * or the nested `connect` / `disconnect` of an item) that is not a
-   * relationship of `nodeDef`. Pre-vNEXT (and still by default) it is
+   * relationship of `nodeDef`. Pre-v2.19.0 (and still by default) it is
    * skipped, so the write runs without it and reports success; a cascade
    * `delete` throws for the same mistake. Default: one warning per OGM,
    * type, kind and key; strict: `OGMError`. A key set to `undefined` is
@@ -4175,8 +4175,8 @@ export function unwrapAbstractCreateNode(
  * (`nmae`) was stored as a stray property and the intended field was left
  * untouched — at every depth (nested creates and updates included).
  *
- * vNEXT — strict item 29: a `@cypher` field is computed when read, never
- * stored, and the generated write inputs leave it out. Pre-vNEXT (and
+ * v2.19.0 — strict item 33: a `@cypher` field is computed when read, never
+ * stored, and the generated write inputs leave it out. Pre-v2.19.0 (and
  * still by default) it was written as a stored property that no read
  * ever returns. Default: one warning per OGM, type and field; strict:
  * `OGMError`.

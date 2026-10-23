@@ -1,6 +1,6 @@
 /**
- * Live suite — unknown relationship in a connect / disconnect map (vNEXT,
- * strict item 28).
+ * Live suite — unknown relationship in a connect / disconnect map (v2.19.0,
+ * strict item 32).
  *
  * Opt-in: runs only when NEO4J_URI is set. Every node carries this run's
  * `runId` and is removed in `afterAll`.

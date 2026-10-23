@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 28: connect / disconnect maps keyed by a name that is
+ * v2.19.0 — strict item 32: connect / disconnect maps keyed by a name that is
  * not a relationship of the type, shared by the unit spec and its
  * byte-identical guard.
  */

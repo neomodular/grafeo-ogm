@@ -1,7 +1,7 @@
 /**
- * vNEXT — strict item 28: a connect / disconnect map keyed by a name that
+ * v2.19.0 — strict item 32: a connect / disconnect map keyed by a name that
  * is not a relationship of the type (root, or the nested `connect` /
- * `disconnect` of an item at any depth). Pre-vNEXT the key was skipped,
+ * `disconnect` of an item at any depth). Pre-v2.19.0 the key was skipped,
  * so the write ran without it and reported success, while a cascade
  * `delete` threw for the same mistake.
  *
@@ -86,7 +86,7 @@ describe('strict mode off: Cypher is byte-identical to v2.15.0', () => {
   });
 });
 
-describe('item 28 — unknown relationship in a connect / disconnect map', () => {
+describe('item 32 — unknown relationship in a connect / disconnect map', () => {
   it.each(bad)('default warns once: %s', async (_name, s) => {
     const { ogm, warnings } = setup();
     await s.run(ogm);

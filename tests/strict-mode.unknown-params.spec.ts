@@ -1,6 +1,6 @@
 /**
- * vNEXT — strict item 30: top-level params a Model / InterfaceModel method
- * does not read. Pre-vNEXT they were ignored: an upstream-style
+ * v2.19.0 — strict item 34: top-level params a Model / InterfaceModel method
+ * does not read. Pre-v2.19.0 they were ignored: an upstream-style
  * `update({ where, delete })` deleted nothing, `deleteMany({ where,
  * delete })` did not cascade, and `delete({ where, labels })` deleted
  * without the label filter.
@@ -99,7 +99,7 @@ describe('strict mode off: Cypher is byte-identical to v2.15.0', () => {
   });
 });
 
-describe('item 30 — unknown params of Model / InterfaceModel methods', () => {
+describe('item 34 — unknown params of Model / InterfaceModel methods', () => {
   it.each(bad)('default warns once: %s', async (_name, s) => {
     const { ogm, warnings } = setup();
     await s.run(ogm);

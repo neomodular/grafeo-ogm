@@ -1,5 +1,5 @@
 /**
- * Live suite — `@cypher` fields given as write input (vNEXT, strict item
+ * Live suite — `@cypher` fields given as write input (v2.19.0, strict item
  * 29).
  *
  * Opt-in: runs only when NEO4J_URI is set. Every node carries this run's
