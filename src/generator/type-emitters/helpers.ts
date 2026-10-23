@@ -32,16 +32,32 @@ export function isBuiltInScalar(typeName: string): boolean {
 }
 
 /**
+ * Returns `true` when `typeName` is a built-in scalar or a custom scalar
+ * the schema declares (`scalar JSON`) — i.e. it has a `Scalars` entry.
+ */
+export function isScalar(
+  typeName: string,
+  customScalars: ReadonlySet<string> | undefined,
+): boolean {
+  return SCALAR_TYPES.has(typeName) || (customScalars?.has(typeName) ?? false);
+}
+
+/**
  * Maps a GraphQL scalar type name to its TypeScript output representation.
  *
- * Built-in scalars → `Scalars["<TYPE>"]["output"]`
+ * Built-in and custom scalars → `Scalars["<TYPE>"]["output"]`
  * Enum / other types → used directly (the type name itself).
+ *
+ * v2.12.6 — custom scalars map through `Scalars`; pre-2.12.6 they fell
+ * through to the bare type name, which the generated file never declares.
  */
 export function mapScalarType(
   typeName: string,
   enums: Map<string, string[]>,
+  customScalars?: ReadonlySet<string>,
 ): string {
-  if (SCALAR_TYPES.has(typeName)) return `Scalars["${typeName}"]["output"]`;
+  if (isScalar(typeName, customScalars))
+    return `Scalars["${typeName}"]["output"]`;
 
   // Enum types are referenced by name directly
   if (enums.has(typeName)) return typeName;

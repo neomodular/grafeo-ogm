@@ -5,7 +5,7 @@ import type {
   RelationshipPropertiesDefinition,
   SchemaMetadata,
 } from '../../schema/types';
-import { isBuiltInScalar, toPascalCase } from './helpers';
+import { isScalar, toPascalCase } from './helpers';
 
 /** Wrap a type in `Array<T>` when the relationship is an array, otherwise use `T`. */
 function wrapArray(typeStr: string, isArray: boolean): string {
@@ -164,8 +164,11 @@ export function emitInputTypes(schema: SchemaMetadata): string {
 function mapInputScalar(
   typeName: string,
   enums: Map<string, string[]>,
+  customScalars?: ReadonlySet<string>,
 ): string {
-  if (isBuiltInScalar(typeName)) return `Scalars["${typeName}"]["input"]`;
+  // v2.12.6 — custom scalars map through `Scalars` (see `mapScalarType`).
+  if (isScalar(typeName, customScalars))
+    return `Scalars["${typeName}"]["input"]`;
   if (enums.has(typeName)) return typeName;
   return typeName;
 }
@@ -234,7 +237,7 @@ function emitCreateScalarField(
   schema: SchemaMetadata,
   defaultsApplied: boolean,
 ): string {
-  const tsType = mapInputScalar(prop.type, schema.enums);
+  const tsType = mapInputScalar(prop.type, schema.enums, schema.customScalars);
   const wrapped = prop.isArray ? `Array<${tsType}>` : tsType;
   const hasDefault = defaultsApplied && prop.defaultValue !== undefined;
 
@@ -253,7 +256,11 @@ function emitUpdateInput(node: NodeDefinition, schema: SchemaMetadata): string {
     if (prop.isCypher) continue;
     if (prop.isGenerated) continue;
 
-    const tsType = mapInputScalar(prop.type, schema.enums);
+    const tsType = mapInputScalar(
+      prop.type,
+      schema.enums,
+      schema.customScalars,
+    );
     const wrapped = prop.isArray ? `Array<${tsType}>` : tsType;
     members.push(`  ${prop.name}?: InputMaybe<${wrapped}>;`);
   }
@@ -789,7 +796,11 @@ function emitRelPropUpdateInput(
     if (prop.isCypher) continue;
     if (prop.isGenerated) continue;
 
-    const tsType = mapInputScalar(prop.type, schema.enums);
+    const tsType = mapInputScalar(
+      prop.type,
+      schema.enums,
+      schema.customScalars,
+    );
     const wrapped = prop.isArray ? `Array<${tsType}>` : tsType;
     members.push(`  ${prop.name}?: InputMaybe<${wrapped}>;`);
   }

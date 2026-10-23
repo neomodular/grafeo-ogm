@@ -96,7 +96,7 @@ function emitPropertyField(
   prop: PropertyDefinition,
   schema: SchemaMetadata,
 ): string {
-  const tsType = mapScalarType(prop.type, schema.enums);
+  const tsType = mapScalarType(prop.type, schema.enums, schema.customScalars);
   const wrapped = prop.isArray ? `Array<${tsType}>` : tsType;
   const final = wrapMaybe(wrapped, prop.required);
   const optional = prop.required ? '' : '?';

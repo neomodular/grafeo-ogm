@@ -69,7 +69,20 @@ export function emitImports(
 // Utility types (copied verbatim from the Neo4j OGM codegen output)
 // ---------------------------------------------------------------------------
 
-export function emitUtilityTypes(): string {
+/**
+ * v2.12.6 — `customScalars` (from `scalar X` declarations) get a `Scalars`
+ * entry typed `{ input: any; output: any }`, as graphql-codegen (and so
+ * @neo4j/graphql-ogm) types them. Pre-2.12.6 they had none and the file
+ * did not compile. Without custom scalars the output is unchanged.
+ */
+export function emitUtilityTypes(customScalars?: ReadonlySet<string>): string {
+  const custom = [...(customScalars ?? [])]
+    .map(
+      (name) =>
+        `  /** Custom scalar \`${name}\` declared in the schema; its values are written to and read from Neo4j as given */\n` +
+        `  ${name}: { input: any; output: any };\n`,
+    )
+    .join('');
   return `export type Maybe<T> = T | null;
 export type InputMaybe<T> = Maybe<T>;
 export type Exact<T extends { [key: string]: unknown }> = {
@@ -146,5 +159,5 @@ export type Scalars = {
     input: { x: number; y: number; z?: number; srid?: number };
     output: { x: number; y: number; z?: number; srid: number };
   };
-};`;
+${custom}};`;
 }

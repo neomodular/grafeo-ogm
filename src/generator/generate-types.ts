@@ -277,7 +277,7 @@ export async function generateTypes(
   const sections: string[] = [
     emitHeader(config, packageName),
     emitImports(packageName, refs),
-    emitUtilityTypes(),
+    emitUtilityTypes(metadata.customScalars),
     emitEnums(metadata),
     emitNodeTypes(metadata),
     emitInterfaceTypes(metadata),

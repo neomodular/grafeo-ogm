@@ -93,4 +93,10 @@ export interface SchemaMetadata {
   relationshipProperties: Map<string, RelationshipPropertiesDefinition>;
   enums: Map<string, string[]>; // enum name -> values
   unions: Map<string, string[]>; // union name -> member type names
+  /**
+   * Names of the custom scalars the schema declares (`scalar JSON`), in
+   * declaration order. Built-in scalar names (`scalar DateTime`) are not
+   * included. Read by the type generator only.
+   */
+  customScalars?: Set<string>;
 }

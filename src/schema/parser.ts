@@ -422,12 +422,14 @@ function parseNodeLabels(node: ObjectTypeDefinitionNode): string[] | undefined {
 export function parseSchema(schemaSource: string): SchemaMetadata {
   const document: DocumentNode = parse(schemaSource);
 
+  const customScalars = new Set<string>();
   const metadata: SchemaMetadata = {
     nodes: new Map(),
     interfaces: new Map(),
     relationshipProperties: new Map(),
     enums: new Map(),
     unions: new Map(),
+    customScalars,
   };
 
   // First pass: collect enum names and relationship properties type names
@@ -436,6 +438,15 @@ export function parseSchema(schemaSource: string): SchemaMetadata {
   const unionMembers = new Map<string, string[]>();
 
   for (const def of document.definitions) {
+    // v2.12.6 — record custom scalars for the type generator. Pre-2.12.6
+    // they were not tracked and the generated file referenced
+    // `Scalars["X"]` / a bare `X` that it never declared (TS2339 / TS2304).
+    if (
+      def.kind === Kind.SCALAR_TYPE_DEFINITION &&
+      !SCALAR_TYPES.has(def.name.value)
+    )
+      customScalars.add(def.name.value);
+
     if (def.kind === Kind.ENUM_TYPE_DEFINITION) {
       const enumDef = def as EnumTypeDefinitionNode;
       const values = enumDef.values?.map((v) => v.name.value) ?? [];

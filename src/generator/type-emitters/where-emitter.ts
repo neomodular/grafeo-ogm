@@ -4,7 +4,7 @@ import type {
   PropertyDefinition,
   RelationshipDefinition,
 } from '../../schema/types';
-import { isBuiltInScalar, toPascalCase } from './helpers';
+import { isScalar, toPascalCase } from './helpers';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -109,7 +109,7 @@ function emitWhereType(
     // Skip @cypher fields that return node/interface types (not scalars)
     if (
       prop.isCypher &&
-      !isBuiltInScalar(prop.type) &&
+      !isScalar(prop.type, schema.customScalars) &&
       !schema.enums.has(prop.type)
     )
       continue;
@@ -138,7 +138,8 @@ type ScalarCategory =
   | 'numeric-like'
   | 'boolean'
   | 'enum'
-  | 'spatial';
+  | 'spatial'
+  | 'custom';
 
 /** Temporal types that support comparison operators (LT, LTE, GT, GTE) */
 const TEMPORAL_TYPES = new Set([
@@ -156,6 +157,7 @@ const SPATIAL_TYPES = new Set(['Point', 'CartesianPoint']);
 function classifyType(
   typeName: string,
   enums: Map<string, string[]>,
+  customScalars: ReadonlySet<string> | undefined,
 ): ScalarCategory {
   if (typeName === 'Boolean') return 'boolean';
   if (typeName === 'ID' || typeName === 'String') return 'string-like';
@@ -165,15 +167,23 @@ function classifyType(
   if (SPATIAL_TYPES.has(typeName)) return 'spatial';
 
   if (enums.has(typeName)) return 'enum';
-  // Default to string-like for unknown scalars
+  // v2.12.6 — a declared custom scalar holds an opaque value (any JS value
+  // the caller writes), so only the operators that hold for every value
+  // are offered: equality, `_NOT`, `_IN`, `_NOT_IN`, as in @neo4j/graphql.
+  // String / comparison operators only mean something for strings / ordered
+  // values; a custom scalar that needs them should be declared as one.
+  if (customScalars?.has(typeName)) return 'custom';
+  // Default to string-like for unknown (undeclared) types
   return 'string-like';
 }
 
 function scalarInputType(
   typeName: string,
   enums: Map<string, string[]>,
+  customScalars: ReadonlySet<string> | undefined,
 ): string {
-  if (isBuiltInScalar(typeName)) return `Scalars["${typeName}"]["input"]`;
+  if (isScalar(typeName, customScalars))
+    return `Scalars["${typeName}"]["input"]`;
   if (enums.has(typeName)) return typeName;
   return `Scalars["${typeName}"]["input"]`;
 }
@@ -185,8 +195,8 @@ function emitScalarOperators(
 ): string[] {
   const lines: string[] = [];
   const { name, type, required } = prop;
-  const category = classifyType(type, schema.enums);
-  const inputType = scalarInputType(type, schema.enums);
+  const category = classifyType(type, schema.enums, schema.customScalars);
+  const inputType = scalarInputType(type, schema.enums, schema.customScalars);
   const wrap = (inner: string): string => `InputMaybe<${inner}>`;
 
   // List properties are compared as a whole by the where compiler
@@ -248,6 +258,10 @@ function emitScalarOperators(
 
     case 'spatial':
       // Spatial types only support exact, _NOT, _IN, _NOT_IN — already emitted above
+      break;
+
+    case 'custom':
+      // Custom scalars only support exact, _NOT, _IN, _NOT_IN — already emitted above
       break;
   }
 
