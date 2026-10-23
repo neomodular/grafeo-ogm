@@ -1077,7 +1077,7 @@ const ogm = new OGM({ typeDefs, driver, logger, strict: true });
 
 Some input shapes compile to something other than what they say. A typo'd connect key widens the connect to every node. A fulltext `score` inside `OR` is ignored. Fixing these in place would change results that existing code may rely on, so 2.x keeps the old behaviour by default and adds an opt-in switch:
 
-- **`strict` off (the 2.x default).** An input that already worked compiles byte for byte as in the previous release and returns the same result, apart from the fixes listed in the [CHANGELOG](./CHANGELOG.md): a query the server rejected, a result that was always empty or always dropped, or input that used to throw (some are summed up under "Not behind the switch" at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log. Two items warn differently: `Neo4jRecordFactory.dateTime` (item 21), a static helper, emits a `DeprecationWarning` through `process.emitWarning` once per process, and the standalone `cloneSubgraph` (item 41) warns once per `logger`.
+- **`strict` off (the 2.x default).** An input that already worked compiles byte for byte as in the previous release and returns the same result, apart from the fixes listed in the [CHANGELOG](./CHANGELOG.md): a query the server rejected, a result that was always empty or always dropped, or input that used to throw (some are summed up under "Not behind the switch" at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log. Two items warn differently: `Neo4jRecordFactory.dateTime` (item 21), a static helper, emits a `DeprecationWarning` through `process.emitWarning` once per process, and the standalone `cloneSubgraph` (item 26) warns once per `logger`.
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
@@ -1353,14 +1353,14 @@ Strict matches what the driver returns for `datetime(iso)` on Neo4j 5.26 in all 
 - an offset outside ±18:00, or with minutes over 59 (`+05:75` reads as `+06:15` by default);
 - a zone id that java.time lacks: `EST`, `MST`, `HST`, `ROC`, `GMT+0`, `GMT-0`, or an offset written as an id such as `[+05:00]`;
 - a date with an offset or zone but no time (`2024-07-01Z`);
-- (vNEXT) a day its month does not have (`2024-02-30`, `2023-02-29`);
-- (vNEXT) text Neo4j cannot parse: a space before the time, surrounding whitespace, more than nine fractional digits, a time that mixes `10:00` and `0000`, an unsigned year of five or more digits, or a non-ISO format such as RFC 2822 (strict no longer falls back to `Date` for these).
+- (v2.16.0) a day its month does not have (`2024-02-30`, `2023-02-29`);
+- (v2.16.0) text Neo4j cannot parse: a space before the time, surrounding whitespace, more than nine fractional digits, a time that mixes `10:00` and `0000`, an unsigned year of five or more digits, or a non-ISO format such as RFC 2822 (strict no longer falls back to `Date` for these).
 
-Strict also reads with Neo4j's grammar where the default still uses `Date` (vNEXT): `2024-001` and `202402` are UTC midnight on any machine, and a signed basic year (`+20240101`) is the year 20240101, as on the server.
+Strict also reads with Neo4j's grammar where the default still uses `Date` (v2.16.0): `2024-001` and `202402` are UTC midnight on any machine, and a signed basic year (`+20240101`) is the year 20240101, as on the server.
 
 Strict also spells a zone id as Neo4j does: ids match case-insensitively and keep their alias (`[asia/calcutta]` gives `Asia/Calcutta`).
 
-By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE`, `_DATE_ONLY_ZONE`, and since vNEXT `_INVALID_DATE`, `_UNPARSEABLE`, `_LEGACY_PARSE` or `_READ_DIFFERS`. Strings that threw before read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read (2.9.0); week dates (`2024-W01-1`), quarter dates (`2024-Q1-01`), ordinal dates with a time (`2024-001T10:00`) and one-digit fields (`2024-1-1T1:2:3`) are read (vNEXT).
+By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE`, `_DATE_ONLY_ZONE`, and since v2.16.0 `_INVALID_DATE`, `_UNPARSEABLE`, `_LEGACY_PARSE` or `_READ_DIFFERS`. Strings that threw before read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read (2.9.0); week dates (`2024-W01-1`), quarter dates (`2024-Q1-01`), ordinal dates with a time (`2024-001T10:00`) and one-digit fields (`2024-1-1T1:2:3`) are read (v2.16.0).
 
 #### 22. Unknown keys in nested write inputs (since 2.10.0)
 
@@ -1448,7 +1448,7 @@ await tasks.find({ where: { ttl_GTE: 'P27D' } });
 
 Neo4j does not order durations, so `n.ttl >= $p` is `null` unless the two durations are equal, and `_GTE` / `_LTE` behaved as equality. Strict mode compares them as `_GT` / `_LT` do since 2.15.0 in both modes (see [Duration fields](#where-operators)): both sides are added to the current instant, as in `@neo4j/graphql`. This applies wherever a where is accepted: root, relationship and connection filters (including `Duration` relationship properties in `edge`), nested selection `where`, `<rel>Aggregate(where)`, `aggregate()`, policy `when` partials and connect `where`. **Deprecated:** relying on `_GTE` / `_LTE` to match only equal durations; use the bare field (`{ ttl: 'P27D' }`) for that. The warning code is `duration-range-equality`, logged once per OGM instance, type and field.
 
-#### 41. `$cloneSubgraph` reference relationships between owned nodes (since vNEXT)
+#### 26. `$cloneSubgraph` reference relationships between owned nodes (since 2.16.0)
 
 ```typescript
 // Book A owns chapters c1 and c2, and c1 -[:NEXT]-> c2 is listed in referenceRelationships
@@ -1457,7 +1457,7 @@ await ogm.$cloneSubgraph('book-a', config);
 // strict:  c1' -[:NEXT]-> c2' only
 ```
 
-APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship until it has warned, and only when the logger has a `warn` method.
+APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship, once per OGM instance (or logger), and only when the logger has a `warn` method.
 
 #### Not behind the switch: `aggregate` on list fields
 
@@ -1574,7 +1574,7 @@ The traversal starts at the root and follows `ownedRelationships` into nodes car
 
 The root is matched as `(:rootLabel {id: rootId})`, with `rootLabel` defaulting to the first entry of `ownedLabels` (v2.5.0; before, a node of any label with that id was a root). Set `rootLabel` when the root is not of that label — a delete whose root isn't found deletes nothing and returns `deletedCount: 0`. `cloneSubgraph` maps every owned node by its `id`, so it refuses, before cloning anything, a subgraph in which an owned node has no `id` or shares one with another owned node.
 
-Every relationship between two owned nodes is cloned clone to clone. `referenceRelationships` are for links to nodes outside the subgraph (an author, a language): the clone is linked to the same target. A reference whose target is itself owned is also re-attached to the source's original in 2.x, so the clone gets it twice; pass `strict` to skip it (see [strict item 41](#41-clonesubgraph-reference-relationships-between-owned-nodes-since-vnext)).
+Every relationship between two owned nodes is cloned clone to clone. `referenceRelationships` are for links to nodes outside the subgraph (an author, a language): the clone is linked to the same target. A reference whose target is itself owned is also re-attached to the source's original in 2.x, so the clone gets it twice; pass `strict` to skip it (see [strict item 26](#26-clonesubgraph-reference-relationships-between-owned-nodes-since-2160)).
 
 ```typescript
 import { cloneSubgraph, deleteSubgraph } from 'grafeo-ogm';

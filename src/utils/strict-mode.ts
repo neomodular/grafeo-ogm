@@ -55,7 +55,7 @@ export class StrictMode {
   }
 
   /**
-   * vNEXT — whether {@link StrictMode.warn} with this code and detail would
+   * v2.16.0 — whether {@link StrictMode.warn} with this code and detail would
    * log now (default mode, a logger with `warn`, not yet warned). Lets a
    * caller skip work, such as a detection query, that only feeds a warning.
    */

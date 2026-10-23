@@ -356,9 +356,9 @@ describe('CypherAssert', () => {
       );
     });
 
-    // vNEXT — the missing-key message ran JSON.stringify over the actual
+    // v2.16.0 — the missing-key message ran JSON.stringify over the actual
     // params, which threw a raw TypeError for a bigint.
-    it('reports a missing key when the actual params hold a bigint (vNEXT)', () => {
+    it('reports a missing key when the actual params hold a bigint (v2.16.0)', () => {
       expect(() =>
         CypherAssert.assertParams(
           { big: 9007199254740993n, n: neo4j.int(5), s: 'x' },
@@ -369,7 +369,7 @@ describe('CypherAssert', () => {
       );
     });
 
-    it('keeps the missing-key message for params without a bigint, key order included (vNEXT)', () => {
+    it('keeps the missing-key message for params without a bigint, key order included (v2.16.0)', () => {
       expect(() =>
         CypherAssert.assertParams({ b: 1, a: [2, 'x'] }, { missing: 1 }),
       ).toThrow(
@@ -377,7 +377,7 @@ describe('CypherAssert', () => {
       );
     });
 
-    it('reports a missing key even when the actual params cannot be written as JSON (vNEXT)', () => {
+    it('reports a missing key even when the actual params cannot be written as JSON (v2.16.0)', () => {
       const cyclic: Record<string, unknown> = { a: 1 };
       cyclic.self = cyclic;
       expect(() => CypherAssert.assertParams(cyclic, { missing: 1 })).toThrow(
@@ -840,7 +840,7 @@ describe('Neo4jRecordFactory', () => {
       },
     );
 
-    // vNEXT — checked against `datetime(iso)` on Neo4j 5.26
+    // v2.16.0 — checked against `datetime(iso)` on Neo4j 5.26
     // (tests/integration/record-factory.spec.ts).
     it.each([
       ['2024-W01-1T10:00:00Z', '2024-01-01T10:00:00Z'],
@@ -853,7 +853,7 @@ describe('Neo4jRecordFactory', () => {
       ['2024001', '2024-01-01T00:00:00Z'],
       ['2024-1-1T1:2:3+01:00', '2024-01-01T01:02:03+01:00'],
     ] as const)(
-      'reads the Neo4j form %s in both modes, without a warning (vNEXT)',
+      'reads the Neo4j form %s in both modes, without a warning (v2.16.0)',
       (iso, str) => {
         for (const strict of [false, true])
           underEachZone(() => {
@@ -876,7 +876,7 @@ describe('Neo4jRecordFactory', () => {
       '2023-366',
       '2023-Q1-91',
       '2024-W01-1[Europe/Berlin]',
-    ])('rejects %s in both modes, as Neo4j does (vNEXT)', (iso) => {
+    ])('rejects %s in both modes, as Neo4j does (v2.16.0)', (iso) => {
       expect(() => Neo4jRecordFactory.dateTime(iso)).toThrow(TypeError);
       expect(() => Neo4jRecordFactory.dateTime(iso, { strict: true })).toThrow(
         TypeError,
@@ -922,7 +922,7 @@ describe('Neo4jRecordFactory', () => {
         '2024-01-01T10:00:00Z',
       ],
     ] as const)(
-      'strict rejects %s as Neo4j does; the default keeps the v2.15.0 value and warns (vNEXT)',
+      'strict rejects %s as Neo4j does; the default keeps the v2.15.0 value and warns (v2.16.0)',
       (iso, message, code, legacy) => {
         expect(() =>
           Neo4jRecordFactory.dateTime(iso, { strict: true }),
@@ -941,7 +941,7 @@ describe('Neo4jRecordFactory', () => {
       ['202402', '2024-02-01T00:00:00Z', 'LEGACY_PARSE'],
       ['+20240101', '+20240101-01-01T00:00:00Z', 'READ_DIFFERS'],
     ] as const)(
-      'strict reads %s as Neo4j does; the default keeps its v2.15.0 value and warns (vNEXT)',
+      'strict reads %s as Neo4j does; the default keeps its v2.15.0 value and warns (v2.16.0)',
       (iso, str, code) => {
         expect(String(Neo4jRecordFactory.dateTime(iso, { strict: true }))).toBe(
           str,

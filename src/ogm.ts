@@ -840,7 +840,7 @@ export class OGM<
     config: SubgraphConfig,
     transaction?: Transaction,
   ): Promise<SubgraphCloneResult> {
-    // vNEXT — strict item 41 follows this OGM's `strict`, and its warning
+    // v2.16.0 — strict item 26 follows this OGM's `strict`, and its warning
     // goes through this OGM's warn-once log.
     const cloneOptions: InternalCloneSubgraphOptions = {
       strictMode: this.modelCompilers.strictMode,

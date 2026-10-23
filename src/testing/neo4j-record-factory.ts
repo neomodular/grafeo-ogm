@@ -16,7 +16,7 @@ const ISO_DATE_TIME =
   /^(?:([+-]?\d{4,})-(\d{2})-(\d{2})|([+-]?\d{4})(\d{2})(\d{2}))(?:([T ])(\d{2})(?::?(\d{2})(?::?(\d{2})(?:[.,](\d{1,9}))?)?)?)?(Z|[+-]\d{2}(?::?\d{2})?)?(?:\[([^\]]+)\])?$/i;
 
 /**
- * vNEXT — the grammar of Neo4j 5's `datetime(string)`, checked against
+ * v2.16.0 — the grammar of Neo4j 5's `datetime(string)`, checked against
  * 5.26. Besides the calendar date (`2024-01-01`, `20240101`) it takes a
  * year alone, a year and month (`2024-01`, `202401`), a week date
  * (`2024-W01-1`, `2024W011`, `2024-W01`), a quarter date (`2024-Q1-01`,
@@ -125,7 +125,7 @@ function isoWeeksInYear(year: number): number {
 }
 
 /**
- * Parse `iso` with Neo4j's grammar (vNEXT). Returns undefined when Neo4j
+ * Parse `iso` with Neo4j's grammar (v2.16.0). Returns undefined when Neo4j
  * cannot parse the text, and throws a TypeError for a week, quarter,
  * ordinal or calendar field out of range (as Neo4j rejects it). A day past
  * the end of its month (`2024-02-30`) is left to the caller.
@@ -249,7 +249,7 @@ const DATE_TIME_DEPRECATIONS = {
     'has an offset outside -18:00..+18:00 or with minutes over 59; Neo4j rejects it, the factory accepts it',
   GRAFEO_RECORD_FACTORY_DATE_ONLY_ZONE:
     'is a date with an offset or zone but no time; Neo4j rejects it, the factory reads it as midnight',
-  // vNEXT
+  // v2.16.0
   GRAFEO_RECORD_FACTORY_INVALID_DATE:
     'names a day its month does not have (such as February 30); Neo4j rejects it, the factory accepts it',
   GRAFEO_RECORD_FACTORY_UNPARSEABLE:
@@ -421,7 +421,7 @@ export class Neo4jRecordFactory {
    * (`[us/eastern]` → `US/Eastern`). Without it those strings keep their
    * v2.8.0 value and emit a one-time `DeprecationWarning`.
    *
-   * vNEXT — every form Neo4j reads is read the same way: week dates
+   * v2.16.0 — every form Neo4j reads is read the same way: week dates
    * (`2024-W01-1`), quarter dates (`2024-Q1-01`), ordinal dates
    * (`2024-001`), year-month (`202401`) and one-digit fields
    * (`2024-1-1T1:2:3`). Under `{ strict: true }` the string goes through
@@ -440,7 +440,7 @@ export class Neo4jRecordFactory {
     isoString: string,
     options: DateTimeFactoryOptions = {},
   ): unknown {
-    // vNEXT — strict reads the string with Neo4j's own grammar and throws
+    // v2.16.0 — strict reads the string with Neo4j's own grammar and throws
     // for text Neo4j cannot parse (it used to fall back to `Date`, and to
     // accept a space before the time). The default keeps its v2.15.0
     // reading of every string that did not throw, and warns where Neo4j
@@ -516,7 +516,7 @@ export class Neo4jRecordFactory {
       throw new TypeError(
         `Neo4jRecordFactory.dateTime: '${isoString}' is not an ISO-8601 date-time`,
       );
-    // vNEXT — a Neo4j form that threw before (`newForm`) has no earlier
+    // v2.16.0 — a Neo4j form that threw before (`newForm`) has no earlier
     // value to keep either.
     const strict = options.strict === true || newlyAccepted || newForm;
     // In the 2.x default, each check below keeps the v2.8.0 value and warns
@@ -529,7 +529,7 @@ export class Neo4jRecordFactory {
       warnDateTime(code, isoString);
     };
 
-    // vNEXT — text the default accepts but Neo4j cannot parse (a space
+    // v2.16.0 — text the default accepts but Neo4j cannot parse (a space
     // before the time, surrounding whitespace, a time mixing `10:00` and
     // `0000`, an unsigned five-digit year), or reads as another date (a
     // signed basic year, `+20240101`, is all year to Neo4j). Strict already
@@ -552,7 +552,7 @@ export class Neo4jRecordFactory {
         warnDateTime('GRAFEO_RECORD_FACTORY_READ_DIFFERS', isoString);
     }
 
-    // vNEXT — a day past the end of its month (`2024-02-30`, `2023-02-29`,
+    // v2.16.0 — a day past the end of its month (`2024-02-30`, `2023-02-29`,
     // `2024-04-31`) is rejected by Neo4j ("Invalid date"). The default keeps
     // the v2.15.0 value (a DateTime with that day), as before — also for
     // the v2.9.0 forms (`[Z]`, an hour alone) that otherwise read strictly.

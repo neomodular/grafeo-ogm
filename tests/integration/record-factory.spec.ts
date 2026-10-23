@@ -245,7 +245,7 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
   );
 
   // ---------------------------------------------------------------------
-  // vNEXT — Neo4j's full date grammar; strict rejects what Neo4j rejects
+  // v2.16.0 — Neo4j's full date grammar; strict rejects what Neo4j rejects
   // ---------------------------------------------------------------------
 
   it.each([
@@ -301,7 +301,7 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     '2024-1-1T1:2:3Z',
     '2024-1-1T1:2:3+01:00[Europe/Berlin]',
   ])(
-    'reads %s as the driver does, in both modes, without a warning (vNEXT)',
+    'reads %s as the driver does, in both modes, without a warning (v2.16.0)',
     async (iso) => {
       await expectSame(iso, false);
       await expectSame(iso, true);
@@ -325,7 +325,7 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     '2024-01-01T10.5',
     '2024-01-01T10:30.5',
     '+2024W011',
-  ])('rejects %s in both modes, as Neo4j does (vNEXT)', async (iso) => {
+  ])('rejects %s in both modes, as Neo4j does (v2.16.0)', async (iso) => {
     expect([iso, (await fromDriver(iso)).error !== undefined]).toEqual([
       iso,
       true,
@@ -362,7 +362,7 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     ['2024-01-001', 'UNPARSEABLE'],
     ['2024-1', 'UNPARSEABLE'],
   ])(
-    'strict rejects %s as Neo4j does; the default keeps its v2.15.0 value and warns %s (vNEXT)',
+    'strict rejects %s as Neo4j does; the default keeps its v2.15.0 value and warns %s (v2.16.0)',
     async (iso, code) => {
       await expectSame(iso, true);
       const loose = fromFactory(iso, false);
@@ -383,7 +383,7 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     // A signed basic year is all year to Neo4j.
     ['+20240101', 'READ_DIFFERS'],
   ])(
-    'strict reads %s as the driver does; the default keeps its v2.15.0 value and warns %s (vNEXT)',
+    'strict reads %s as the driver does; the default keeps its v2.15.0 value and warns %s (v2.16.0)',
     async (iso, code) => {
       await expectSame(iso, true);
       const loose = fromFactory(iso, false);

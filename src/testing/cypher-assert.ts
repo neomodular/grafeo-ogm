@@ -25,7 +25,7 @@ function canonicalJson(value: unknown): string | undefined {
  * The actual params as JSON for an assertion message, in their own key
  * order (as before), with a bigint written as `{"$bigint":"<digits>"}`.
  *
- * vNEXT — `JSON.stringify` threw a raw `TypeError` ("Do not know how to
+ * v2.16.0 — `JSON.stringify` threw a raw `TypeError` ("Do not know how to
  * serialize a BigInt") while building the missing-key message, so a test
  * saw that instead of the assertion. A value JSON cannot write at all (a
  * cycle) falls back to the list of keys.

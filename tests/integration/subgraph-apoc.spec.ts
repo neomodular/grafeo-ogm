@@ -229,7 +229,7 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
   });
 
   // -------------------------------------------------------------------
-  // vNEXT — strict item 41: a reference relationship between two owned
+  // v2.16.0 — strict item 26: a reference relationship between two owned
   // nodes. APOC clones it clone to clone (subgraphAll returns every
   // relationship among the owned nodes); the 2.x default also re-attaches
   // it from the clone back to the source's original.
@@ -269,7 +269,7 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
   }
 
   it.each(['OUT', 'IN'] as const)(
-    'strict clones a reference relationship between owned nodes once, clone to clone (%s, vNEXT)',
+    'strict clones a reference relationship between owned nodes once, clone to clone (%s, v2.16.0)',
     async (direction) => {
       await seedInternalReference();
 
@@ -299,7 +299,7 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
     ['OUT', ["c1'->c2", "c1'->c2'", 'c1->c2']],
     ['IN', ["c1'->c2'", 'c1->c2', "c1->c2'"]],
   ] as const)(
-    'the default keeps the extra link back into the source and warns once (%s, vNEXT)',
+    'the default keeps the extra link back into the source and warns once (%s, v2.16.0)',
     async (direction, expected) => {
       await seedInternalReference();
       const warn = jest.fn();
@@ -322,7 +322,7 @@ describeLive('subgraph operations — live Neo4j with APOC', () => {
     },
   );
 
-  it('OGM.$cloneSubgraph follows new OGM({ strict }) (vNEXT)', async () => {
+  it('OGM.$cloneSubgraph follows new OGM({ strict }) (v2.16.0)', async () => {
     await seedInternalReference();
     const typeDefs = 'type LeBook @node { id: ID! }';
     const warn = jest.fn();
