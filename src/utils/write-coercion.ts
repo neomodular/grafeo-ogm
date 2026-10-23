@@ -75,10 +75,10 @@ function isTemporalStringInput(value: unknown): boolean {
 }
 
 /**
- * vNEXT — `DateTime` also wraps a JS `Date`: `coerceWriteValue` binds it as
+ * v2.18.0 — `DateTime` also wraps a JS `Date`: `coerceWriteValue` binds it as
  * its ISO string (the same conversion the where path applies), so the
  * stored value is a native DATETIME that a `where: { at: date }` filter
- * matches. Pre-vNEXT the Date was bound raw and every write path crashed
+ * matches. Pre-v2.18.0 the Date was bound raw and every write path crashed
  * with "Property values can only be of primitive types ... Map{}".
  */
 function isDateTimeWriteInput(value: unknown): boolean {
@@ -192,9 +192,9 @@ export function coerceWriteValue(
 }
 
 /**
- * vNEXT — a JS `Date` for a temporal field. The driver cannot pack a `Date`
+ * v2.18.0 — a JS `Date` for a temporal field. The driver cannot pack a `Date`
  * (it is sent as an empty map, which Neo4j rejects as a property value),
- * so pre-vNEXT every write path crashed with a server error. `DateTime`
+ * so pre-v2.18.0 every write path crashed with a server error. `DateTime`
  * converts it to its ISO string — exactly what the where path does
  * (`coerceWhereElement`), so what is stored is what a Date filter
  * matches. The other temporal types have no single correct reading of an

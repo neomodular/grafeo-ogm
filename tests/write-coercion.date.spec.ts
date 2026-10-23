@@ -1,5 +1,5 @@
 /**
- * vNEXT — a JS `Date` written to a temporal field. The driver cannot pack a
+ * v2.18.0 — a JS `Date` written to a temporal field. The driver cannot pack a
  * `Date` (it goes over the wire as an empty map), so every write path
  * crashed server-side with "Property values can only be of primitive types
  * … Map{}". `DateTime` now binds the Date's ISO string inside `datetime()`
@@ -37,7 +37,7 @@ const d = new Date('2024-05-01T10:00:00.000Z');
 const at = prop('at', { type: 'DateTime' });
 const ats = prop('ats', { type: 'DateTime', isArray: true });
 
-describe('JS Date for a DateTime write (vNEXT)', () => {
+describe('JS Date for a DateTime write (v2.18.0)', () => {
   it('binds the ISO string and wraps it in datetime()', () => {
     expect(coerceWriteValue(d, at)).toBe('2024-05-01T10:00:00.000Z');
     expect(wrapWriteExpr('$p', d, at)).toBe('datetime($p)');

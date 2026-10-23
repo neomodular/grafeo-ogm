@@ -1,11 +1,11 @@
 /**
- * Live suite (vNEXT): `null` / `undefined` items inside disconnect arrays.
+ * Live suite (v2.18.0): `null` / `undefined` items inside disconnect arrays.
  *
- * - Root (strict item 26): `disconnect: { posts: [{ where }, undefined] }`
+ * - Root (strict item 31): `disconnect: { posts: [{ where }, undefined] }`
  *   unlinks EVERY related node in default mode (as before, with a one-time
  *   warning); `strict: true` throws an OGMError and leaves the links alone.
  * - Nested (`update: { posts: [{ disconnect: [item, undefined] }] }`, and a
- *   null nested update / create item): pre-vNEXT a raw TypeError; now an
+ *   null nested update / create item): pre-v2.18.0 a raw TypeError; now an
  *   OGMError in both modes, with nothing written.
  *
  * Opt-in: runs only when NEO4J_URI is set. Every node carries this run's
@@ -35,7 +35,7 @@ const typeDefs = /* GraphQL */ `
   }
 `;
 
-describeLive('null items in disconnect arrays (vNEXT) — live Neo4j', () => {
+describeLive('null items in disconnect arrays (v2.18.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   let driver: Driver;
 

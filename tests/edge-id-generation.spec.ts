@@ -1,7 +1,7 @@
 /**
- * vNEXT — `@id` on a `@relationshipProperties` field is generated when the
+ * v2.18.0 — `@id` on a `@relationshipProperties` field is generated when the
  * relationship is created (`randomUUID()`), in every mode, as a node's
- * `@id` is. Pre-vNEXT it was never generated: always null, though the
+ * `@id` is. Pre-v2.18.0 it was never generated: always null, though the
  * generated output type declares it non-null. The live half is
  * `tests/integration/edge-id-generation.spec.ts`.
  */

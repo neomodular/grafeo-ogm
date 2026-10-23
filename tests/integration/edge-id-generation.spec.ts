@@ -1,7 +1,7 @@
 /**
- * Live suite (vNEXT): `@id` on a `@relationshipProperties` field.
+ * Live suite (v2.18.0): `@id` on a `@relationshipProperties` field.
  *
- * Pre-vNEXT the id was never generated — every relationship stored it as
+ * Pre-v2.18.0 the id was never generated — every relationship stored it as
  * null, though the generated output type declares it non-null. It is now a
  * `randomUUID()` set when the relationship is created (nested create, nested
  * create in an update, connect, array connect), in every mode; a connect

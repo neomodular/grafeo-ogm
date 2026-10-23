@@ -1,7 +1,7 @@
 /**
- * Live suite (vNEXT): a JS `Date` written to a `DateTime` field.
+ * Live suite (v2.18.0): a JS `Date` written to a `DateTime` field.
  *
- * Pre-vNEXT every write path bound the Date raw; the driver packs it as an
+ * Pre-v2.18.0 every write path bound the Date raw; the driver packs it as an
  * empty map and Neo4j rejected the write ("Property values can only be of
  * primitive types or arrays thereof. Encountered: Map{}."), while a `where`
  * filter accepted the same Date. Each write path must now store a native
@@ -41,7 +41,7 @@ const typeDefs = /* GraphQL */ `
 
 type Row = Record<string, unknown>;
 
-describeLive('JS Date for DateTime writes (vNEXT) — live Neo4j', () => {
+describeLive('JS Date for DateTime writes (v2.18.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   const d = new Date('2024-05-01T10:00:00.000Z');
   let driver: Driver;

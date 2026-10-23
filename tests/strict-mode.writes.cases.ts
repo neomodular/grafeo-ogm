@@ -168,7 +168,7 @@ export const badWriteShapes: Record<string, Run> = {
   'blanket disconnect on a shared relationship type (nested in update)': (
     ogm,
   ) => user(ogm).update({ where, update: { pets: [{ disconnect: [{}] }] } }),
-  // vNEXT — strict item 26.
+  // v2.18.0 — strict item 31.
   'disconnect: null item in an array': (ogm) =>
     user(ogm).update({
       where,

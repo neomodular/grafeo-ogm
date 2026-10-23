@@ -290,7 +290,7 @@ describe('item 5 — labels on upsert / createMany relabel matched nodes', () =>
   });
 });
 
-describe('item 26 — a null / undefined item inside a disconnect array (vNEXT)', () => {
+describe('item 31 — a null / undefined item inside a disconnect array (v2.18.0)', () => {
   const cases: [string, string][] = [
     ['disconnect: null item in an array', 'null'],
     ['disconnect: undefined item in an array', 'undefined'],
@@ -327,7 +327,7 @@ describe('item 26 — a null / undefined item inside a disconnect array (vNEXT)'
   });
 });
 
-describe('a null / undefined item inside a nested write array throws OGMError in both modes (vNEXT)', () => {
+describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {
   const shapes: [string, Run, RegExp][] = [
     [
       'nested disconnect',

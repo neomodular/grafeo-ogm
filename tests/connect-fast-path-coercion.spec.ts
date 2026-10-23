@@ -1,6 +1,6 @@
 /**
- * vNEXT — the array-connect UNWIND fast path coerces its `where.node`
- * values like every other filter (`coerceWhereValue`). Pre-vNEXT a BigInt
+ * v2.18.0 — the array-connect UNWIND fast path coerces its `where.node`
+ * values like every other filter (`coerceWhereValue`). Pre-v2.18.0 a BigInt
  * / Int filter given as an integer string or a `bigint` was bound raw, so
  * it never equalled the stored Long and the array connect linked nothing.
  * The Cypher text is unchanged; only the bound values are. The live half
@@ -104,7 +104,7 @@ function connectParams(items: Record<string, unknown>[]) {
   };
 }
 
-describe('array connect fast path coerces where values (vNEXT)', () => {
+describe('array connect fast path coerces where values (v2.18.0)', () => {
   it('binds a BigInt string / bigint as a neo4j Integer', () => {
     const { rows } = connectParams([
       { where: { node: { code: '9007199254740993' } } },

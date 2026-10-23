@@ -679,9 +679,9 @@ export class MutationCompiler {
     const edge = isPlainObject(edgeInput) ? edgeInput : {};
     const items: string[] = [];
     for (const [, propDef] of propsDef.properties) {
-      // vNEXT — an `@id` relationship property is generated when the
+      // v2.18.0 — an `@id` relationship property is generated when the
       // relationship is created, as a node's `@id` is (`randomUUID()`), in
-      // every mode. Pre-vNEXT nothing generated it: it was always null,
+      // every mode. Pre-v2.18.0 nothing generated it: it was always null,
       // though the generated output type declares it non-null. A value the
       // edge input supplies (null included) wins, as for nodes; on a
       // connect's MERGE the item lands in ON CREATE SET, so an existing
@@ -1878,7 +1878,7 @@ export class MutationCompiler {
 
       for (let ci = 0; ci < createItems.length; ci++) {
         const createSpec = createItems[ci];
-        // vNEXT — pre-vNEXT a raw TypeError reading `.node`.
+        // v2.18.0 — pre-v2.18.0 a raw TypeError reading `.node`.
         if (createSpec == null)
           throw nullNestedItemError('create', relDef, createSpec);
         let nodeSpec = (createSpec.node ?? createSpec) as Record<
@@ -2603,7 +2603,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 26: a `null` / `undefined` ITEM inside a disconnect
+   * v2.18.0 — strict item 31: a `null` / `undefined` ITEM inside a disconnect
    * array (`disconnect: { posts: [{ where }, undefined] }`, typically an
    * unset optional variable). It compiles to the blanket form, so every
    * related node is unlinked, not just the ones the other items name.
@@ -3023,7 +3023,7 @@ export class MutationCompiler {
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        // vNEXT — pre-vNEXT a null / undefined item threw a raw TypeError.
+        // v2.18.0 — pre-v2.18.0 a null / undefined item threw a raw TypeError.
         if (item == null) throw nullNestedItemError('update', relDef, item);
         const itemPrefix = `${relPrefix}_${i}`;
         // v2.10.0 — strict item 22: unknown keys in the item, its create
@@ -3059,7 +3059,7 @@ export class MutationCompiler {
 
           for (let di = 0; di < disconnectItems.length; di++) {
             const disconnectSpec = disconnectItems[di];
-            // vNEXT — pre-vNEXT a null / undefined item threw a raw
+            // v2.18.0 — pre-v2.18.0 a null / undefined item threw a raw
             // TypeError reading `.where`.
             if (disconnectSpec == null)
               throw nullNestedItemError('disconnect', relDef, disconnectSpec);
@@ -3237,7 +3237,7 @@ export class MutationCompiler {
 
             for (let ci = 0; ci < createItems.length; ci++) {
               const createSpec = createItems[ci];
-              // vNEXT — pre-vNEXT a raw TypeError reading `.node`.
+              // v2.18.0 — pre-v2.18.0 a raw TypeError reading `.node`.
               if (createSpec == null)
                 throw nullNestedItemError('create', relDef, createSpec);
               let nodeSpec = (createSpec.node ?? createSpec) as Record<
@@ -3635,9 +3635,9 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — coerce the `where.node` values of one UNWIND fast-path connect
+   * v2.18.0 — coerce the `where.node` values of one UNWIND fast-path connect
    * item to the stored representation, as the WhereCompiler does for every
-   * other filter (`coerceWhereValue`). Pre-vNEXT the values were bound raw:
+   * other filter (`coerceWhereValue`). Pre-v2.18.0 the values were bound raw:
    * a BigInt / Int filter given as an integer string (the generated BigInt
    * input type) or a `bigint` never equalled the stored Long, so an array
    * connect silently linked nothing while the same item given alone (per-
@@ -3724,7 +3724,7 @@ export class MutationCompiler {
 }
 
 /**
- * vNEXT — the OGMError for a `null` / `undefined` item inside a nested
+ * v2.18.0 — the OGMError for a `null` / `undefined` item inside a nested
  * write array (`update: { posts: [{ disconnect: [undefined] }] }`). These
  * items used to reach property reads and throw a raw TypeError.
  */

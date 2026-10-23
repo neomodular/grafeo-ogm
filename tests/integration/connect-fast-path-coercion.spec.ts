@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT): an ARRAY `connect` whose `where` names a BigInt / Int
+ * Live suite (v2.18.0): an ARRAY `connect` whose `where` names a BigInt / Int
  * field by an integer string or a `bigint` (equality or `_IN`).
  *
  * The array form takes the UNWIND fast path, which bound the where values
@@ -34,7 +34,7 @@ const typeDefs = /* GraphQL */ `
   }
 `;
 
-describeLive('array connect coerces where values (vNEXT) — live Neo4j', () => {
+describeLive('array connect coerces where values (v2.18.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   let driver: Driver;
   let ogm: OGM;
