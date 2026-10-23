@@ -46,6 +46,10 @@ jobs:
       NEO4J_APOC_USER: neo4j
       NEO4J_APOC_PASSWORD: ci-live-pw-526
       NEO4J_GENAI_URI: bolt://localhost:7687
+      # Suites that create / drop constraints outside db-push.spec.ts gate on
+      # this (never set it to a database you care about).
+      NEO4J_SCHEMA_URI: bolt://localhost:7687
+      NEO4J_SCHEMA_PASSWORD: ci-live-pw-526
 
     steps:
       - uses: actions/checkout@v6
