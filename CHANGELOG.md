@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.17.0 (2026-10-23) — schema checks, init and Executor.debug
+
+> **Minor release.** It adds strict items 27–30, which cover SDL that 2.x accepts silently. It also accepts `@fulltext` `indexName`, and makes `Executor.debug` log without a logger. Without `strict`, every compiled query is byte-identical to 2.16.0; the only additions are warnings, newly accepted input, and debug output.
+
+### Fixed
+
+- **`@fulltext(indexes: [{ indexName }])` is accepted as an alias of `name`.** This is the `@neo4j/graphql` 4+ spelling. Such indexes used to be dropped, so `db push` never created them and searching them threw.
+- **`grafeo init` keeps an absolute `--schema` / `--out` absolute** in `grafeo.config.ts`. It used to write `.//abs/path`.
+- **The `grafeo init` starter schema gives `Person` a generated `id: ID! @id @unique` and a plain `name: String!`.** Before, `name` carried `@id`, so it couldn't be set and was stored as a UUID.
+- **`Executor.debug = true` without a `logger` now writes the Cypher, params and record counts to stderr**, as the README promises. This includes `$queryRaw` / `$executeRaw`. A configured logger is unchanged.
+
+### Strict mode
+
+- **Item 27:** a `@fulltext` index with both `name` and `indexName`, set to different values, warns in default mode, which uses `name`. Strict throws `OGMError` when the OGM is built.
+- **Items 28 and 29:**
+  - Item 28 is a `@relationship` missing `type` or `direction`.
+  - Item 29 is a field type the schema doesn't define.
+  - Both warn once in default mode, keeping the 2.x behaviour, and throw `OGMError` at OGM construction under `strict: true`.
+- **Item 30:** `type Query` / `Mutation` / `Subscription` are skipped under `strict: true` in the OGM, `db push` and the type generator, as in `@neo4j/graphql` 5.x. Default mode keeps them as node models and warns once.
+- **Where items 27–30 apply:**
+  - `db push` and `grafeo generate` read `strict` from `grafeo.config`; `db push` also takes `--strict`.
+  - `parseSchema` takes `{ strict, onWarning }`.
+  - `generateTypes` takes a `strict` option, so the generated types match a strict OGM.
+
 ## 2.16.0 (2026-10-23) — testing helpers, cloneSubgraph references
 
 > **Minor release.** It adds strict item 26 (`cloneSubgraph` reference relationships between owned nodes), a new exported `CloneSubgraphOptions` type, and new default-mode warnings. Without `strict`, every compiled query is byte-identical to 2.15.0.
