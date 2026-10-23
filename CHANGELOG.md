@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.13.0 (2026-10-23) — `extend type` and other type extensions
+
+> **Minor release.** Type extensions in the SDL (`extend type`, `extend interface`, `extend union`, `extend enum`) are now merged into the definitions they extend. Schemas without extensions parse, compile and generate exactly as before.
+
+### Fixed
+
+- **Type extensions were silently ignored.** The fields and directives of an `extend type X { … }` vanished, so `create` with an extended field threw `Unknown field`, and the generated types and `db push` never saw them. Each extension is now folded into its definition before parsing, following graphql-js rules (an extension may come before or after the definition and applies in document order), so the result is exactly the schema you would get by writing the fields and directives inline — the same runtime Cypher, `db push` plan and generated types. Supported: extra fields (plain, `@relationship`, `@cypher`, `@unique`, `@default`, `@id`), type directives (`@fulltext`, `@vector`, …), `implements`, edge properties on a `@relationshipProperties` type, interface fields, union members and enum values.
+
+### Behavior changes
+
+Only schemas that use `extend` are affected:
+
+- Extending a type that is not defined, or with the wrong kind (`extend type` on an interface), throws `OGMError` when the schema is parsed, as graphql-js does.
+- Redeclaring a field, enum value, union member, implemented interface or type-level directive in an extension throws `OGMError`; before, the extension was ignored (a second `@fulltext` would have been silently dropped).
+- A type defined twice in a document that uses extensions throws, as graphql-js does. Schemas without extensions keep the previous behaviour.
+
 ## 2.12.6 (2026-10-23) — generated types compile with custom scalars
 
 > **Patch release.** A schema that declares a custom `scalar` now generates a TypeScript file that compiles. Generated output for schemas without custom scalars is byte-identical, and runtime behaviour is unchanged.
