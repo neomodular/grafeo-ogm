@@ -85,7 +85,60 @@ export interface ExplainWhereResult {
   policy: { fragments: CompiledPolicyFragments; clause: string } | null;
 }
 
-const MAX_DEPTH = 10;
+/**
+ * Maximum depth of ONE where input, counted as hops plus logical levels:
+ *
+ *   - `+1` per `AND` / `OR` / `NOT` level (in a node where and inside a
+ *     connection input alike);
+ *   - `+1` per relationship or connection HOP, whatever the input shape:
+ *     `rel_SOME: X`, `rel_SOME: { Member: X }`, `relConnection_SOME: { node:
+ *     X, edge }` and `relConnection_SOME: { Member: { node: X } }` all put
+ *     `X` one deeper. A connection input's `node` / `node_NOT` / `edge` keys
+ *     and a union / interface member key are the same hop, so they cost
+ *     nothing (and cannot stack: a member key resolves to a concrete type).
+ *   - A policy partial compiles at the depth of the node it guards.
+ *
+ * The root where is depth 0, so `{ a_SOME: { AND: [{ bConnection_SOME: {
+ * node: X } }] } }` compiles `X` at depth 3.
+ *
+ * v2.12.2 — pre-2.12.2 only logical nesting counted and every relationship
+ * / connection boundary restarted the count at 0, so a filter ~1000 hops
+ * deep overflowed the JS stack (a raw `RangeError` out of the compiler) and
+ * anything shallower reached the server, where nested `EXISTS` is
+ * super-linear in the number of hops. Measured on Neo4j 5.26 (planning a
+ * fresh statement, two-node graph): `rel_SOME`, connection and union chains
+ * all cost the same per hop — 8 hops ~35 ms, 10 ~50 ms, 12 ~85 ms, 14 ~205
+ * ms, 16 ~650 ms, 20 ~9 s; an edge predicate per hop is ~1.5× that (10
+ * hops ~80 ms) and a two-member union ~2× (two `EXISTS` per hop, 10 hops
+ * ~100 ms). Executing an exhaustive (non-matching) chain on 300 nodes with
+ * fan-out 3 takes ~1 s at 8 hops, ~9 s at 10 and times out (>10 s) at 11.
+ * Node-Level Security adds a policy clause per hop on top. 10 is the limit
+ * logical nesting has always had (so no pure AND / OR / NOT filter changes
+ * behaviour), sits below the planner's knee (~12), and is 2–3× deeper than
+ * any realistic filter (3–4 hops plus a few logical groups).
+ *
+ * @internal
+ */
+export const MAX_WHERE_DEPTH = 10;
+
+/**
+ * The one depth check (v2.12.2), run on entry to every where-shaped frame
+ * (`compileConditions`, `compileConnectionWhereInput`, and the mutation
+ * compiler's connection-where pre-walk) BEFORE the frame iterates its keys,
+ * so the recursion stops at `MAX_WHERE_DEPTH + 1` frames whatever the
+ * input looks like.
+ *
+ * @internal
+ */
+export function assertWhereDepth(depth: number): void {
+  if (depth > MAX_WHERE_DEPTH)
+    throw new OGMError(
+      `WHERE clause nesting depth exceeds maximum (${MAX_WHERE_DEPTH}). ` +
+        `Each AND / OR / NOT level and each relationship or connection hop ` +
+        `(_SOME / _NONE / _ALL / _SINGLE, <rel>Connection_*) counts one toward a single limit; ` +
+        `flatten the filter or split the query.`,
+    );
+}
 
 /**
  * Hard cap on the length of an `AND` / `OR` clause array. Prevents an
@@ -294,6 +347,16 @@ export class WhereCompiler {
        * `preserveVars` is ignored (the scope already carries its own).
        */
       scope?: CypherFieldScope;
+      /**
+       * v2.12.2 — nesting depth of this where within the enclosing
+       * statement (the root where is 0). The compiler passes it when it
+       * re-enters `compile()` across a relationship / connection boundary
+       * so one statement-wide limit (`MAX_WHERE_DEPTH`) bounds every kind
+       * of nesting together. Callers compiling a fresh where omit it.
+       *
+       * @internal
+       */
+      depth?: number;
     },
   ): WhereResult {
     const split = this.compileUserAndPolicy(
@@ -399,6 +462,8 @@ export class WhereCompiler {
     policyContext: PolicyContextBundle,
     paramCounter: { count: number },
     fallbackOp?: Operation,
+    /** v2.12.2 — depth of the node this clause guards (root: 0). */
+    depth = 0,
   ): {
     cypher: string | null;
     params: Record<string, unknown>;
@@ -413,6 +478,7 @@ export class WhereCompiler {
         policyContext,
         paramCounter,
         fallbackOp,
+        depth,
       );
 
     const params: Record<string, unknown> = {};
@@ -428,6 +494,7 @@ export class WhereCompiler {
         policyContext,
         paramCounter,
         fallbackOp,
+        depth,
       );
       mergeParams(params, clause.params);
       // Each member compiles in its own `@cypher` scope; chaining two
@@ -459,6 +526,7 @@ export class WhereCompiler {
     policyContext: PolicyContextBundle,
     paramCounter: { count: number },
     fallbackOp?: Operation,
+    depth = 0,
   ): {
     cypher: string | null;
     params: Record<string, unknown>;
@@ -481,6 +549,7 @@ export class WhereCompiler {
         resolveForType: policyContext.resolveForType,
         defaults: policyContext.defaults,
       },
+      depth,
     });
     return {
       cypher: compiled.cypher || null,
@@ -514,6 +583,7 @@ export class WhereCompiler {
       preserveVars?: ReadonlyArray<string>;
       policyContext?: PolicyContextBundle;
       scope?: CypherFieldScope;
+      depth?: number;
     },
   ): {
     userCypher: string;
@@ -535,13 +605,17 @@ export class WhereCompiler {
     const scope =
       options?.scope ??
       new CypherFieldScope(nodeVar, options?.preserveVars ?? [], '__where');
+    // v2.12.2 — the user where AND the policy partials compile at the
+    // caller's depth (0 for a root where), so a traversal target's policy
+    // counts toward the same statement-wide limit as the filter around it.
+    const depth = options?.depth ?? 0;
     const userBody = hasUserWhere
       ? this.compileConditions(
           where,
           nodeVar,
           nodeDef,
           paramCounter,
-          0,
+          depth,
           scope,
           undefined,
           policyContext,
@@ -562,6 +636,7 @@ export class WhereCompiler {
         paramCounter,
         scope,
         params,
+        depth,
       );
       policy = { fragments, clause: composePolicyClause(fragments) };
     }
@@ -596,6 +671,8 @@ export class WhereCompiler {
     paramCounter: { count: number },
     scope: CypherFieldScope,
     paramsTarget: Record<string, unknown>,
+    /** v2.12.2 — depth of the where these partials sit beside. */
+    depth = 0,
   ): CompiledPolicyFragments {
     const { ctx, resolved } = bundle;
 
@@ -627,7 +704,7 @@ export class WhereCompiler {
             nodeVar,
             nodeDef,
             paramCounter,
-            0,
+            depth,
             scope,
           );
           if (compiled.cypher) {
@@ -690,7 +767,7 @@ export class WhereCompiler {
               nodeVar,
               nodeDef,
               paramCounter,
-              0,
+              depth,
               scope,
             );
             if (compiled.cypher) {
@@ -785,6 +862,12 @@ export class WhereCompiler {
     counter: { count: number },
     policyContext: PolicyContextBundle | undefined,
     scope?: CypherFieldScope,
+    /**
+     * v2.12.2 — depth of `where` within the enclosing statement (see
+     * `MAX_WHERE_DEPTH`). Traversal callers pass their own depth + 1;
+     * a nested selection's filter is a fresh where and omits it.
+     */
+    depth = 0,
   ): {
     user: string;
     policy: string;
@@ -794,6 +877,7 @@ export class WhereCompiler {
     if (!policyContext) {
       const plain = this.compile(where, targetVar, targetDef, counter, {
         scope,
+        depth,
       });
       return {
         user: plain.cypher,
@@ -815,6 +899,7 @@ export class WhereCompiler {
             policyContext,
           ),
           scope,
+          depth,
         },
       );
       if (!split) return { user: '', policy: '', params: {}, preludes: [] };
@@ -829,6 +914,7 @@ export class WhereCompiler {
     const userPart = this.compile(where, targetVar, targetDef, counter, {
       policyContext: traversalBundle(policyContext),
       scope,
+      depth,
     });
     const policyPart = this.compileTargetPolicyClause(
       targetDef.typeName,
@@ -836,6 +922,8 @@ export class WhereCompiler {
       'read',
       policyContext,
       counter,
+      undefined,
+      depth,
     );
     const userHasPreludes =
       (userPart.preludes?.length ?? 0) > 0 || (scope?.hasAny() ?? false);
@@ -922,12 +1010,14 @@ export class WhereCompiler {
   ): string {
     const branches = members.map(([memberDef, memberWhere]) => {
       const label = `${nodeVar}:${getTargetLabelString(memberDef)}`;
+      // v2.12.2 — the member key is the same hop as the where it sits in,
+      // so the member filter compiles at the same depth.
       const sub = this.compileConditions(
         memberWhere,
         nodeVar,
         memberDef,
         counter,
-        depth + 1,
+        depth,
         scope,
         params,
         policyContext,
@@ -967,10 +1057,10 @@ export class WhereCompiler {
      */
     policyContext?: PolicyContextBundle,
   ): WhereResult {
-    if (depth > MAX_DEPTH)
-      throw new OGMError(
-        `WHERE clause nesting depth exceeds maximum (${MAX_DEPTH})`,
-      );
+    // v2.12.2 — `depth` now also counts relationship / connection hops (see
+    // `MAX_WHERE_DEPTH`); pre-2.12.2 only AND / OR / NOT nesting reached this
+    // check.
+    assertWhereDepth(depth);
     if (where == null) return { cypher: '', params: paramsTarget ?? {} };
 
     const caseInsensitive = where.mode === 'insensitive';
@@ -1240,6 +1330,10 @@ export class WhereCompiler {
       ? (this.schema.relationshipProperties.get(relDef.properties) ?? null)
       : null;
 
+    // v2.12.2 — a connection hop costs one level, like `_SOME`: the input
+    // (`node` / `edge` / member keys) compiles at `depth + 1` and its logical
+    // groups one deeper each. Pre-2.12.2 the input compiled at `depth` and
+    // its `node` filter restarted at 0.
     const inner = this.compileConnectionWhereInput(
       value,
       relVar,
@@ -1249,7 +1343,7 @@ export class WhereCompiler {
       nodeScope,
       edgeScope,
       counter,
-      depth,
+      depth + 1,
       policyContext,
     );
     const innerParams = { ...inner.params };
@@ -1266,6 +1360,7 @@ export class WhereCompiler {
           counter,
           policyContext,
           nodeScope,
+          depth + 1,
         )
       : null;
     // v2.6.2 — strict: an abstract target is restricted to its members
@@ -1368,6 +1463,10 @@ export class WhereCompiler {
      */
     policyContext?: PolicyContextBundle,
   ): WhereResult {
+    // v2.12.2 — pre-2.12.2 this frame had no depth check at all: a
+    // connection where nested thousands of `AND` / `OR` / `NOT` levels deep
+    // recursed until the JS stack overflowed.
+    assertWhereDepth(depth);
     const innerClauses: string[] = [];
     const innerParams: Record<string, unknown> = {};
     /**
@@ -1402,6 +1501,8 @@ export class WhereCompiler {
               ? traversalBundle(policyContext)
               : undefined,
             scope: nodeScope,
+            // v2.12.2 — `node` is the same hop as its connection input.
+            depth,
           },
         );
         if (nodeResult.preludes && nodeResult.preludes.length > 0)
@@ -1581,7 +1682,8 @@ export class WhereCompiler {
         nodeScope,
         edgeScope,
         counter,
-        depth + 1,
+        // v2.12.2 — `{ Member: { node } }` is the same hop as the input.
+        depth,
         policyContext,
       );
       mergeParams(params, sub.params);
@@ -1759,6 +1861,10 @@ export class WhereCompiler {
       targetNodeDef,
       counter,
       policyContext,
+      undefined,
+      // v2.12.2 — the target where is one level below the where holding
+      // the `<rel>_SOME` key; pre-2.12.2 its depth restarted at 0.
+      depth + 1,
     );
     const matched = stitchUserAndPolicy(body.user, body.policy);
 
@@ -1879,10 +1985,6 @@ export class WhereCompiler {
     }[] = [];
     const allParams: Record<string, unknown> = {};
 
-    // depth-only suppression for unused-when-no-policy lint passes; keep
-    // for symmetry with `tryCompileRelationship`.
-    void depth;
-
     for (const [memberKey, memberValue] of Object.entries(value)) {
       if (!unionMembers.includes(memberKey))
         throw new OGMError(
@@ -1914,6 +2016,10 @@ export class WhereCompiler {
         memberDef,
         counter,
         policyContext,
+        undefined,
+        // v2.12.2 — `{ rel_SOME: { Member: X } }` is one hop: X compiles one
+        // deeper, the member key costs nothing.
+        depth + 1,
       );
       const inner = stitchUserAndPolicy(body.user, body.policy);
       if (inner) mergeParams(allParams, body.params);

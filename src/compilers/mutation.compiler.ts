@@ -30,7 +30,7 @@ import {
   wrapWriteExpr,
 } from '../utils/write-coercion';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
-import { WhereCompiler } from './where.compiler';
+import { assertWhereDepth, WhereCompiler } from './where.compiler';
 
 export interface MutationResult {
   cypher: string;
@@ -3750,9 +3750,18 @@ const CONNECTION_WHERE_KEYS: ReadonlySet<string> = new Set([
  */
 export function connectionWhereToNodeWhere(
   spec: Record<string, unknown>,
+  /**
+   * v2.12.2 — nesting depth of `spec` within the nested-write where. This
+   * pre-walk recurses through connection-shaped `NOT` / `AND` / `OR` BEFORE
+   * the where compiler sees the result, so it shares the compiler's limit
+   * (`MAX_WHERE_DEPTH`); pre-2.12.2 a few thousand nested levels overflowed
+   * the JS stack here with a raw `RangeError`.
+   */
+  depth = 0,
 ): Record<string, unknown> {
   if (!isPlainObject(spec))
     throw new OGMError('A nested mutation where must be an object.');
+  assertWhereDepth(depth);
   const keys = Object.keys(spec).filter((k) => spec[k] !== undefined);
   const edgeKey = keys.find((k) => k === 'edge' || k === 'edge_NOT');
   if (edgeKey)
@@ -3775,7 +3784,10 @@ export function connectionWhereToNodeWhere(
         break;
       case 'NOT':
         parts.push({
-          NOT: connectionWhereToNodeWhere(value as Record<string, unknown>),
+          NOT: connectionWhereToNodeWhere(
+            value as Record<string, unknown>,
+            depth + 1,
+          ),
         });
         break;
       case 'AND':
@@ -3786,7 +3798,10 @@ export function connectionWhereToNodeWhere(
           );
         parts.push({
           [key]: value.map((item) =>
-            connectionWhereToNodeWhere(item as Record<string, unknown>),
+            connectionWhereToNodeWhere(
+              item as Record<string, unknown>,
+              depth + 1,
+            ),
           ),
         });
         break;

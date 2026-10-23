@@ -1,0 +1,191 @@
+{
+  "rel5_logical": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE (n.`id` STARTS WITH $param0 AND (EXISTS { MATCH (n)-[:`IT_TAGS`]->(r1:`ItChart`) WHERE EXISTS { MATCH (r1)<-[:`IT_TAGS`]-(r2:`ItTag`) WHERE NOT EXISTS { MATCH (r2)-[:`IT_TAGS`]->(r3:`ItChart`) WHERE NOT (EXISTS { MATCH (r3)-[:`IT_IN_CATEGORY`]->(r4:`ItCategory`) WHERE NOT EXISTS { MATCH (r4)<-[:`IT_IN_CATEGORY`]-(r5:`ItChart`) WHERE NOT (r5.`title` = $param6) } }) } } } OR NOT EXISTS { MATCH (n)-[:`IT_TAGS`]->(r7:`ItChart`) WHERE r7.`secret` = $param8 }))\nRETURN n { .`id` }",
+        "params": {
+          "param0": "x",
+          "param6": "a",
+          "param8": true
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE (n.`id` STARTS WITH $param0 AND (EXISTS { MATCH (n)-[:`IT_TAGS`]->(r1:`ItChart`) WHERE (EXISTS { MATCH (r1)<-[:`IT_TAGS`]-(r2:`ItTag`) WHERE NOT EXISTS { MATCH (r2)-[:`IT_TAGS`]->(r3:`ItChart`) WHERE (true AND (r3.`secret` = $param8)) AND NOT (EXISTS { MATCH (r3)-[:`IT_IN_CATEGORY`]->(r4:`ItCategory`) WHERE (NOT EXISTS { MATCH (r4)<-[:`IT_IN_CATEGORY`]-(r5:`ItChart`) WHERE (NOT (r5.`title` = $param6)) AND (true AND (r5.`secret` = $param7)) }) AND true }) } }) AND (true AND (r1.`secret` = $param9)) } OR NOT EXISTS { MATCH (n)-[:`IT_TAGS`]->(r10:`ItChart`) WHERE (r10.`secret` = $param11) AND (true AND (r10.`secret` = $param12)) }))\nRETURN n { .`id` }",
+        "params": {
+          "param0": "x",
+          "param6": "a",
+          "param7": false,
+          "param8": false,
+          "param9": false,
+          "param11": true,
+          "param12": false
+        }
+      }
+    ]
+  },
+  "connection_chain": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE EXISTS { MATCH (n)-[e0:`IT_TAGS`]->(r0:`ItChart`) WHERE (EXISTS { MATCH (r0)<-[e1:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE r2.`id` = $param3 } } AND e0.`weight` IS NOT NULL) AND NOT (r0.`secret` = $param4) }\nRETURN n { .`id` }",
+        "params": {
+          "param3": "c",
+          "param4": true
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE EXISTS { MATCH (n)-[e0:`IT_TAGS`]->(r0:`ItChart`) WHERE ((EXISTS { MATCH (r0)<-[e1:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE (r2.`id` = $param3) AND (true AND (r2.`secret` = $param4)) } } AND e0.`weight` IS NOT NULL) AND NOT (r0.`secret` = $param5)) AND (true AND (r0.`secret` = $param6)) }\nRETURN n { .`id` }",
+        "params": {
+          "param3": "c",
+          "param4": false,
+          "param5": true,
+          "param6": false
+        }
+      }
+    ]
+  },
+  "union_interface": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE (EXISTS { MATCH (n)-[:`IT_TAGS_ITEM`]->(r0:`ItChart`:`ItResource`) WHERE EXISTS { MATCH (r0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS_RES`]->(r2) WHERE r2.`tenantId` = $param3 } } } OR EXISTS { MATCH (n)-[:`IT_TAGS_ITEM`]->(r4:`ItDoc`) WHERE r4.`approvedAt` IS NOT NULL }) AND NOT EXISTS { MATCH (n)-[:`IT_TAGS_RES`]->(r5) WHERE r5.`id` = $param6 }\nRETURN n { .`id` }",
+        "params": {
+          "param3": "t1",
+          "param6": "r"
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE (EXISTS { MATCH (n)-[:`IT_TAGS_ITEM`]->(r0:`ItChart`:`ItResource`) WHERE (EXISTS { MATCH (r0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS_RES`]->(r2) WHERE (r2.`tenantId` = $param3) AND ((r2:`ItChart` OR r2:`ItDrug`) AND (NOT r2:`ItChart` OR (true AND (r2.`secret` = $param4))) AND (NOT r2:`ItDrug` OR false)) } }) AND (true AND (r0.`secret` = $param5)) } OR EXISTS { MATCH (n)-[:`IT_TAGS_ITEM`]->(r6:`ItDoc`) WHERE (r6.`approvedAt` IS NOT NULL) AND (true AND (r6.`approvedAt` IS NOT NULL)) }) AND NOT EXISTS { MATCH (n)-[:`IT_TAGS_RES`]->(r7) WHERE (r7.`id` = $param8) AND ((r7:`ItChart` OR r7:`ItDrug`) AND (NOT r7:`ItChart` OR (true AND (r7.`secret` = $param9))) AND (NOT r7:`ItDrug` OR false)) }\nRETURN n { .`id` }",
+        "params": {
+          "param3": "t1",
+          "param4": false,
+          "param5": false,
+          "param8": "r",
+          "param9": false
+        }
+      }
+    ]
+  },
+  "selection_paths": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, charts: [(n)-[:`IT_TAGS`]->(n0:`ItChart`) WHERE EXISTS { MATCH (n0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE r2.`secret` = $param3 } } | n0 { .`id` }], chartsConnection: { edges: [(n)-[e0:`IT_TAGS`]->(n0:`ItChart`) WHERE EXISTS { MATCH (n0)-[:`IT_IN_CATEGORY`]->(r4:`ItCategory`) WHERE r4.`name` = $param5 } AND e0.`weight` IS NOT NULL | { node: n0 { .`id` } }] }, chartsAggregate: { `count`: COUNT { (n)-[e0:`IT_TAGS`]->(n0:`ItChart`) WHERE EXISTS { MATCH (n0)-[:`IT_IN_CATEGORY`]->(r6:`ItCategory`) WHERE EXISTS { MATCH (r6)<-[:`IT_IN_CATEGORY`]-(r7:`ItChart`) WHERE r7.`title` = $param8 } } } }, items: [(n)-[:`IT_TAGS_ITEM`]->(n0) WHERE (n0:`ItChart`:`ItResource` AND EXISTS { MATCH (n0)<-[:`IT_TAGS`]-(r9:`ItTag`) WHERE r9.`id` = $param10 }) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['ItChart', 'ItDoc']]), .`id` }] }",
+        "params": {
+          "param0": "t",
+          "param3": false,
+          "param5": "n",
+          "param8": "x",
+          "param10": "q"
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE n.`id` = $param0\nRETURN n { .`id`, charts: [(n)-[:`IT_TAGS`]->(n0:`ItChart`) WHERE (EXISTS { MATCH (n0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE (r2.`secret` = $param3) AND (true AND (r2.`secret` = $param4)) } }) AND (true AND (n0.`secret` = $param5)) | n0 { .`id` }], chartsConnection: { edges: [(n)-[e0:`IT_TAGS`]->(n0:`ItChart`) WHERE (EXISTS { MATCH (n0)-[:`IT_IN_CATEGORY`]->(r6:`ItCategory`) WHERE (r6.`name` = $param7) AND true }) AND (true AND (n0.`secret` = $param8)) AND e0.`weight` IS NOT NULL | { node: n0 { .`id` } }] }, chartsAggregate: { `count`: COUNT { (n)-[e0:`IT_TAGS`]->(n0:`ItChart`) WHERE (EXISTS { MATCH (n0)-[:`IT_IN_CATEGORY`]->(r9:`ItCategory`) WHERE (EXISTS { MATCH (r9)<-[:`IT_IN_CATEGORY`]-(r10:`ItChart`) WHERE (r10.`title` = $param11) AND (true AND (r10.`secret` = $param12)) }) AND true }) AND (true AND (n0.`secret` = $param13)) } }, items: [(n)-[:`IT_TAGS_ITEM`]->(n0) WHERE ((n0:`ItChart`:`ItResource` AND EXISTS { MATCH (n0)<-[:`IT_TAGS`]-(r14:`ItTag`) WHERE r14.`id` = $param15 })) AND ((n0:`ItChart` OR n0:`ItDoc`) AND (NOT n0:`ItChart` OR (true AND (n0.`secret` = $param16))) AND (NOT n0:`ItDoc` OR (true AND (n0.`approvedAt` IS NOT NULL)))) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['ItChart', 'ItDoc']]), .`id` }] }",
+        "params": {
+          "param0": "t",
+          "param3": false,
+          "param4": false,
+          "param5": false,
+          "param7": "n",
+          "param8": false,
+          "param11": "x",
+          "param12": false,
+          "param13": false,
+          "param15": "q",
+          "param16": false
+        }
+      }
+    ]
+  },
+  "mutation_connect": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (target_charts_0:`ItChart`:`ItResource`)\nWHERE (EXISTS { MATCH (target_charts_0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE EXISTS { MATCH (r2)-[:`IT_IN_CATEGORY`]->(r3:`ItCategory`) WHERE r3.`name` = $param4 } } })\nMERGE (n)-[:`IT_TAGS`]->(target_charts_0)\nRETURN count(*) AS _ccn_charts_0\n}\nRETURN n { __typename: 'ItTag', .`id`, .`runId` }",
+        "params": {
+          "param0": "t",
+          "param4": "n"
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (target_charts_0:`ItChart`:`ItResource`)\nWHERE (EXISTS { MATCH (target_charts_0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE (EXISTS { MATCH (r2)-[:`IT_IN_CATEGORY`]->(r3:`ItCategory`) WHERE (r3.`name` = $param4) AND true }) AND (true AND (r2.`secret` = $param5)) } }) AND (true AND (target_charts_0.`secret` = $param6))\nMERGE (n)-[:`IT_TAGS`]->(target_charts_0)\nRETURN count(*) AS _ccn_charts_0\n}\nRETURN n { __typename: 'ItTag', .`id`, .`runId` }",
+        "params": {
+          "param0": "t",
+          "param4": "n",
+          "param5": false,
+          "param6": false
+        }
+      }
+    ]
+  },
+  "mutation_delete_many": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:`ItChart`:`ItResource`)\nWHERE (EXISTS { MATCH (n)<-[:`IT_TAGS`]-(r0:`ItTag`) WHERE EXISTS { MATCH (r0)-[:`IT_TAGS`]->(r1:`ItChart`) WHERE EXISTS { MATCH (r1)-[:`IT_IN_CATEGORY`]->(r2:`ItCategory`) WHERE NOT EXISTS { MATCH (r2)<-[:`IT_IN_CATEGORY`]-(r3:`ItChart`) WHERE r3.`title` = $param4 } } } })\nDETACH DELETE n",
+        "params": {
+          "param4": "z"
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItChart`:`ItResource`)\nWHERE ((EXISTS { MATCH (n)<-[:`IT_TAGS`]-(r0:`ItTag`) WHERE EXISTS { MATCH (r0)-[:`IT_TAGS`]->(r1:`ItChart`) WHERE (EXISTS { MATCH (r1)-[:`IT_IN_CATEGORY`]->(r2:`ItCategory`) WHERE (NOT EXISTS { MATCH (r2)<-[:`IT_IN_CATEGORY`]-(r3:`ItChart`) WHERE (r3.`title` = $param4) AND (true AND (r3.`secret` = $param5)) }) AND true }) AND (true AND (r1.`secret` = $param6)) } })) AND (n.`ownerId` = $param7)\nDETACH DELETE n",
+        "params": {
+          "param4": "z",
+          "param5": false,
+          "param6": false,
+          "param7": "u1"
+        }
+      }
+    ]
+  },
+  "interface_root": {
+    "plain": [
+      {
+        "cypher": "MATCH (n:(`ItChart`|`ItDrug`))\nWHERE (n.`tenantId` = $param0 AND NOT (n.`id` = $param1))\nWITH n, CASE WHEN n:`ItChart` THEN 'ItChart' WHEN n:`ItDrug` THEN 'ItDrug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['ItChart', 'ItDrug']]), .`id`, .`tenantId` , __typename: __typename }",
+        "params": {
+          "param0": "t1",
+          "param1": "x"
+        }
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:(`ItChart`|`ItDrug`))\nWHERE ((n.`tenantId` = $param0 AND NOT (n.`id` = $param1))) AND ((n:`ItChart` OR n:`ItDrug`) AND (NOT n:`ItChart` OR (true AND (n.`secret` = $param2))) AND (NOT n:`ItDrug` OR false))\nWITH n, CASE WHEN n:`ItChart` THEN 'ItChart' WHEN n:`ItDrug` THEN 'ItDrug' END AS __typename\nRETURN n { __typename: head([__label IN labels(n) WHERE __label IN ['ItChart', 'ItDrug']]), .`id`, .`tenantId` , __typename: __typename }",
+        "params": {
+          "param2": false,
+          "param0": "t1",
+          "param1": "x"
+        }
+      }
+    ]
+  },
+  "explain_policies": {
+    "plain": [
+      {
+        "cypher": "THROW OGMError: explainPolicies requires a policy-bound model. Obtain it via ogm.withContext(ctx).model('ItTag').",
+        "params": {}
+      }
+    ],
+    "policy": [
+      {
+        "cypher": "MATCH (n:`ItTag`)\nWHERE EXISTS { MATCH (n)-[:`IT_TAGS`]->(r0:`ItChart`) WHERE (EXISTS { MATCH (r0)<-[:`IT_TAGS`]-(r1:`ItTag`) WHERE EXISTS { MATCH (r1)-[:`IT_TAGS`]->(r2:`ItChart`) WHERE (r2.`secret` = $param3) AND (true AND (r2.`secret` = $param4)) } }) AND (true AND (r0.`secret` = $param5)) }\nWITH n, [] AS __explain_outcomes, true AS __explain_visible\nWITH *\nLIMIT $options_limit\nRETURN n { __typename: 'ItTag', .`id`, .`runId` }, __explain_outcomes, __explain_visible",
+        "params": {
+          "param3": false,
+          "param4": false,
+          "param5": false,
+          "options_limit": {
+            "low": 100,
+            "high": 0
+          }
+        }
+      }
+    ]
+  }
+}
