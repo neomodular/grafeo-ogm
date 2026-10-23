@@ -1827,25 +1827,30 @@ export class SelectionCompiler {
             node.fieldName,
             propDef,
           );
-          if (cypherScope) {
-            const alias = cypherScope.register(
-              node.fieldName,
-              propDef,
-              undefined,
-              asList,
-            );
-            parts.push(`${escapeIdentifier(key)}: ${alias}`);
-          } else
-            parts.push(
-              `${escapeIdentifier(key)}: ${buildInlineCypherFieldExpr(
+          const value = cypherScope
+            ? cypherScope.register(node.fieldName, propDef, undefined, asList)
+            : buildInlineCypherFieldExpr(
                 propDef.cypherStatement,
                 nodeVar,
                 `${nodeDef.typeName}.${node.fieldName}`,
                 asList
                   ? (propDef.cypherColumnName ?? node.fieldName)
                   : undefined,
-              )}`,
-            );
+              );
+          // vNEXT — security: a node-typed `@cypher` field selected bare
+          // returns whole nodes, filtered by the target's read policy.
+          parts.push(
+            `${escapeIdentifier(key)}: ${this.guardCypherNodeValue(
+              value,
+              propDef,
+              asList,
+              nodeVar,
+              `${nodeDef.typeName}.${node.fieldName}`,
+              params,
+              paramCounter,
+              policyContext,
+            )}`,
+          );
 
           continue;
         }
@@ -2122,6 +2127,17 @@ export class SelectionCompiler {
               `${def.typeName}.${field}`,
               asList ? (prop.cypherColumnName ?? field) : undefined,
             );
+        // vNEXT — security: the target's read policy (see the main path).
+        expr = this.guardCypherNodeValue(
+          expr,
+          prop,
+          asList,
+          nodeVar,
+          `${def.typeName}.${field}`,
+          params,
+          paramCounter,
+          policyContext,
+        );
       } else expr = `${nodeVar}.${escapeIdentifier(field)}`;
       const guard =
         prop.isCypher && prop.cypherStatement
@@ -2198,6 +2214,78 @@ export class SelectionCompiler {
       paramCounter,
       policyContext,
       true,
+    );
+  }
+
+  /**
+   * vNEXT — security: a `@cypher` field whose type is a node, interface or
+   * union type, projected as a whole value (selected bare, or
+   * `select: { f: true }`). Pre-vNEXT the statement's nodes were returned
+   * with every property and NO read policy of the target type, so a
+   * policy-hidden node leaked through any type declaring such a field.
+   *
+   * Under a policy context the value is filtered by the target type's
+   * `read` clause (per member for an abstract target, via
+   * `compileNestedWhere`): a single node becomes `null` when hidden, a list
+   * loses its hidden elements. A list field in default mode projects the
+   * statement's first row, which is a node or a list of nodes, so both
+   * shapes are filtered. Returns `value` unchanged without a policy
+   * context, for a scalar-typed field, or when the target has no read
+   * clause (OGMs without `policies` emit byte-identical Cypher).
+   */
+  private guardCypherNodeValue(
+    value: string,
+    prop: PropertyDefinition,
+    asList: boolean,
+    nodeVar: string,
+    field: string,
+    params: Record<string, unknown> | undefined,
+    paramCounter: { count: number } | undefined,
+    policyContext: PolicyContextBundle | null,
+  ): string {
+    if (!policyContext || isScalarProperty(prop, this.schema)) return value;
+    const targetDef = resolveTargetDef(prop.type, this.schema);
+    if (!targetDef)
+      throw new OGMError(
+        `The @cypher field "${field}" returns unknown type "${prop.type}".`,
+      );
+    // Fail closed: without these the policy cannot be compiled, and the
+    // nodes must not be returned unfiltered.
+    if (!this.whereCompiler || !params || !paramCounter)
+      throw new OGMError(
+        `Internal: cannot enforce the read policy of "${targetDef.typeName}" on the @cypher field "${field}".`,
+      );
+    const el = `${nodeVar}__cfn`;
+    assertSafeIdentifier(el, '@cypher policy variable');
+    const where = this.compileNestedWhere({
+      node: {
+        fieldName: prop.name,
+        isScalar: true,
+        isRelationship: false,
+        isConnection: false,
+      },
+      childVar: el,
+      targetDef,
+      params,
+      paramCounter,
+      policyContext,
+      contextLabel: `@cypher field "${field}"`,
+      userWhere: undefined,
+    });
+    if (!where) return value;
+    if (asList) return `[${el} IN ${value}${where}]`;
+    if (!prop.isArray) return `head([${el} IN [${value}]${where}])`;
+    // Default-mode list field: the first row is a node or a list. The
+    // `CASE … END` source joins both types (Neo4j rejects `x IN v` when it
+    // infers `v` as a node); `l` holds the filtered list once.
+    const v = `${nodeVar}__cfv`;
+    const l = `${nodeVar}__cfl`;
+    assertSafeIdentifier(v, '@cypher policy variable');
+    assertSafeIdentifier(l, '@cypher policy variable');
+    const isList = `${v} IS :: LIST<ANY>`;
+    return (
+      `head([${v} IN [${value}] | head([${l} IN [[${el} IN CASE WHEN ${isList} THEN ${v} ELSE [${v}] END${where}]] | ` +
+      `CASE WHEN ${isList} THEN ${l} ELSE head(${l}) END])])`
     );
   }
 

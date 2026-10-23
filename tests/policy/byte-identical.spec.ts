@@ -227,3 +227,143 @@ describe('byte-identical Cypher regression', () => {
     expect(a[0].cypher).toBe(b[0].cypher);
   });
 });
+
+/**
+ * vNEXT — security: a node-typed `@cypher` field projected bare is
+ * filtered by the target's read policy. Without `policies`, with a
+ * bypass, an override, or no read clause on the target, the Cypher stays
+ * byte for byte what v2.20.0 emitted (goldens captured on 6c556de).
+ */
+describe('byte-identical: node-typed @cypher field projected bare', () => {
+  const cypherSchema = `
+type User @node {
+  id: ID! @unique
+  topPost: Post @cypher(statement: "MATCH (p:Post) RETURN p LIMIT 1", columnName: "p")
+  posts: [Post!]! @cypher(statement: "MATCH (p:Post) RETURN p", columnName: "p")
+  friends: [User!]! @relationship(type: "FRIEND", direction: OUT)
+}
+type Post @node { id: ID! @unique ownerId: String }
+type Tag @node { id: ID! @unique }
+`;
+  const selectionSet = '{ id topPost posts friends { topPost posts } }';
+  const GOLDEN = {
+    default:
+      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __sel_n_topPost\n}\nWITH n, __sel_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  RETURN head(collect(`p`)) AS __sel_n_posts\n}\nWITH n, __sel_n_topPost, __sel_n_posts\nRETURN n { .`id`, `topPost`: __sel_n_topPost, `posts`: __sel_n_posts, friends: [(n)-[:`FRIEND`]->(n0:`User`) | n0 { `topPost`: head(COLLECT { WITH n0 AS this\n  MATCH (p:Post) RETURN p LIMIT 1\n}), `posts`: head(COLLECT { WITH n0 AS this\n  MATCH (p:Post) RETURN p\n}) }] }',
+    strict:
+      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __sel_n_topPost\n}\nWITH n, __sel_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__sel_n_posts__cf_el`\n  RETURN collect(`__sel_n_posts__cf_el`) AS __sel_n_posts\n}\nWITH n, __sel_n_topPost, __sel_n_posts\nRETURN n { .`id`, `topPost`: __sel_n_topPost, `posts`: __sel_n_posts, friends: [(n)-[:`FRIEND`]->(n0:`User`) | n0 { `topPost`: head(COLLECT { WITH n0 AS this\n  MATCH (p:Post) RETURN p LIMIT 1\n}), `posts`: COLLECT { WITH n0 AS this\n  CALL {\n    WITH this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `p__cf_el`\n  WITH `p__cf_el` WHERE `p__cf_el` IS NOT NULL\n  RETURN `p__cf_el`\n} }] }',
+  };
+  const quiet = { warn: () => undefined, debug: () => undefined };
+  const postPolicy = [
+    permissive({ operations: ['read'], when: () => ({ ownerId: 'u' }) }),
+  ];
+
+  describe.each([
+    ['default', undefined],
+    ['strict', true],
+  ] as const)('%s mode', (mode, strict) => {
+    const golden = GOLDEN[mode];
+    const emit = async (
+      run: (driver: Driver) => Promise<unknown>,
+    ): Promise<string> => {
+      const r: Recorded[] = [];
+      await run(createMockDriver(r));
+      return r[0].cypher;
+    };
+
+    it('no policies', async () => {
+      expect(
+        await emit((driver) =>
+          new OGM({ typeDefs: cypherSchema, driver, strict, logger: quiet })
+            .model('User')
+            .find({ selectionSet }),
+        ),
+      ).toBe(golden);
+    });
+
+    it('policies on another type only (no read clause on the target)', async () => {
+      expect(
+        await emit((driver) =>
+          new OGM({
+            typeDefs: cypherSchema,
+            driver,
+            strict,
+            logger: quiet,
+            policies: {
+              Tag: [permissive({ operations: ['read'], when: () => ({}) })],
+            },
+          })
+            .withContext({})
+            .model('User')
+            .find({ selectionSet }),
+        ),
+      ).toBe(golden);
+    });
+
+    it('ogm.unsafe.bypassPolicies() and per-call unsafe', async () => {
+      const make = (driver: Driver) =>
+        new OGM({
+          typeDefs: cypherSchema,
+          driver,
+          strict,
+          logger: quiet,
+          policies: { Post: postPolicy },
+        });
+      expect(
+        await emit((driver) =>
+          make(driver)
+            .unsafe.bypassPolicies()
+            .model('User')
+            .find({ selectionSet }),
+        ),
+      ).toBe(golden);
+      expect(
+        await emit((driver) =>
+          make(driver)
+            .withContext({})
+            .model('User')
+            .find({ selectionSet, unsafe: { bypassPolicies: true } }),
+        ),
+      ).toBe(golden);
+    });
+
+    it('an override that short-circuits the target policy', async () => {
+      expect(
+        await emit((driver) =>
+          new OGM({
+            typeDefs: cypherSchema,
+            driver,
+            strict,
+            logger: quiet,
+            policies: {
+              Post: [
+                override({ operations: ['*'], when: () => true }),
+                ...postPolicy,
+              ],
+            },
+          })
+            .withContext({})
+            .model('User')
+            .find({ selectionSet }),
+        ),
+      ).toBe(golden);
+    });
+
+    it('a read clause on the target guards the value', async () => {
+      const cypher = await emit((driver) =>
+        new OGM({
+          typeDefs: cypherSchema,
+          driver,
+          strict,
+          logger: quiet,
+          policies: { Post: postPolicy },
+        })
+          .withContext({})
+          .model('User')
+          .find({ selectionSet }),
+      );
+      expect(cypher).not.toBe(golden);
+      expect(cypher).toContain('n__cfn');
+      expect(cypher).toContain('n0__cfn');
+    });
+  });
+});
