@@ -23,6 +23,7 @@ import {
   mergeParams,
 } from '../utils/validation';
 import {
+  coerceWhereValue,
   coerceWriteValue,
   resolveDefaultWriteValue,
   wrapListItemExpr,
@@ -2164,11 +2165,12 @@ export class MutationCompiler {
           // rebound under `node`. Pre-2.4.8 it was sent as-is: every lookup
           // was null, so the array connect silently linked nothing.
           const where = raw.where;
-          const item =
+          const rebound =
             isPlainObject(where) &&
             !Object.keys(where).some((k) => CONNECTION_WHERE_KEYS.has(k))
               ? { ...raw, where: { node: where } }
               : raw;
+          const item = this.coerceConnectItemWhere(rebound, targetNodeDef);
           const edge = item.edge as Record<string, unknown> | undefined;
           if (!edge) return item;
           const cleaned: Record<string, unknown> = {};
@@ -3573,6 +3575,37 @@ export class MutationCompiler {
     return parts.join(', ');
   }
 
+  /**
+   * vNEXT — coerce the `where.node` values of one UNWIND fast-path connect
+   * item to the stored representation, as the WhereCompiler does for every
+   * other filter (`coerceWhereValue`). Pre-vNEXT the values were bound raw:
+   * a BigInt / Int filter given as an integer string (the generated BigInt
+   * input type) or a `bigint` never equalled the stored Long, so an array
+   * connect silently linked nothing while the same item given alone (per-
+   * item path, WhereCompiler) linked its target.
+   */
+  private coerceConnectItemWhere(
+    item: Record<string, unknown>,
+    targetNodeDef: NodeDefinition,
+  ): Record<string, unknown> {
+    const where = item.where;
+    if (!isPlainObject(where) || !isPlainObject(where.node)) return item;
+    const nodeWhere = where.node;
+    let coerced: Record<string, unknown> | undefined;
+    for (const [key, val] of Object.entries(nodeWhere)) {
+      const { baseProp } = this.parseOperatorSuffix(key);
+      const next = coerceWhereValue(
+        val,
+        targetNodeDef.properties.get(baseProp),
+        key.slice(baseProp.length),
+      );
+      if (next === val) continue;
+      coerced ??= { ...nodeWhere };
+      coerced[key] = next;
+    }
+    return coerced ? { ...item, where: { ...where, node: coerced } } : item;
+  }
+
   private extractConnectWhereConditions(
     item: Record<string, unknown>,
     targetVar: string,
@@ -3595,7 +3628,7 @@ export class MutationCompiler {
       const suffix = key.slice(baseProp.length);
       const valueRef = wrapWhereParam(
         `${itemVar}.where.node.${key}`,
-        nodeWhere[key],
+        coerceWhereValue(nodeWhere[key], propDef, suffix),
         propDef,
         suffix,
       );
