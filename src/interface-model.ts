@@ -253,6 +253,8 @@ export class InterfaceModel<
     nodeVar: string,
     paramCounter: { count: number },
     paramsTarget: Record<string, unknown>,
+    /** v2.12.3 — `count()`: AND each member's `count` restrictives onto its branch. */
+    countRestrictives = false,
   ): { cypher: string; preludes: string[] } {
     // A firing interface-level override lifts every branch.
     if (!bundle || bundle.resolved.overridden)
@@ -265,6 +267,8 @@ export class InterfaceModel<
       bundle,
       paramCounter,
       memberFallbackOp(bundle.operation),
+      0,
+      countRestrictives,
     );
     if (clause.cypher === null) return { cypher: '', preludes: [] };
     mergeParams(paramsTarget, clause.params);
@@ -501,6 +505,28 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<Record<string, unknown>> {
+    return this.runAggregate(params, false);
+  }
+
+  /**
+   * Shared body of `aggregate` and `count`. Both resolve each implementer's
+   * `aggregate` policies, falling back to `read`; `count()` additionally
+   * ANDs each implementer's `count` restrictives onto its branch
+   * (`countRestrictives`, v2.12.3 — see `applyCountRestrictives`;
+   * pre-2.12.3 a `count` restrictive was never enforced). The permissives,
+   * default-deny, `PolicyDeniedError` and the audit `operation`
+   * (`aggregate`) are unchanged.
+   */
+  private async runAggregate(
+    params: {
+      where?: TWhere;
+      aggregate: { count?: boolean; [field: string]: boolean | undefined };
+      labels?: string[];
+      context?: ExecutionContext;
+      unsafe?: UnsafeOptions;
+    },
+    countRestrictives: boolean,
+  ): Promise<Record<string, unknown>> {
     let policyContext = this.resolveInterfacePolicy('aggregate', params.unsafe);
     if (!policyContext)
       policyContext = this.resolveInterfacePolicy('read', params.unsafe);
@@ -541,6 +567,7 @@ export class InterfaceModel<
       'n',
       paramCounter,
       allParams,
+      countRestrictives,
     );
     if (policyClause.preludes.length > 0)
       cypherParts.push(...policyClause.preludes);
@@ -708,13 +735,19 @@ export class InterfaceModel<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number> {
-    const result = await this.aggregate({
-      where: params?.where,
-      aggregate: { count: true },
-      labels: params?.labels,
-      context: params?.context,
-      unsafe: params?.unsafe,
-    });
+    // v2.12.3 — `count()` also enforces each implementer's `count`
+    // restrictives; pre-2.12.3 this called `aggregate()`, which never
+    // resolved them.
+    const result = await this.runAggregate(
+      {
+        where: params?.where,
+        aggregate: { count: true },
+        labels: params?.labels,
+        context: params?.context,
+        unsafe: params?.unsafe,
+      },
+      true,
+    );
     return (result.count as number) ?? 0;
   }
 

@@ -1,5 +1,6 @@
 import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
+import { applyCountRestrictives } from '../policy/count-restrictives';
 import { isReadRestrictive, NO_ROOT_POLICY } from '../policy/types';
 import type {
   Operation,
@@ -450,6 +451,10 @@ export class WhereCompiler {
    * `fallbackOp`: resolve it for a type with NO policy for `op` — the
    * `aggregate` → `read` fallback `Model.aggregate` applies at the root.
    *
+   * `countRestrictives` (v2.12.3): AND each member's `count` restrictives
+   * onto its clause, as `Model.count` does at the root — see
+   * `applyCountRestrictives`.
+   *
    * `preludes` (for `@cypher` fields referenced by a policy) are returned
    * to the caller; nested contexts reject them.
    *
@@ -464,6 +469,7 @@ export class WhereCompiler {
     fallbackOp?: Operation,
     /** v2.12.2 — depth of the node this clause guards (root: 0). */
     depth = 0,
+    countRestrictives = false,
   ): {
     cypher: string | null;
     params: Record<string, unknown>;
@@ -479,6 +485,7 @@ export class WhereCompiler {
         paramCounter,
         fallbackOp,
         depth,
+        countRestrictives,
       );
 
     const params: Record<string, unknown> = {};
@@ -495,6 +502,7 @@ export class WhereCompiler {
         paramCounter,
         fallbackOp,
         depth,
+        countRestrictives,
       );
       mergeParams(params, clause.params);
       // Each member compiles in its own `@cypher` scope; chaining two
@@ -527,6 +535,7 @@ export class WhereCompiler {
     paramCounter: { count: number },
     fallbackOp?: Operation,
     depth = 0,
+    countRestrictives = false,
   ): {
     cypher: string | null;
     params: Record<string, unknown>;
@@ -539,6 +548,13 @@ export class WhereCompiler {
       resolvedOp = fallbackOp;
       resolved = policyContext.resolveForType(typeName, fallbackOp);
     }
+    // v2.12.3 — `count()` also enforces the member's `count` restrictives.
+    if (countRestrictives)
+      resolved = applyCountRestrictives(
+        resolved,
+        policyContext.resolveForType(typeName, 'count'),
+        policyContext.ctx,
+      );
     if (!nodeDef || !resolved || resolved.overridden)
       return { cypher: null, params: {}, preludes: [] };
     const compiled = this.compile(undefined, varName, nodeDef, paramCounter, {

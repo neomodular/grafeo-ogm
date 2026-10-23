@@ -36,6 +36,7 @@ import {
   interpretExplainRow,
   resolveExplainLimit,
 } from './policy/explain';
+import { applyCountRestrictives } from './policy/count-restrictives';
 import { hashCtx, projectResolution } from './policy/resolver';
 import { NO_ROOT_POLICY } from './policy/types';
 import type {
@@ -1238,6 +1239,29 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<{ count?: number; [field: string]: unknown }> {
+    return this.runAggregate(params, false);
+  }
+
+  /**
+   * Shared body of `aggregate` and `count`. Both resolve the type's
+   * `aggregate` policies, falling back to `read`; `count()` additionally
+   * ANDs the type's `count` restrictives onto that clause
+   * (`countRestrictives`, v2.12.3 — see `applyCountRestrictives`; pre-2.12.3
+   * a `count` restrictive was never enforced). Everything else — the
+   * permissives, default-deny, `PolicyDeniedError` and the audit
+   * `operation` (`aggregate`) — is unchanged.
+   */
+  private async runAggregate(
+    params: {
+      where?: TWhere;
+      aggregate: { count?: boolean; [field: string]: boolean | undefined };
+      labels?: string[];
+      fulltext?: TFulltext;
+      context?: ExecutionContext;
+      unsafe?: UnsafeOptions;
+    },
+    countRestrictives: boolean,
+  ): Promise<{ count?: number; [field: string]: unknown }> {
     // aggregate prefers 'aggregate' policies but falls back to 'read'
     // per design decision #7. The fallback only applies when no
     // 'aggregate'-specific policy is registered for this type.
@@ -1246,6 +1270,22 @@ export class Model<
     let policyContext = this.resolvePolicyContext('aggregate', params.unsafe);
     if (!policyContext || policyContext.resolved === NO_ROOT_POLICY)
       policyContext = this.resolvePolicyContext('read', params.unsafe);
+    if (countRestrictives && policyContext) {
+      const base =
+        policyContext.resolved === NO_ROOT_POLICY
+          ? null
+          : policyContext.resolved;
+      const resolved = applyCountRestrictives(
+        base,
+        policyContext.resolveForType(this.nodeDef.typeName, 'count'),
+        policyContext.ctx,
+      );
+      // `applyCountRestrictives` returns `base` itself when nothing is
+      // added, so a type without count-only restrictives keeps its bundle
+      // (and `NO_ROOT_POLICY` keeps its identity).
+      if (resolved && resolved !== base)
+        policyContext = { ...policyContext, resolved };
+    }
     this.assertNotDeniedAtCompile(policyContext, 'aggregate');
 
     const cypherParts: string[] = [];
@@ -1551,14 +1591,19 @@ export class Model<
     context?: ExecutionContext;
     unsafe?: UnsafeOptions;
   }): Promise<number> {
-    const result = await this.aggregate({
-      where: params?.where,
-      aggregate: { count: true },
-      labels: params?.labels,
-      fulltext: params?.fulltext,
-      context: params?.context,
-      unsafe: params?.unsafe,
-    });
+    // v2.12.3 — `count()` also enforces the type's `count` restrictives;
+    // pre-2.12.3 this called `aggregate()`, which never resolved them.
+    const result = await this.runAggregate(
+      {
+        where: params?.where,
+        aggregate: { count: true },
+        labels: params?.labels,
+        fulltext: params?.fulltext,
+        context: params?.context,
+        unsafe: params?.unsafe,
+      },
+      true,
+    );
     return (result.count as number) ?? 0;
   }
 

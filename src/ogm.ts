@@ -200,6 +200,38 @@ function warnCustomNodeLabels(
   }
 }
 
+/**
+ * v2.12.3 — warn once per permissive that lists `count` but none of the
+ * operations `count()` resolves (`aggregate`, `read`, or `'*'`). `count()`
+ * takes its permissives from the type's `aggregate` policies, falling back
+ * to `read`, exactly as `aggregate()` does; a count-only permissive grants
+ * nothing, and honouring it would change what a count returns, so 2.x
+ * keeps ignoring it and says so. `count` RESTRICTIVES are enforced since
+ * v2.12.3 (see `src/policy/count-restrictives.ts`).
+ */
+function warnCountPermissives(
+  registry: ReadonlyMap<string, ReadonlyArray<Policy>>,
+  strictMode: StrictMode,
+): void {
+  for (const [typeName, policies] of registry)
+    policies.forEach((p, index) => {
+      if (p.kind !== 'permissive' || !p.operations.includes('count')) return;
+      if (
+        p.operations.some((o) => o === 'read' || o === 'aggregate' || o === '*')
+      )
+        return;
+      const name = p.name ?? `${typeName}.permissive[${index}]`;
+      const operations = p.operations.map((o) => `'${o}'`).join(', ');
+      strictMode.notice(
+        'count-permissive-ignored',
+        `${typeName}:${name}`,
+        `Policy "${name}" on "${typeName}" is a permissive for count (${operations}) and grants nothing: ` +
+          `count() uses the type's aggregate permissives, falling back to its read permissives, ` +
+          `and there is no count-only grant in 2.x. Its count restrictives are enforced since v2.12.3.`,
+      );
+    });
+}
+
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
   C extends PolicyContext = PolicyContext,
@@ -364,6 +396,7 @@ export class OGM<
 
     this.policyRegistry = registry;
     this.policyResolver = new PolicyResolver(registry, this.schema);
+    warnCountPermissives(registry, strictMode);
     this.policyDefaults = {
       onDeny: config.policyDefaults?.onDeny ?? 'empty',
       auditMetadata: config.policyDefaults?.auditMetadata ?? true,

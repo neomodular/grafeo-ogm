@@ -142,6 +142,95 @@ const AGGREGATE_FIXTURES: Record<string, PoliciesByModel> = {
     FIXTURES['implementer whose permissives are all gated off'],
 };
 
+/**
+ * v2.12.3 — `count()` ANDs each member's `count` restrictives onto its
+ * aggregate / read clause; a `count` permissive grants nothing (2.x).
+ */
+const COUNT_FIXTURES: Record<string, PoliciesByModel> = {
+  'member count restrictive': {
+    Res: [tenant],
+    Chart: [
+      permissive({
+        operations: ['read'],
+        name: 'chart.own',
+        when: (c) => ({ ownerId: (c as Ctx).uid }),
+      }),
+      restrictive({
+        operations: ['count'],
+        name: 'chart.count-no-secret',
+        when: () => ({ secret: false }),
+      }),
+    ],
+    Drug: [
+      permissive({
+        operations: ['read'],
+        name: 'drug.valid',
+        when: () => ({ valid: true }),
+      }),
+    ],
+  },
+  'interface count restrictive': {
+    Res: [
+      restrictive({
+        operations: ['count'],
+        name: 'res.count-tenant',
+        when: (c) => ({ tenantId: (c as Ctx).tid }),
+      }),
+    ],
+    Chart: [
+      permissive({ operations: ['read'], name: 'chart.all', when: () => ({}) }),
+    ],
+    Drug: [
+      permissive({ operations: ['read'], name: 'drug.all', when: () => ({}) }),
+    ],
+  },
+  'count restrictive on a member with no other policy': {
+    Chart: [
+      restrictive({
+        operations: ['count'],
+        name: 'chart.count-no-secret',
+        when: () => ({ secret: false }),
+      }),
+    ],
+  },
+  'count permissive (ignored)': {
+    Chart: [
+      permissive({
+        operations: ['read'],
+        name: 'chart.own',
+        when: (c) => ({ ownerId: (c as Ctx).uid }),
+      }),
+      permissive({
+        operations: ['count'],
+        name: 'chart.count',
+        when: () => ({}),
+      }),
+    ],
+    Drug: [
+      permissive({
+        operations: ['read'],
+        name: 'drug.valid',
+        when: () => ({ valid: true }),
+      }),
+    ],
+  },
+  'count restrictive beside a count override': {
+    Chart: [
+      override({
+        operations: ['count'],
+        name: 'chart.count-admin',
+        when: () => true,
+      }),
+      permissive({ operations: ['read'], name: 'chart.all', when: () => ({}) }),
+      restrictive({
+        operations: ['count'],
+        name: 'chart.count-no-secret',
+        when: () => ({ secret: false }),
+      }),
+    ],
+  },
+};
+
 interface Recorded {
   cypher: string;
   params: Record<string, unknown>;
@@ -241,6 +330,23 @@ describe.each(Object.entries(AGGREGATE_FIXTURES))(
       },
     );
 
+    it.each(MEMBERS)(
+      "the %s branch equals that member's own Model.count clause",
+      async (member) => {
+        const { bound, capture } = setup(policies);
+        const iface = await capture(() => bound.interfaceModel('Res').count());
+        const model = await capture(() => bound.model(member).count());
+        expect(shape(branchOf(iface, member), iface.params)).toEqual(
+          shape(whereOf(model) || 'true', model.params),
+        );
+      },
+    );
+  },
+);
+
+describe.each(Object.entries(COUNT_FIXTURES))(
+  'InterfaceModel.count branches — %s',
+  (_name, policies) => {
     it.each(MEMBERS)(
       "the %s branch equals that member's own Model.count clause",
       async (member) => {

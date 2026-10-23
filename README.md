@@ -1795,6 +1795,16 @@ policies: {
 }
 ```
 
+#### Counting
+
+`count()` is governed by the same policies as `aggregate()`: the type's `aggregate` policies, falling back to its `read` policies when it has none. Those decide the grant (permissives), the override short-circuit and default-deny. In addition, since v2.12.3, every **restrictive** registered on `count` is ANDed onto that clause. A restrictive that already applied because it also lists the resolved operation (`['read', 'count']`) is not added twice, so such policy sets compile exactly as before; a type whose only policy is a `count` restrictive counts the rows the restrictive admits. `InterfaceModel.count` does this per implementer, so each branch is exactly what that member's own `count()` enforces, and an interface-level `count` restrictive reaches every implementer.
+
+A **permissive** registered on `count` alone grants nothing: there is no count-only grant in 2.x, because honouring one would change what `count()` returns. The OGM logs a warning once per such policy at construction (`count-permissive-ignored`). A permissive that also lists `read` or `aggregate` (or `'*'`) takes part through that operation, as before.
+
+The audit metadata of a `count()` reports `operation: 'aggregate'`. On `Model.count`, `policiesEvaluated` lists the `count` restrictives that applied after the `aggregate` / `read` ones; `InterfaceModel.count` keeps listing only the interface's own resolved policies. `count` restrictives apply to `count()` only: `aggregate({ aggregate: { count: true } })` follows the `aggregate` / `read` policies, as before. Relationship `<rel>Aggregate { count }` fields and connection `totalCount` are selections of a read and apply the target type's `read` policy (see [Relationship aggregate selections](#relationship-aggregate-selections)).
+
+> **Before v2.12.3** a `restrictive({ operations: ['count'] })` was never enforced: `count()` resolved only the `aggregate` / `read` policies, so a count that was meant to leave rows out counted them. Policy sets without a count-only restrictive compile the same Cypher as before.
+
 #### Relationships and nested writes
 
 Policies protect a **type**, wherever it is reached from. When a bound model reaches another type through a relationship, that type's own policies apply, whether or not the root type has any.
