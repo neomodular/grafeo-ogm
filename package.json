@@ -62,6 +62,7 @@
     ".": {
       "import": {
         "types": "./dist/esm/index.d.ts",
+        "node": "./dist/node/index.mjs",
         "default": "./dist/esm/index.js"
       },
       "require": {
@@ -72,6 +73,7 @@
     "./testing": {
       "import": {
         "types": "./dist/esm/testing/index.d.ts",
+        "node": "./dist/node/testing.mjs",
         "default": "./dist/esm/testing/index.js"
       },
       "require": {
@@ -82,7 +84,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "pnpm run clean && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"const fs=require('fs');fs.writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}\\n');fs.writeFileSync('dist/esm/package.json','{\\\"type\\\":\\\"module\\\"}\\n');\"",
+    "build": "pnpm run clean && tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json && node -e \"const fs=require('fs');fs.writeFileSync('dist/cjs/package.json','{\\\"type\\\":\\\"commonjs\\\"}\\n');fs.writeFileSync('dist/esm/package.json','{\\\"type\\\":\\\"module\\\"}\\n');\" && node scripts/build/esm-postbuild.cjs",
     "test": "jest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
