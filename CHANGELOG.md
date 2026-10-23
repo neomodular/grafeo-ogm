@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.12.6 (2026-10-23) — generated types compile with custom scalars
+
+> **Patch release.** A schema that declares a custom `scalar` now generates a TypeScript file that compiles. Generated output for schemas without custom scalars is byte-identical, and runtime behaviour is unchanged.
+
+### Fixed
+
+- **A custom `scalar` made the generated file fail to compile.** The parser did not record `scalar` declarations and the type emitters only knew the built-in scalars, so a field of type `JSON` or `Email` was emitted as `Scalars["Email"]["input"]` (TS2339: no such entry) or as a bare `Email` (TS2304: cannot find name; a scalar named `JSON` silently matched TypeScript's global `JSON` object instead). Each custom scalar now gets a `Scalars` entry, `{ input: any; output: any }`, as `@neo4j/graphql-ogm`'s codegen emitted, and node, interface, relationship-property, create, update, where and `select` types use it. Where inputs offer equality, `_NOT`, `_IN` and `_NOT_IN` for a custom scalar, the operators that make sense for any value, as `@neo4j/graphql` does; the string operators the broken file listed are gone. A `@cypher` field returning a custom scalar can be filtered like a built-in one. Redeclaring a built-in (`scalar DateTime`) keeps its built-in mapping.
+
 ## 2.12.5 (2026-10-23) — `db push` leaves constraints on secondary `@node` labels alone
 
 > **Patch release.** `db push --force-drop` no longer drops a constraint it did not create, and a name the schema declares twice is reported instead of shown as in sync. Everything else `db push` plans is unchanged. Runtime and generated types are unchanged.
