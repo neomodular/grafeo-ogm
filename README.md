@@ -1604,6 +1604,22 @@ await users.find({ selectionSet: '{ friends { friends { friends { friends { frie
 
 A `Model` read projects at most 5 levels of relationships, connections and `<rel>Aggregate` below the root (an `InterfaceModel` read 12), and 2.x silently cut a deeper selection off at that level. Strict mode throws instead, so a truncated result is never mistaken for missing data. Raise the limit per model with `model.maxDepth = 8`. The warning code is `selection-max-depth`, logged once per OGM instance, limit and field.
 
+#### 35. A union member's `@cypher` field (since vNEXT)
+
+```graphql
+union Item = Post | Doc
+type Post @node { id: ID! title: String label: String @cypher(statement: "RETURN 'post:' + this.title AS v", columnName: "v") }
+type Doc  @node { id: ID! body: String  label: String @cypher(statement: "RETURN 'doc:' + this.body AS v",  columnName: "v") }
+```
+
+```typescript
+await users.find({ selectionSet: '{ items { ... on Post { label } ... on Doc { label } } }' });
+// default: Doc items get null — every member runs Post's statement (and warns)
+// strict:  Doc items get 'doc:…'  — CASE WHEN n0:Post THEN <Post's statement> WHEN n0:Doc THEN <Doc's> END
+```
+
+A union has no fields of its own, so 2.x projected a `@cypher` field selected on a union (through member fragments or bare, in a relationship or a connection `node`) with the first member's statement for every member. Strict mode runs each member's own statement (a member that declares the field as a stored property reads it). The warning is logged only when the selected members' statements actually differ; unions whose members share one statement compile as before in both modes. The warning code is `union-member-cypher-field`, logged once per OGM instance, union and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

@@ -262,3 +262,46 @@ describe('strict item 31 — a node-typed @cypher field with a sub-selection', (
     ).rejects.toThrow(/arguments on the @cypher field "RsUser.bestPet"/);
   });
 });
+
+describe("strict item 35 — a union member fragment's @cypher field", () => {
+  it('default warns once, only when the statements differ', async () => {
+    const warns: string[] = [];
+    await compileReadShape(
+      readShapes['union cypher: member fragments, statements differ'],
+      undefined,
+      warns,
+    );
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain(
+      'The @cypher field "label" selected on union "RsItem" runs the statement of its first member',
+    );
+    const quiet: string[] = [];
+    await compileReadShape(
+      readShapes['union cypher: member fragments, same statement'],
+      undefined,
+      quiet,
+    );
+    expect(quiet).toEqual([]);
+  });
+
+  it("strict projects each member's own statement", async () => {
+    for (const name of [
+      'union cypher: member fragments, statements differ',
+      'union cypher: connection member fragments',
+    ]) {
+      const [cypher] = await compileReadShape(readShapes[name], true);
+      expect(cypher).toContain(
+        "`label`: CASE WHEN n0:`RsPost` THEN head(COLLECT { WITH n0 AS this\n  RETURN 'p:' + this.title AS v\n}) " +
+          "WHEN n0:`RsDoc` THEN head(COLLECT { WITH n0 AS this\n  RETURN 'd:' + this.body AS v\n}) END",
+      );
+    }
+  });
+
+  it('strict keeps the shared projection when the statements are the same', async () => {
+    const [cypher] = await compileReadShape(
+      readShapes['union cypher: member fragments, same statement'],
+      true,
+    );
+    expect(cypher).not.toContain('CASE WHEN n0:`RsPost` THEN head(COLLECT');
+  });
+});

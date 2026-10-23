@@ -28,5 +28,14 @@
   ],
   "cypher node field: nested sub-selection": [
     "MATCH (n:`RsUser`)\nRETURN n { friends: [(n)-[:`RS_FRIEND`]->(n0:`RsUser`) | n0 {  }] }"
+  ],
+  "union cypher: member fragments, statements differ": [
+    "MATCH (n:`RsUser`)\nRETURN n { items: [(n)-[:`RS_HAS_ITEM`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['RsPost', 'RsDoc', 'RsNote']]), `label`: head(COLLECT { WITH n0 AS this\n  RETURN 'p:' + this.title AS v\n}) }] }"
+  ],
+  "union cypher: connection member fragments": [
+    "MATCH (n:`RsUser`)\nRETURN n { itemsConnection: { edges: [(n)-[e0:`RS_HAS_ITEM`]->(n0) | { node: n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['RsPost', 'RsDoc', 'RsNote']]), `label`: head(COLLECT { WITH n0 AS this\n  RETURN 'p:' + this.title AS v\n}) } }] } }"
+  ],
+  "union cypher: member fragments, same statement": [
+    "MATCH (n:`RsUser`)\nRETURN n { items: [(n)-[:`RS_HAS_ITEM`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['RsPost', 'RsDoc', 'RsNote']]), `label`: head(COLLECT { WITH n0 AS this\n  RETURN 'p:' + this.title AS v\n}) }] }"
   ]
 }

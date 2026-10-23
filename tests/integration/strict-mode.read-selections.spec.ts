@@ -50,12 +50,16 @@ const typeDefs = /* GraphQL */ `
     rank: Int
     secret: Boolean
     owners: [LrUser!]! @relationship(type: "LR_HAS_ITEM", direction: IN)
+    label: String
+      @cypher(statement: "RETURN 'post:' + this.title AS v", columnName: "v")
   }
   type LrDoc @node {
     id: ID! @unique
     runId: String
     body: String
     rank: Int
+    label: String
+      @cypher(statement: "RETURN 'doc:' + this.body AS v", columnName: "v")
   }
 `;
 
@@ -380,6 +384,55 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
       ).rejects.toThrow(
         /Unknown field "titel" in selectionSet on type "LrPost"/,
       );
+    });
+  });
+
+  describe("strict item 35 — a union member fragment's @cypher field", () => {
+    const labels = async (
+      strict: boolean | undefined,
+      selectionSet: string,
+    ) => {
+      const rows = (await ogm(strict)
+        .model('LrUser')
+        .find({ where: { id: id('a') }, selectionSet })) as Row[];
+      return (rows[0].items as Row[]).map((i) => i.label).sort();
+    };
+    const viaFragments =
+      '{ items { ... on LrPost { label } ... on LrDoc { label } } }';
+    const viaConnection =
+      '{ itemsConnection { edges { node { ... on LrPost { label } ... on LrDoc { label } } } } }';
+
+    it("default: every member runs the first member's statement, and warns once", async () => {
+      expect(await labels(undefined, viaFragments)).toEqual([
+        null, // the LrDoc ran 'post:' + this.title
+        'post:graph',
+        'post:hello',
+      ]);
+      const w = warns.filter((x) =>
+        x.includes('runs the statement of its first member'),
+      );
+      expect(w).toHaveLength(1);
+    });
+
+    it('strict: each member runs its own statement (list and connection)', async () => {
+      expect(await labels(true, viaFragments)).toEqual([
+        'doc:manual',
+        'post:graph',
+        'post:hello',
+      ]);
+      const rows = (await ogm(true)
+        .model('LrUser')
+        .find({
+          where: { id: id('a') },
+          selectionSet: viaConnection,
+        })) as Row[];
+      const edges = (rows[0].itemsConnection as { edges: Row[] }).edges;
+      expect(edges.map((e) => (e.node as Row).label).sort()).toEqual([
+        'doc:manual',
+        'post:graph',
+        'post:hello',
+      ]);
+      expect(warns).toEqual([]);
     });
   });
 });

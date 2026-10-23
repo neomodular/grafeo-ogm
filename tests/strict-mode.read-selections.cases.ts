@@ -17,6 +17,7 @@ export const readTypeDefs = /* GraphQL */ `
     locs: [Point!]
     friends: [RsUser!]! @relationship(type: "RS_FRIEND", direction: OUT)
     pets: [RsPet!]! @relationship(type: "RS_HAS_PET", direction: OUT)
+    items: [RsItem!]! @relationship(type: "RS_HAS_ITEM", direction: OUT)
     bestPet: RsPet
       @cypher(
         statement: "MATCH (this)-[:RS_HAS_PET]->(p) RETURN p LIMIT 1"
@@ -31,6 +32,24 @@ export const readTypeDefs = /* GraphQL */ `
   type RsPet @node {
     id: ID! @unique
     name: String
+  }
+  union RsItem = RsPost | RsDoc | RsNote
+  type RsPost @node {
+    id: ID! @unique
+    title: String
+    label: String
+      @cypher(statement: "RETURN 'p:' + this.title AS v", columnName: "v")
+  }
+  type RsDoc @node {
+    id: ID! @unique
+    body: String
+    label: String
+      @cypher(statement: "RETURN 'd:' + this.body AS v", columnName: "v")
+  }
+  type RsNote @node {
+    id: ID! @unique
+    label: String
+      @cypher(statement: "RETURN 'p:' + this.title AS v", columnName: "v")
   }
 `;
 
@@ -76,6 +95,21 @@ export const readShapes: Record<string, ReadRun> = {
   'cypher node field: nested sub-selection': (ogm) =>
     ogm.model('RsUser').find({
       selectionSet: '{ friends { bestPet { name } } }',
+    }),
+  'union cypher: member fragments, statements differ': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet:
+        '{ items { ... on RsPost { label } ... on RsDoc { label } } }',
+    }),
+  'union cypher: connection member fragments': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet:
+        '{ itemsConnection { edges { node { ... on RsPost { label } ... on RsDoc { label } } } } }',
+    }),
+  'union cypher: member fragments, same statement': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet:
+        '{ items { ... on RsPost { label } ... on RsNote { label } } }',
     }),
 };
 

@@ -1775,6 +1775,26 @@ export class SelectionCompiler {
 
         assertSafeIdentifier(node.fieldName, 'selection field');
 
+        // vNEXT — strict item 35: a union's `@cypher` field whose members
+        // declare different statements.
+        if (unionMembers && unionMembers.length > 0) {
+          const perMember = this.compileUnionMemberCypherScalar(
+            node,
+            key,
+            nodeVar,
+            nodeDef,
+            unionMembers,
+            cypherScope,
+            params,
+            paramCounter,
+            policyContext,
+          );
+          if (perMember) {
+            parts.push(perMember);
+            continue;
+          }
+        }
+
         if (isAbstract && node.typeConditions) {
           const conditional = this.compileFragmentScalar(
             node,
@@ -2049,11 +2069,21 @@ export class SelectionCompiler {
     params?: Record<string, unknown>,
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
+    /**
+     * vNEXT — strict item 35: project each type's own field even when the
+     * abstract type declares it as `@cypher` (a union's merged definition
+     * carries only its first member's statement).
+     */
+    perMember = false,
   ): string | null {
     // v2.5.3 — `fieldByType`: sibling fragments selected different fields
     // under this key, so each type projects its own field.
     const perType = node.fieldByType;
-    if (!perType && nodeDef.properties.get(node.fieldName)?.isCypher)
+    if (
+      !perType &&
+      !perMember &&
+      nodeDef.properties.get(node.fieldName)?.isCypher
+    )
       return null;
     const members: {
       def: NodeDefinition;
@@ -2106,6 +2136,69 @@ export class SelectionCompiler {
       return `WHEN ${nodeVar}:${nodeLabelExpr(def)}${guard} THEN ${expr}`;
     });
     return `${escapeIdentifier(key)}: CASE ${branches.join(' ')} END`;
+  }
+
+  /**
+   * vNEXT — strict item 35. A union type has no fields of its own: its
+   * merged definition carries the first member's definition of each
+   * field, so a `@cypher` field selected on a union (through member
+   * fragments, or bare) ran the FIRST member's statement for every
+   * member. When the selected members' statements differ, 2.x keeps that
+   * projection and warns; strict mode projects each member's own field
+   * (`CASE WHEN n:A THEN <A's statement> WHEN n:B THEN … END`).
+   *
+   * Returns `null` (caller keeps the regular projection) when the field
+   * is not `@cypher` on the union, or every selected member declares the
+   * same statement.
+   */
+  private compileUnionMemberCypherScalar(
+    node: SelectionNode,
+    key: string,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    unionMembers: readonly string[],
+    cypherScope: CypherFieldScope | null,
+    params: Record<string, unknown> | undefined,
+    paramCounter: { count: number } | undefined,
+    policyContext: PolicyContextBundle | null,
+  ): string | null {
+    const merged = nodeDef.properties.get(node.fieldName);
+    if (!merged?.isCypher || node.fieldByType) return null;
+    const types = node.typeConditions
+      ? [...new Set(node.typeConditions.flatMap((t) => this.possibleTypes(t)))]
+      : [...unionMembers];
+    const differs = types.some((t) => {
+      const own = this.schema.nodes.get(t)?.properties.get(node.fieldName);
+      return (
+        own !== undefined &&
+        (own.isCypher !== merged.isCypher ||
+          own.cypherStatement !== merged.cypherStatement ||
+          own.cypherColumnName !== merged.cypherColumnName ||
+          own.isArray !== merged.isArray)
+      );
+    });
+    if (!differs) return null;
+    if (!this.strictMode.strict) {
+      this.strictMode.warn(
+        'union-member-cypher-field',
+        `${nodeDef.typeName}.${node.fieldName}`,
+        `The @cypher field "${node.fieldName}" selected on union "${nodeDef.typeName}" runs the statement of its first member for every member, ` +
+          `although the members declare different statements.`,
+        "project each member's own statement",
+      );
+      return null;
+    }
+    return this.compileFragmentScalar(
+      { ...node, typeConditions: types },
+      key,
+      nodeVar,
+      nodeDef,
+      cypherScope,
+      params,
+      paramCounter,
+      policyContext,
+      true,
+    );
   }
 
   /**
