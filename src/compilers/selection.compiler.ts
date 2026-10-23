@@ -3193,11 +3193,39 @@ export class SelectionCompiler {
       // (no `node`/`edge`/`*_NOT` keys) is the legacy node-where
       // shorthand from pre-1.7.1 callers — keep treating it as node-
       // where so existing code keeps working.
-      const userNodeWhere = hasNodeKey
+      let userNodeWhere = hasNodeKey
         ? (cw.node as Record<string, unknown>)
         : !hasEdgeKey && !hasNodeNotKey && !hasEdgeNotKey
           ? cw
           : undefined;
+
+      const fragments: string[] = [];
+
+      // v2.12.0 — the upstream member-keyed shape of a union connection
+      // where (`{ Member: { node: … } }`), compiled per member. Pre-2.12.0
+      // the bare object stayed the node filter and its member key
+      // compiled as a property, so nothing matched.
+      const unionMembers =
+        this.whereCompiler &&
+        targetDef &&
+        paramCounter &&
+        params &&
+        userNodeWhere === cw
+          ? this.whereCompiler.compileSelectionUnionMembers(
+              cw,
+              childVar,
+              edgeVar,
+              relDef,
+              paramCounter,
+              policyContext ?? undefined,
+              `connection "${node.fieldName}"`,
+            )
+          : null;
+      if (unionMembers) {
+        mergeParams(params!, unionMembers.params);
+        fragments.push(unionMembers.cypher);
+        userNodeWhere = unionMembers.rest;
+      }
       const userEdgeWhere = hasEdgeKey
         ? (cw.edge as Record<string, unknown>)
         : undefined;
@@ -3207,8 +3235,6 @@ export class SelectionCompiler {
       const userEdgeNot = hasEdgeNotKey
         ? (cw.edge_NOT as Record<string, unknown>)
         : undefined;
-
-      const fragments: string[] = [];
 
       if (this.whereCompiler && targetDef) {
         // Node-side (always run when whereCompiler is wired so policy still

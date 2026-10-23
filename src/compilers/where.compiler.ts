@@ -180,6 +180,34 @@ const CONNECTION_SUFFIXES = [
 
 type ConnectionSuffix = (typeof CONNECTION_SUFFIXES)[number];
 
+/**
+ * v2.12.0 — whether a union member's value in a connection where is a
+ * connection where (`{ node, node_NOT, edge, edge_NOT }`, possibly under
+ * `AND` / `OR` / `NOT`) rather than a bare node filter of that member.
+ */
+function isConnectionWhereShape(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined);
+  if (
+    keys.some(
+      (k) =>
+        k === 'node' || k === 'node_NOT' || k === 'edge' || k === 'edge_NOT',
+    )
+  )
+    return true;
+  if (
+    keys.length === 0 ||
+    !keys.every((k) => k === 'AND' || k === 'OR' || k === 'NOT')
+  )
+    return false;
+  return keys.some((k) => {
+    const v = value[k];
+    const items = Array.isArray(v) ? v : [v];
+    return items.some(
+      (item) => isPlainObject(item) && isConnectionWhereShape(item),
+    );
+  });
+}
+
 export interface WhereCompilerOptions {
   /** Set of operator suffixes to reject at runtime (e.g. `new Set(['_MATCHES'])`) */
   disabledOperators?: Set<OperatorSuffix>;
@@ -844,6 +872,58 @@ export class WhereCompiler {
     return `(${members.map((m) => `${varName}:${typeLabelExpr(m, this.schema)}`).join(' OR ')})`;
   }
 
+  /**
+   * v2.12.0 — the member definition when `def` is a union's merged
+   * definition and `key` names one of its members (and no merged field);
+   * `null` otherwise.
+   */
+  private unionMemberDef(
+    def: NodeDefinition,
+    key: string,
+  ): NodeDefinition | null {
+    if (this.schema.nodes.has(def.typeName)) return null;
+    const members = this.schema.unions?.get(def.typeName);
+    if (!members || !members.includes(key)) return null;
+    if (def.properties.has(key) || def.relationships.has(key)) return null;
+    return this.schema.nodes.get(key) ?? null;
+  }
+
+  /**
+   * v2.12.0 — union member keys of one where object, as
+   * `(v:Member AND <member filter>)` per member, OR-combined — the same
+   * semantics as a root `<rel>_SOME: { Member: … }`, where only the
+   * mentioned members match. The member's filter compiles against the
+   * member's definition; the policy context keeps traversals inside it
+   * enforcing. The target's own `read` policy is NOT added here: the
+   * caller composes it once, per member, outside any negation
+   * (`compileTargetBody` / `tryCompileConnection`).
+   */
+  private compileUnionMemberWhere(
+    members: [NodeDefinition, Record<string, unknown>][],
+    nodeVar: string,
+    counter: { count: number },
+    depth: number,
+    scope: CypherFieldScope,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+  ): string {
+    const branches = members.map(([memberDef, memberWhere]) => {
+      const label = `${nodeVar}:${getTargetLabelString(memberDef)}`;
+      const sub = this.compileConditions(
+        memberWhere,
+        nodeVar,
+        memberDef,
+        counter,
+        depth + 1,
+        scope,
+        params,
+        policyContext,
+      );
+      return sub.cypher ? `(${label} AND ${sub.cypher})` : label;
+    });
+    return branches.length === 1 ? branches[0] : `(${branches.join(' OR ')})`;
+  }
+
   private compileConditions(
     where: Record<string, unknown>,
     nodeVar: string,
@@ -886,6 +966,8 @@ export class WhereCompiler {
     // Reuse the caller's params accumulator when provided. Otherwise
     // own a fresh Map (the top-level entry point case).
     const params: Record<string, unknown> = paramsTarget ?? {};
+    /** v2.12.0 — union member keys, OR-combined after the loop. */
+    const unionMembers: [NodeDefinition, Record<string, unknown>][] = [];
 
     for (const [key, value] of Object.entries(where)) {
       if (value === undefined) continue;
@@ -958,6 +1040,19 @@ export class WhereCompiler {
         continue;
       }
 
+      // v2.12.0 — a union member key (`{ S5rDoc: { rank: 2 } }`) on a
+      // union target's where (nested selection, connection `node`,
+      // relationship aggregate) compiles against that member
+      // (`compileUnionMemberWhere`). Pre-2.12.0 it compiled as a node
+      // property (`n0.S5rDoc = $param`, never true).
+      if (isPlainObject(value)) {
+        const memberDef = this.unionMemberDef(nodeDef, key);
+        if (memberDef) {
+          unionMembers.push([memberDef, value as Record<string, unknown>]);
+          continue;
+        }
+      }
+
       // Null values — the operator suffix is split off FIRST (v2.3.0); see
       // `compileNullCondition`.
       if (value === null) {
@@ -1027,6 +1122,19 @@ export class WhereCompiler {
       clauses.push(scalarResult.cypher);
       mergeParams(params, scalarResult.params);
     }
+
+    if (unionMembers.length > 0)
+      clauses.push(
+        this.compileUnionMemberWhere(
+          unionMembers,
+          nodeVar,
+          counter,
+          depth,
+          scope,
+          params,
+          policyContext,
+        ),
+      );
 
     return {
       cypher: clauses.join(' AND '),
@@ -1257,6 +1365,8 @@ export class WhereCompiler {
      * `MATCH ${pattern}` and `WHERE ...` inside the EXISTS body.
      */
     const extraPreludes: string[] = [];
+    /** v2.12.0 — upstream member-keyed entries, OR-combined. */
+    const unionMembers: [NodeDefinition, Record<string, unknown>][] = [];
 
     for (const [key, val] of Object.entries(value)) {
       if (val === undefined) continue;
@@ -1379,8 +1489,38 @@ export class WhereCompiler {
         continue;
       }
 
+      // v2.12.0 — the upstream member-keyed shape of a union connection
+      // where, `{ Member: { node, node_NOT, edge, … } }`, compiles per
+      // member (`compileUnionMemberConnections`). Pre-2.12.0 it was
+      // ignored like any unknown key (the filter matched every related
+      // node).
+      if (isPlainObject(val)) {
+        const memberDef = this.unionMemberDef(targetNodeDef, key);
+        if (memberDef) {
+          unionMembers.push([memberDef, val as Record<string, unknown>]);
+          continue;
+        }
+      }
+
       // Unknown key — silently ignore to remain forward-compatible with
       // future codegen additions.
+    }
+
+    if (unionMembers.length > 0) {
+      const members = this.compileUnionMemberConnections(
+        unionMembers,
+        relVar,
+        edgeVar,
+        propsDef,
+        nodeScope,
+        edgeScope,
+        counter,
+        depth,
+        policyContext,
+      );
+      innerClauses.push(members.cypher);
+      mergeParams(innerParams, members.params);
+      if (members.preludes) extraPreludes.push(...members.preludes);
     }
 
     const result: WhereResult = {
@@ -1389,6 +1529,136 @@ export class WhereCompiler {
     };
     if (extraPreludes.length > 0) result.preludes = extraPreludes;
     return result;
+  }
+
+  /**
+   * v2.12.0 — the upstream member-keyed entries of a union
+   * connection where, `{ Member: { node, node_NOT, edge, edge_NOT, AND,
+   * OR, NOT } }`, as `(r:Member AND <member connection where>)` per
+   * member, OR-combined (only the mentioned members match, as in a root
+   * `<rel>_SOME: { Member: … }`). A member value that is not
+   * connection-shaped (no `node` / `edge` key at any logical level) is a
+   * node filter of that member: `{ Member: { rank: 2 } }` ≡
+   * `{ Member: { node: { rank: 2 } } }`. The target's `read` policy is
+   * composed by the caller, once, outside any negation.
+   */
+  private compileUnionMemberConnections(
+    members: [NodeDefinition, Record<string, unknown>][],
+    relVar: string,
+    edgeVar: string,
+    propsDef: { properties: Map<string, PropertyDefinition> } | null,
+    nodeScope: CypherFieldScope,
+    edgeScope: CypherFieldScope,
+    counter: { count: number },
+    depth: number,
+    policyContext: PolicyContextBundle | undefined,
+  ): WhereResult {
+    const params: Record<string, unknown> = {};
+    const preludes: string[] = [];
+    const branches = members.map(([memberDef, memberWhere]) => {
+      const label = `${relVar}:${getTargetLabelString(memberDef)}`;
+      const sub = this.compileConnectionWhereInput(
+        isConnectionWhereShape(memberWhere)
+          ? memberWhere
+          : { node: memberWhere },
+        relVar,
+        edgeVar,
+        memberDef,
+        propsDef,
+        nodeScope,
+        edgeScope,
+        counter,
+        depth + 1,
+        policyContext,
+      );
+      mergeParams(params, sub.params);
+      if (sub.preludes) preludes.push(...sub.preludes);
+      return sub.cypher ? `(${label} AND ${sub.cypher})` : label;
+    });
+    const result: WhereResult = {
+      cypher:
+        branches.length === 1 ? branches[0] : `(${branches.join(' OR ')})`,
+      params,
+    };
+    if (preludes.length > 0) result.preludes = preludes;
+    return result;
+  }
+
+  /**
+   * v2.12.0 — the member-keyed entries of a union connection
+   * where selected in a projection (`itemsConnection(where: { S5rDoc:
+   * { node: … } })`), for `SelectionCompiler.compileConnection`. Returns
+   * `null` unless `relDef` targets a union and `where`
+   * holds member keys (and no `node` / `edge` key, which keeps the
+   * `{ node: { Member: … } }` shape on the node-where path). The member
+   * entries come back compiled; `rest` is the remainder, still to be
+   * compiled as the node filter. `@cypher` fields throw (a pattern
+   * comprehension cannot host their CALL subqueries).
+   *
+   * @internal
+   */
+  compileSelectionUnionMembers(
+    where: Record<string, unknown>,
+    relVar: string,
+    edgeVar: string,
+    relDef: RelationshipDefinition,
+    counter: { count: number },
+    policyContext: PolicyContextBundle | undefined,
+    contextLabel: string,
+  ): {
+    cypher: string;
+    params: Record<string, unknown>;
+    rest: Record<string, unknown> | undefined;
+  } | null {
+    const targetDef = resolveTargetDef(relDef.target, this.schema);
+    if (!targetDef) return null;
+    if (
+      where.node !== undefined ||
+      where.node_NOT !== undefined ||
+      where.edge !== undefined ||
+      where.edge_NOT !== undefined
+    )
+      return null;
+    const members: [NodeDefinition, Record<string, unknown>][] = [];
+    const rest: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(where)) {
+      const memberDef = isPlainObject(val)
+        ? this.unionMemberDef(targetDef, key)
+        : null;
+      if (memberDef) members.push([memberDef, val as Record<string, unknown>]);
+      else rest[key] = val;
+    }
+    if (members.length === 0) return null;
+    const nodeScope = new CypherFieldScope(relVar, [], '__where');
+    const edgeScope = new CypherFieldScope(edgeVar, [], '__where');
+    const propsDef = relDef.properties
+      ? (this.schema.relationshipProperties.get(relDef.properties) ?? null)
+      : null;
+    const compiled = this.compileUnionMemberConnections(
+      members,
+      relVar,
+      edgeVar,
+      propsDef,
+      nodeScope,
+      edgeScope,
+      counter,
+      0,
+      policyContext ? traversalBundle(policyContext) : undefined,
+    );
+    if (
+      nodeScope.hasAny() ||
+      edgeScope.hasAny() ||
+      (compiled.preludes?.length ?? 0) > 0
+    )
+      throw new OGMError(
+        `Filtering ${contextLabel} by an @cypher field is not supported. ` +
+          `@cypher fields can only appear in top-level WHERE filters, not inside select.where on relationships.`,
+      );
+    return {
+      cypher: compiled.cypher,
+      params: compiled.params,
+      rest: Object.keys(rest).length > 0 ? rest : undefined,
+    };
   }
 
   private tryCompileRelationship(

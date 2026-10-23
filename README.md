@@ -667,6 +667,21 @@ await Book.find({
 });
 ```
 
+**Union targets:** a union's where (`ItemWhere = { Doc?: DocWhere; Post?: PostWhere }`) is keyed by member. Each member key filters the related nodes of that member, and several keys are OR-combined, so only the mentioned members match. With [Node-Level Security](#node-level-security), each member's `read` policy applies outside any negation.
+
+```typescript
+// union Item = Post | Doc
+await User.find({ where: { items_SOME: { Doc: { rank: 2 } } } });
+await User.find({ where: { itemsConnection_NONE: { node: { Doc: { rank: 2 } } } } });
+await User.find({
+  select: { items: { where: { Doc: { rank: 2 }, Post: { title: 'a' } }, select: { id: true } } },
+});
+// also accepted: the @neo4j/graphql member-keyed connection shape
+await User.find({ where: { itemsConnection_SOME: { Doc: { node: { rank: 2 } } } } });
+```
+
+This holds everywhere a union where is accepted: the root `items_*` and `itemsConnection_*` filters, a nested `items` `where`, `itemsConnection` `where: { node | node_NOT: { Doc: … } }` (`edges` and `totalCount`) and `itemsAggregate(where: …)`, through the typed `select` and `selectionSet` alike. Before v2.12.0 only a root `items_*` filter compiled the member key per member: everywhere else it compiled as a node property (`n0.Doc = $param`), so lists were empty, `_SOME` / `_SINGLE` matched nothing and `_NONE` / `_NOT` / `_ALL` matched everything, and the member-keyed connection shape in a root filter was ignored (it matched every related node).
+
 ### Selection Modes
 
 grafeo-ogm supports two mutually exclusive selection modes. Providing both `select` and `selectionSet` throws an error.
