@@ -840,6 +840,121 @@ describe('Neo4jRecordFactory', () => {
       },
     );
 
+    // vNEXT — checked against `datetime(iso)` on Neo4j 5.26
+    // (tests/integration/record-factory.spec.ts).
+    it.each([
+      ['2024-W01-1T10:00:00Z', '2024-01-01T10:00:00Z'],
+      ['2025-W01-1', '2024-12-30T00:00:00Z'],
+      ['2026-W53-7T23:59', '2027-01-03T23:59:00Z'],
+      ['2024W011T1000', '2024-01-01T10:00:00Z'],
+      ['2024-Q4-92', '2024-12-31T00:00:00Z'],
+      ['2024Q201T10:00', '2024-04-01T10:00:00Z'],
+      ['2024-366', '2024-12-31T00:00:00Z'],
+      ['2024001', '2024-01-01T00:00:00Z'],
+      ['2024-1-1T1:2:3+01:00', '2024-01-01T01:02:03+01:00'],
+    ] as const)(
+      'reads the Neo4j form %s in both modes, without a warning (vNEXT)',
+      (iso, str) => {
+        for (const strict of [false, true])
+          underEachZone(() => {
+            let value: unknown;
+            const codes = warningCodes(() => {
+              value = Neo4jRecordFactory.dateTime(iso, { strict });
+            });
+            expect([process.env.TZ, strict, String(value)]).toEqual([
+              process.env.TZ,
+              strict,
+              str,
+            ]);
+            expect(codes).toEqual([]);
+          });
+      },
+    );
+
+    it.each([
+      '2024-W53-1',
+      '2023-366',
+      '2023-Q1-91',
+      '2024-W01-1[Europe/Berlin]',
+    ])('rejects %s in both modes, as Neo4j does (vNEXT)', (iso) => {
+      expect(() => Neo4jRecordFactory.dateTime(iso)).toThrow(TypeError);
+      expect(() => Neo4jRecordFactory.dateTime(iso, { strict: true })).toThrow(
+        TypeError,
+      );
+    });
+
+    it.each([
+      // input, strict error, warning code, default (v2.15.0) toString()
+      [
+        '2024-02-30T10:00:00Z',
+        /invalid date/,
+        'INVALID_DATE',
+        '2024-02-30T10:00:00Z',
+      ],
+      [
+        '2023-02-29T10Z',
+        /invalid date/,
+        'INVALID_DATE',
+        '2023-02-29T10:00:00Z',
+      ],
+      [
+        '2024-01-01 10:00:00Z',
+        /not an ISO-8601 date-time/,
+        'UNPARSEABLE',
+        '2024-01-01T10:00:00Z',
+      ],
+      [
+        '2024-01-01T10:00:00.1234567891Z',
+        /not an ISO-8601 date-time/,
+        'UNPARSEABLE',
+        '2024-01-01T10:00:00.123000000Z',
+      ],
+      [
+        '2024-01-01T10:0005',
+        /not an ISO-8601 date-time/,
+        'UNPARSEABLE',
+        '2024-01-01T10:00:05Z',
+      ],
+      [
+        'Mon, 01 Jan 2024 10:00:00 GMT',
+        /not an ISO-8601 date-time/,
+        'UNPARSEABLE',
+        '2024-01-01T10:00:00Z',
+      ],
+    ] as const)(
+      'strict rejects %s as Neo4j does; the default keeps the v2.15.0 value and warns (vNEXT)',
+      (iso, message, code, legacy) => {
+        expect(() =>
+          Neo4jRecordFactory.dateTime(iso, { strict: true }),
+        ).toThrow(message);
+        let value: unknown;
+        const codes = warningCodes(() => {
+          value = Neo4jRecordFactory.dateTime(iso);
+        });
+        expect(String(value)).toBe(legacy);
+        expect(codes).toEqual([`GRAFEO_RECORD_FACTORY_${code}`]);
+      },
+    );
+
+    it.each([
+      ['2024-001', '2024-01-01T00:00:00Z', 'LEGACY_PARSE'],
+      ['202402', '2024-02-01T00:00:00Z', 'LEGACY_PARSE'],
+      ['+20240101', '+20240101-01-01T00:00:00Z', 'READ_DIFFERS'],
+    ] as const)(
+      'strict reads %s as Neo4j does; the default keeps its v2.15.0 value and warns (vNEXT)',
+      (iso, str, code) => {
+        expect(String(Neo4jRecordFactory.dateTime(iso, { strict: true }))).toBe(
+          str,
+        );
+        let value: unknown;
+        const codes = warningCodes(() => {
+          value = Neo4jRecordFactory.dateTime(iso);
+        });
+        expect(value).toBeDefined();
+        expect(codes).toEqual([`GRAFEO_RECORD_FACTORY_${code}`]);
+      },
+    );
+
     it('warns once per code, as a DeprecationWarning, and never in strict mode (v2.9.0)', () => {
       const spy = jest
         .spyOn(process, 'emitWarning')

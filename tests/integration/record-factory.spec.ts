@@ -244,6 +244,154 @@ describeLive('Neo4jRecordFactory.dateTime — live Neo4j', () => {
     },
   );
 
+  // ---------------------------------------------------------------------
+  // vNEXT — Neo4j's full date grammar; strict rejects what Neo4j rejects
+  // ---------------------------------------------------------------------
+
+  it.each([
+    // Week dates (the date may fall in the previous or next year).
+    '2024-W01-1T10:00:00Z',
+    '2024-W01-1',
+    '2024-W01',
+    '2024-W1',
+    '2024-W1-1T1:2',
+    '2024-W01-7',
+    '2024-W52',
+    '2024W01',
+    '2024W011',
+    '2024W011T1000',
+    '2020-W53-7',
+    '2026-W53-1',
+    '2026-W53-7T23:59',
+    '2025-W01-1',
+    '-0001-W01-1',
+    '+2024-W01-1',
+    '2024-w01-1',
+    '2024-W01-1T10:00:00.5[Europe/Berlin]',
+    '2024-W1-1T1:2:3.123456789-05:00',
+    // Quarter dates.
+    '2024-Q1',
+    '2024-Q1-01',
+    '2024-Q1-1',
+    '2024-Q1-91',
+    '2023-Q1-90',
+    '2024-Q4-92',
+    '2024Q1',
+    '2024Q101',
+    '2024-Q2-1T10:00',
+    '2024Q201T10:00',
+    '2024-q1-01',
+    // Ordinal dates.
+    '2024-001T10:00:00Z',
+    '2024-001T10',
+    '2024001',
+    '2024-366',
+    '2024-001T10:00:00+01:00[Europe/Berlin]',
+    // One-digit fields in the extended format.
+    '2024-1-1T10:00:00Z',
+    '2024-01-1T10:00:00Z',
+    '2024-1-1T10',
+    '2024-01-01T1',
+    '2024-01-01T1Z',
+    '2024-01-01T1:05',
+    '2024-01-01T1:00:00Z',
+    '2024-01-01T10:5',
+    '2024-01-01T10:5:3',
+    '2024-01-01T10:05:3.5',
+    '2024-1-1T1:2:3Z',
+    '2024-1-1T1:2:3+01:00[Europe/Berlin]',
+  ])(
+    'reads %s as the driver does, in both modes, without a warning (vNEXT)',
+    async (iso) => {
+      await expectSame(iso, false);
+      await expectSame(iso, true);
+    },
+  );
+
+  it.each([
+    '2024-W53-1T10:00',
+    '2024-W00-1',
+    '2024-W01-0',
+    '2024-W01-8',
+    '2024-Q4-93',
+    '2023-Q1-91',
+    '2024-Q5-01',
+    '2024-000',
+    '2023-366',
+    '2024-1-32',
+    '2024-W01-1[Europe/Berlin]',
+    '2024-W1-01',
+    '2024-Q01-01',
+    '2024-01-01T10.5',
+    '2024-01-01T10:30.5',
+    '+2024W011',
+  ])('rejects %s in both modes, as Neo4j does (vNEXT)', async (iso) => {
+    expect([iso, (await fromDriver(iso)).error !== undefined]).toEqual([
+      iso,
+      true,
+    ]);
+    expect([iso, fromFactory(iso, false).error !== undefined]).toEqual([
+      iso,
+      true,
+    ]);
+    expect([iso, fromFactory(iso, true).error !== undefined]).toEqual([
+      iso,
+      true,
+    ]);
+  });
+
+  it.each([
+    // A day its month does not have.
+    ['2024-02-30T10:00:00Z', 'INVALID_DATE'],
+    ['2023-02-29T10:00:00Z', 'INVALID_DATE'],
+    ['2024-04-31T10:00:00', 'INVALID_DATE'],
+    ['2024-02-30', 'INVALID_DATE'],
+    ['2023-02-29T10Z', 'INVALID_DATE'],
+    ['2024-02-30T10:00:00+01:00[Europe/Berlin]', 'INVALID_DATE'],
+    // Text Neo4j cannot parse.
+    ['2024-01-01 10:00:00Z', 'UNPARSEABLE'],
+    ['2024-01-01 10:00Z', 'UNPARSEABLE'],
+    ['2024-01-01T10:00:00.1234567891Z', 'UNPARSEABLE'],
+    ['2024-01-01T10:00:00.123456789012', 'UNPARSEABLE'],
+    ['2024-01-01T10:0005', 'UNPARSEABLE'],
+    ['2024-01-01T1000:05', 'UNPARSEABLE'],
+    ['12345-01-01', 'UNPARSEABLE'],
+    [' 2024-01-01', 'UNPARSEABLE'],
+    ['2024-01-01T10:00:00Z ', 'UNPARSEABLE'],
+    ['Mon, 01 Jan 2024 10:00:00 GMT', 'UNPARSEABLE'],
+    ['2024-01-001', 'UNPARSEABLE'],
+    ['2024-1', 'UNPARSEABLE'],
+  ])(
+    'strict rejects %s as Neo4j does; the default keeps its v2.15.0 value and warns %s (vNEXT)',
+    async (iso, code) => {
+      await expectSame(iso, true);
+      const loose = fromFactory(iso, false);
+      expect([iso, loose.error]).toEqual([iso, undefined]);
+      expect(loose.codes).toEqual([`GRAFEO_RECORD_FACTORY_${code}`]);
+    },
+  );
+
+  it.each([
+    // Read by the default with `Date` (pre-v2.5.0), in the machine zone.
+    ['2024-001', 'LEGACY_PARSE'],
+    ['2024-1-1', 'LEGACY_PARSE'],
+    ['2024-01-1', 'LEGACY_PARSE'],
+    ['2024-1-01', 'LEGACY_PARSE'],
+    ['202402', 'LEGACY_PARSE'],
+    ['+1-01-01', 'LEGACY_PARSE'],
+    ['+12345-001', 'LEGACY_PARSE'],
+    // A signed basic year is all year to Neo4j.
+    ['+20240101', 'READ_DIFFERS'],
+  ])(
+    'strict reads %s as the driver does; the default keeps its v2.15.0 value and warns %s (vNEXT)',
+    async (iso, code) => {
+      await expectSame(iso, true);
+      const loose = fromFactory(iso, false);
+      expect([iso, loose.error]).toEqual([iso, undefined]);
+      expect(loose.codes).toEqual([`GRAFEO_RECORD_FACTORY_${code}`]);
+    },
+  );
+
   it('spells every zone id as Neo4j returns it, whatever the case, under strict (v2.9.0)', async () => {
     const isos = neo4jZoneIds().flatMap((id) => [
       `2026-07-01T10:00:00[${id.toLowerCase()}]`,

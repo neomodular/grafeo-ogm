@@ -1352,11 +1352,15 @@ Strict matches what the driver returns for `datetime(iso)` on Neo4j 5.26 in all 
 - an offset the zone does not have at that wall time, including any offset inside a DST gap (either offset in a DST overlap is fine);
 - an offset outside ±18:00, or with minutes over 59 (`+05:75` reads as `+06:15` by default);
 - a zone id that java.time lacks: `EST`, `MST`, `HST`, `ROC`, `GMT+0`, `GMT-0`, or an offset written as an id such as `[+05:00]`;
-- a date with an offset or zone but no time (`2024-07-01Z`).
+- a date with an offset or zone but no time (`2024-07-01Z`);
+- (vNEXT) a day its month does not have (`2024-02-30`, `2023-02-29`);
+- (vNEXT) text Neo4j cannot parse: a space before the time, surrounding whitespace, more than nine fractional digits, a time that mixes `10:00` and `0000`, an unsigned year of five or more digits, or a non-ISO format such as RFC 2822 (strict no longer falls back to `Date` for these).
+
+Strict also reads with Neo4j's grammar where the default still uses `Date` (vNEXT): `2024-001` and `202402` are UTC midnight on any machine, and a signed basic year (`+20240101`) is the year 20240101, as on the server.
 
 Strict also spells a zone id as Neo4j does: ids match case-insensitively and keep their alias (`[asia/calcutta]` gives `Asia/Calcutta`).
 
-By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE` or `_DATE_ONLY_ZONE`. Strings that threw before 2.9.0 read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read.
+By default each of these keeps its v2.8.0 value. The first time each kind is seen, it emits one `DeprecationWarning` through `process.emitWarning`, with a code from `GRAFEO_RECORD_FACTORY_ZONE_OFFSET_MISMATCH`, `_OFFSET_RANGE`, `_ZONE_ID_UNSUPPORTED`, `_ZONE_ID_CASE`, `_DATE_ONLY_ZONE`, and since vNEXT `_INVALID_DATE`, `_UNPARSEABLE`, `_LEGACY_PARSE` or `_READ_DIFFERS`. Strings that threw before read as Neo4j reads them in both modes: `[Z]` is offset 0 with no zone id, and an hour without minutes (`10+01:00`) is read (2.9.0); week dates (`2024-W01-1`), quarter dates (`2024-Q1-01`), ordinal dates with a time (`2024-001T10:00`) and one-digit fields (`2024-1-1T1:2:3`) are read (vNEXT).
 
 #### 22. Unknown keys in nested write inputs (since 2.10.0)
 
