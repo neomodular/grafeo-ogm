@@ -1566,6 +1566,16 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 
 Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
+#### 33. A selection deeper than `maxDepth` (since vNEXT)
+
+```typescript
+await users.find({ selectionSet: '{ friends { friends { friends { friends { friends { friends { name } } } } } } }' });
+// default: the sixth `friends` level is left out of the result (and warns)
+// strict:  OGMError: Selection "friends" is nested deeper than the maximum selection depth (5). …
+```
+
+A `Model` read projects at most 5 levels of relationships, connections and `<rel>Aggregate` below the root (an `InterfaceModel` read 12), and 2.x silently cut a deeper selection off at that level. Strict mode throws instead, so a truncated result is never mistaken for missing data. Raise the limit per model with `model.maxDepth = 8`. The warning code is `selection-max-depth`, logged once per OGM instance, limit and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

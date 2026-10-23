@@ -1,0 +1,11 @@
+{
+  "depth: 5 levels (within maxDepth)": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name`, friends: [(n)-[:`RS_FRIEND`]->(n0:`RsUser`) | n0 { .`name`, friends: [(n0)-[:`RS_FRIEND`]->(n1:`RsUser`) | n1 { .`name`, friends: [(n1)-[:`RS_FRIEND`]->(n2:`RsUser`) | n2 { .`name`, friends: [(n2)-[:`RS_FRIEND`]->(n3:`RsUser`) | n3 { .`name`, friends: [(n3)-[:`RS_FRIEND`]->(n4:`RsUser`) | n4 { .`name` }] }] }] }] }] }"
+  ],
+  "depth: 6 levels (beyond maxDepth)": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name`, friends: [(n)-[:`RS_FRIEND`]->(n0:`RsUser`) | n0 { .`name`, friends: [(n0)-[:`RS_FRIEND`]->(n1:`RsUser`) | n1 { .`name`, friends: [(n1)-[:`RS_FRIEND`]->(n2:`RsUser`) | n2 { .`name`, friends: [(n2)-[:`RS_FRIEND`]->(n3:`RsUser`) | n3 { .`name`, friends: [(n3)-[:`RS_FRIEND`]->(n4:`RsUser`) | n4 { .`name` }] }] }] }] }] }"
+  ],
+  "depth: 6 levels via connection": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name`, friends: [(n)-[:`RS_FRIEND`]->(n0:`RsUser`) | n0 { friends: [(n0)-[:`RS_FRIEND`]->(n1:`RsUser`) | n1 { friends: [(n1)-[:`RS_FRIEND`]->(n2:`RsUser`) | n2 { friends: [(n2)-[:`RS_FRIEND`]->(n3:`RsUser`) | n3 { friends: [(n3)-[:`RS_FRIEND`]->(n4:`RsUser`) | n4 {  }] }] }] }] }] }"
+  ]
+}

@@ -2426,7 +2426,7 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
-    if (currentDepth >= maxDepth) return null;
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
 
     const relDef = parentDef.relationships.get(node.fieldName);
     if (!relDef) return null;
@@ -2505,6 +2505,33 @@ export class SelectionCompiler {
   }
 
   /**
+   * vNEXT — strict item 33: whether a relationship / connection /
+   * aggregate selection at `currentDepth` lies beyond `maxDepth`. 2.x
+   * leaves such a selection out of the result (warning once); strict mode
+   * throws instead of silently truncating the result.
+   */
+  private beyondMaxDepth(
+    node: SelectionNode,
+    currentDepth: number,
+    maxDepth: number,
+  ): boolean {
+    if (currentDepth < maxDepth) return false;
+    const field = node.alias ?? node.fieldName;
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `Selection "${field}" is nested deeper than the maximum selection depth (${maxDepth}). ` +
+          `Select fewer levels, or raise the model's \`maxDepth\`.`,
+      );
+    this.strictMode.warn(
+      'selection-max-depth',
+      `${maxDepth}\u0000${field}`,
+      `Selection "${field}" is nested deeper than the maximum selection depth (${maxDepth}); 2.x leaves it out of the result.`,
+      'reject selections nested deeper than the maximum depth',
+    );
+    return true;
+  }
+
+  /**
    * v2.7.0 — whether `fieldName` is a relationship aggregate of `def`
    * (`postsAggregate` for a relationship `posts`). A field or relationship
    * actually NAMED `postsAggregate` keeps its own meaning.
@@ -2577,7 +2604,7 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
-    if (currentDepth >= maxDepth) return null;
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
     const label = node.fieldName;
     const relDef = parentDef.relationships.get(
       label.slice(0, -AGGREGATE_SUFFIX.length),
@@ -2841,7 +2868,7 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
-    if (currentDepth >= maxDepth) return null;
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
 
     // v2.5.0 — fields on union members don't apply per-field arguments;
     // refuse them instead of dropping them.
@@ -3060,7 +3087,7 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
-    if (currentDepth >= maxDepth) return null;
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
 
     // Strip 'Connection' suffix to find the relationship field
     const baseFieldName = node.fieldName.replace(/Connection$/, '');
