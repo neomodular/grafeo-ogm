@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.12.0 (2026-10-23) — union member where in selections and connection filters
+
+> **Minor release.** A union member key in a `where` (`{ Doc: { rank: 2 } }`) now filters by that member everywhere, in default and strict mode alike. Before, it worked only in a root `<rel>_SOME` / `_NONE` / `_ALL` / `_SINGLE` filter and was compiled as a node property everywhere else. Every union where input that already worked compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Fixed
+
+- **A union member key in a `where` was compiled as a node property (`n0.Doc = $param`, never true).** This hit the nested selection `where` (typed `select` and `selectionSet`), a connection `{ node | node_NOT: { Doc: … } }` in a selection (`edges`, `totalCount`) and in a root `<rel>Connection*` filter, and `<rel>Aggregate(where)`. Lists were always empty, `_SOME` / `_SINGLE` matched nothing, and `_NONE` / `_NOT` / `_ALL` matched every row. The `@neo4j/graphql` member-keyed connection shape `{ Doc: { node, node_NOT, edge, … } }` was ignored in a root filter (it matched every row with any related node) and compiled as a property in a selection. Each member key now compiles as `(v:Doc AND <Doc filter>)`, OR-combined across members as a root `<rel>_SOME` already did. Each member's `read` policy is applied outside any negation, so a node the context cannot read never satisfies or falsifies a filter. Interface targets are not affected.
+
+### Behavior changes
+
+These inputs could only ever return always-empty or always-everything results, so they now filter as documented (`items: [Post | Doc]`, filtering on `Doc`):
+
+| Input | Before | Now |
+|---|---|---|
+| nested `items(where: { Doc: … })` (typed `select` or `selectionSet`) | always `[]` | the matching items |
+| selection `itemsConnection(where: { node: { Doc: … } })`, or `{ Doc: { node: … } }` | `edges: []`, `totalCount: 0` | the matching edges and count |
+| selection `itemsConnection(where: { node_NOT: { Doc: … } })` | `totalCount: 0` | the count of items that don't match |
+| `itemsAggregate(where: { Doc: … })` | `count: 0` | the matching count |
+| root `itemsConnection` / `_SOME` / `_SINGLE` with `{ node: { Doc: … } }` | matched no row | rows with a matching item |
+| root `itemsConnection_NONE` / `_NOT` / `_ALL` with `{ node: { Doc: … } }` | matched every row | rows with no matching item / whose items all match |
+| root `itemsConnection_SOME` / `_NONE` with `{ Doc: { node: … } }` | ignored (any item / no item) | filtered by the member's node filter |
+
+Root `items_SOME` / `_NONE` / `_ALL` / `_SINGLE` member keys, shared union fields, non-union and interface targets are unchanged, pinned byte for byte in default and strict mode, with and without policies.
+
 ## 2.11.0 (2026-10-23) — `@node(labels)` as in `@neo4j/graphql`
 
 > **Minor release.** A type whose `@node(labels: [...])` is not just its own name warns once by default and, under `strict: true` (strict item 23), uses the listed labels **instead of** the type name, as `@neo4j/graphql` does. Without `strict`, every input that worked in 2.10.1 compiles to byte-identical Cypher. Generated types are unchanged.
