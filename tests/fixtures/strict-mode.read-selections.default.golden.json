@@ -10,5 +10,17 @@
   ],
   "point: unknown sub-field": [
     "MATCH (n:`RsUser`)\nRETURN n { .`name` }"
+  ],
+  "fragment: spread + definition": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name`, pets: [(n)-[:`RS_HAS_PET`]->(n0:`RsPet`) | n0 { .id }] }"
+  ],
+  "fragment: spread without a definition": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name` }"
+  ],
+  "fragment: query keyword document": [
+    "MATCH (n:`RsUser`)\nRETURN n { .id }"
+  ],
+  "fragment: spread in connection edges": [
+    "MATCH (n:`RsUser`)\nRETURN n { petsConnection: { edges: [(n)-[e0:`RS_HAS_PET`]->(n0:`RsPet`) | { node: n0 { .`name` } }] } }"
   ]
 }

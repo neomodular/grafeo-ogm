@@ -1,8 +1,13 @@
 import {
+  BREAK,
   Kind,
   parse,
   print,
   valueFromASTUntyped,
+  visit,
+  type FragmentDefinitionNode,
+  type FragmentSpreadNode,
+  type OperationDefinitionNode,
   type ValueNode,
   type DirectiveNode,
   type DocumentNode,
@@ -272,6 +277,51 @@ interface ParseContext {
    * type itself, an interface's implementers or a union's members.
    */
   possibleTypes: (typeName: string) => readonly string[];
+  /**
+   * vNEXT — strict item 32: the fragment definitions of the selectionSet
+   * document (strict mode only; 2.x ignores named fragment spreads).
+   */
+  fragments?: ReadonlyMap<string, FragmentDefinitionNode>;
+  /** vNEXT — fragments being expanded, to reject a cycle. */
+  fragmentStack?: string[];
+}
+
+/**
+ * vNEXT — strict item 32: a named fragment spread (`...F`). 2.x ignores
+ * it (the fields it selects are left out) and warns; strict mode expands
+ * it from the fragment definitions of the same document (see
+ * `parseSelectionSet`), or throws when it cannot.
+ *
+ * @returns the fragment to expand, or `undefined` to skip the spread
+ */
+function namedFragment(
+  spread: FragmentSpreadNode,
+  where: string,
+  ctx: ParseContext,
+): FragmentDefinitionNode | undefined {
+  const name = spread.name.value;
+  if (!ctx.strict) {
+    parseWarn(ctx, {
+      code: 'selection-fragment-spread',
+      detail: name,
+      problem:
+        `The named fragment spread "...${name}" ${where} in a selectionSet is ignored in 2.x: ` +
+        `the fields it selects are left out of the result.`,
+      fix: 'expand named fragments defined in the same selectionSet document',
+    });
+    return undefined;
+  }
+  const fragment = ctx.fragments?.get(name);
+  if (!fragment || !ctx.fragments)
+    throw new OGMError(
+      `Unknown fragment "${name}" in selectionSet: define it in the same document, ` +
+        `e.g. "{ ...${name} } fragment ${name} on <Type> { … }".`,
+    );
+  if (ctx.fragmentStack?.includes(name))
+    throw new OGMError(
+      `Fragment "${name}" in selectionSet spreads itself (${[...ctx.fragmentStack, name].join(' -> ')}).`,
+    );
+  return fragment;
 }
 
 /**
@@ -700,6 +750,75 @@ function assertNoVariables(value: ValueNode, where: string): void {
  * warns; strict honours a literal `if: true | false` and rejects anything
  * else, `$variables` included (selectionSet strings have no variables).
  */
+/** vNEXT — whether a parsed document holds a named fragment spread. */
+function containsFragmentSpread(doc: DocumentNode): boolean {
+  let found = false;
+  visit(doc, {
+    FragmentSpread() {
+      found = true;
+      return BREAK;
+    },
+  });
+  return found;
+}
+
+/**
+ * vNEXT — strict item 32: read a selectionSet that uses named fragment
+ * spreads as a whole document: one operation (`{ … }` or `query { … }`)
+ * plus its `fragment F on T { … }` definitions.
+ */
+function parseNamedFragments(source: string): {
+  selectionSet: SelectionSetNode;
+  fragments: Map<string, FragmentDefinitionNode>;
+} {
+  const usage =
+    'a selectionSet with named fragment spreads must be one document: ' +
+    'a selection plus its fragment definitions, e.g. "{ ...F } fragment F on <Type> { … }"';
+  let doc: DocumentNode;
+  try {
+    doc = parse(source);
+  } catch (err) {
+    throw new OGMError(
+      `Failed to parse selectionSet: ${usage} (${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
+  const operations = doc.definitions.filter(
+    (d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION,
+  );
+  if (operations.length !== 1)
+    throw new OGMError(`Failed to parse selectionSet: ${usage}.`);
+  const fragments = new Map<string, FragmentDefinitionNode>();
+  for (const d of doc.definitions)
+    if (d.kind === Kind.FRAGMENT_DEFINITION) {
+      if (fragments.has(d.name.value))
+        throw new OGMError(
+          `Fragment "${d.name.value}" is defined twice in selectionSet.`,
+        );
+      fragments.set(d.name.value, d);
+    }
+  return { selectionSet: operations[0].selectionSet, fragments };
+}
+
+/**
+ * vNEXT — strict item 32: a named fragment spread where only fields are
+ * read (a connection's own keys, `edges`, `pageInfo`): 2.x ignores it and
+ * warns; strict mode throws, as it cannot expand it there.
+ */
+function unsupportedFragmentSpread(
+  spread: FragmentSpreadNode,
+  where: string,
+  ctx: ParseContext,
+): void {
+  if (!ctx.strict) {
+    namedFragment(spread, where, ctx);
+    return;
+  }
+  throw new OGMError(
+    `The named fragment spread "...${spread.name.value}" ${where} is not supported in a selectionSet: ` +
+      `select the fields directly.`,
+  );
+}
+
 function keptByDirectives(
   directives: readonly DirectiveNode[] | undefined,
   where: string,
@@ -2005,22 +2124,44 @@ export class SelectionCompiler {
       );
     }
 
-    const opDef = doc.definitions[0];
-    if (opDef.kind !== Kind.OPERATION_DEFINITION) return [];
-
-    const dummyField = opDef.selectionSet.selections[0];
-    if (dummyField.kind !== Kind.FIELD || !dummyField.selectionSet) return [];
-
     const ctx: ParseContext = {
       strict: this.strictMode.strict,
       warnings: [],
       possibleTypes: (typeName) => this.possibleTypes(typeName),
     };
-    const result = this.convertSelectionSet(
-      dummyField.selectionSet,
-      undefined,
-      ctx,
-    );
+    const hasSpread = containsFragmentSpread(doc);
+    let root: SelectionSetNode | undefined;
+    if (ctx.strict && hasSpread) {
+      // vNEXT — strict item 32: expand named fragment spreads from the
+      // fragment definitions of the same document.
+      const named = parseNamedFragments(trimmed);
+      root = named.selectionSet;
+      ctx.fragments = named.fragments;
+    } else {
+      const opDef = doc.definitions[0];
+      const dummyField =
+        opDef.kind === Kind.OPERATION_DEFINITION
+          ? opDef.selectionSet.selections[0]
+          : undefined;
+      if (dummyField?.kind === Kind.FIELD) root = dummyField.selectionSet;
+      if (!root && !hasSpread) return [];
+    }
+    const result = root ? this.convertSelectionSet(root, undefined, ctx) : [];
+    // vNEXT — strict item 32: a spread the walk above never reached (the
+    // selection was parsed as something else, e.g. `query { ...F } …`).
+    if (
+      hasSpread &&
+      !ctx.strict &&
+      !ctx.warnings.some((w) => w.code === 'selection-fragment-spread')
+    )
+      parseWarn(ctx, {
+        code: 'selection-fragment-spread',
+        detail: '(document)',
+        problem:
+          'A selectionSet with named fragment spreads and fragment definitions is not read as a document in 2.x: ' +
+          'the fragments are ignored and the fields they select are left out of the result.',
+        fix: 'expand named fragments defined in the same selectionSet document',
+      });
     if (ctx.warnings.length > 0) {
       parseWarnings.set(result, ctx.warnings);
       this.replayParseWarnings(result);
@@ -2086,6 +2227,29 @@ export class SelectionCompiler {
           ))
             mergeSelection(nodes, seen, merged, ctx);
 
+        continue;
+      }
+
+      // vNEXT — strict item 32: a named fragment spread.
+      if (sel.kind === Kind.FRAGMENT_SPREAD) {
+        const fragment = namedFragment(sel, 'on a node', ctx);
+        if (
+          !fragment ||
+          !keptByDirectives(sel.directives, `...${sel.name.value}`, ctx)
+        )
+          continue;
+        const stack = (ctx.fragmentStack ??= []);
+        stack.push(sel.name.value);
+        try {
+          for (const merged of this.convertSelectionSet(
+            fragment.selectionSet,
+            fragment.typeCondition.name.value,
+            ctx,
+          ))
+            mergeSelection(nodes, seen, merged, ctx);
+        } finally {
+          stack.pop();
+        }
         continue;
       }
 
@@ -2188,6 +2352,8 @@ export class SelectionCompiler {
       return entry;
     };
     for (const sel of selectionSet.selections) {
+      if (sel.kind === Kind.FRAGMENT_SPREAD)
+        unsupportedFragmentSpread(sel, `in "${parentNode.fieldName}"`, ctx);
       if (sel.kind !== Kind.FIELD) continue;
       const field = sel as FieldNode;
       assertNoArguments(field, `${parentNode.fieldName}.${field.name.value}`);
@@ -2253,6 +2419,12 @@ export class SelectionCompiler {
 
       if (field.name.value === 'edges' && field.selectionSet)
         for (const edgeSel of field.selectionSet.selections) {
+          if (edgeSel.kind === Kind.FRAGMENT_SPREAD)
+            unsupportedFragmentSpread(
+              edgeSel,
+              `in "${parentNode.fieldName}.edges"`,
+              ctx,
+            );
           if (edgeSel.kind !== Kind.FIELD) continue;
           const edgeField = edgeSel as FieldNode;
           assertNoArguments(
@@ -2372,6 +2544,8 @@ export class SelectionCompiler {
             ) ?? out;
         continue;
       }
+      if (sel.kind === Kind.FRAGMENT_SPREAD)
+        unsupportedFragmentSpread(sel, `in "${where}"`, ctx);
       if (sel.kind !== Kind.FIELD) continue;
       const name = sel.name.value;
       assertNoArguments(sel, `${where}.${name}`);

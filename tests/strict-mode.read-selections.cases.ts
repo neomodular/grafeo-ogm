@@ -16,6 +16,11 @@ export const readTypeDefs = /* GraphQL */ `
     cloc: CartesianPoint
     locs: [Point!]
     friends: [RsUser!]! @relationship(type: "RS_FRIEND", direction: OUT)
+    pets: [RsPet!]! @relationship(type: "RS_HAS_PET", direction: OUT)
+  }
+  type RsPet @node {
+    id: ID! @unique
+    name: String
   }
 `;
 
@@ -38,6 +43,22 @@ export const readShapes: Record<string, ReadRun> = {
     }),
   'point: unknown sub-field': (ogm) =>
     ogm.model('RsUser').find({ selectionSet: '{ name loc { longitude x } }' }),
+  'fragment: spread + definition': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet:
+        '{ name ...U pets { ...P } } fragment U on RsUser { id } fragment P on RsPet { name }',
+    }),
+  'fragment: spread without a definition': (ogm) =>
+    ogm.model('RsUser').find({ selectionSet: '{ name ...U }' }),
+  'fragment: query keyword document': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet: 'query { ...U } fragment U on RsUser { name }',
+    }),
+  'fragment: spread in connection edges': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet:
+        '{ petsConnection { edges { ...E node { name } } } } fragment E on RsUserPetsRelationship { cursor }',
+    }),
 };
 
 /** Compile `run` and return its statements. */

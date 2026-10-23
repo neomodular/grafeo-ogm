@@ -1568,6 +1568,18 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 
 Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
+#### 32. Named fragment spreads in a `selectionSet` (since vNEXT)
+
+```typescript
+await users.find({
+  selectionSet: `{ name ...UserPosts } fragment UserPosts on User { posts { title } }`,
+});
+// default: [{ name: 'Alice' }]                          — the spread is ignored (and warns)
+// strict:  [{ name: 'Alice', posts: [{ title: … }] }]   — expanded from its definition
+```
+
+2.x reads only inline fragments (`... on Post { … }`): a named spread was skipped, so the fields it selects were missing from the result, and a document that starts with `query` (a `gql` tag holding `query { ...F } fragment F …`) came back as `{ id }` only. Strict mode reads a selectionSet that contains spreads as one document: one selection (`{ … }` or `query { … }`) plus its `fragment F on Type { … }` definitions. Each spread is expanded like the inline fragment `... on Type { … }`, with `@include` / `@skip` and nesting. A spread whose fragment is not defined in the same document, a fragment that spreads itself, a fragment defined twice and a spread directly inside a connection (its own keys, `edges` or `pageInfo`; spreads inside `node { … }` work) throw `OGMError`. The warning code is `selection-fragment-spread`, logged once per OGM instance and fragment name.
+
 #### 33. A selection deeper than `maxDepth` (since vNEXT)
 
 ```typescript

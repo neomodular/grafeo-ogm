@@ -127,3 +127,87 @@ describe('Point / CartesianPoint sub-selection (both modes, additive)', () => {
     expect(warns[0]).toContain('(not "x")');
   });
 });
+
+describe('strict item 32 — named fragment spreads', () => {
+  it('default warns once per fragment name', async () => {
+    const warns: string[] = [];
+    await compileReadShape(
+      readShapes['fragment: spread + definition'],
+      undefined,
+      warns,
+    );
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toContain('"...U" on a node');
+    expect(warns[1]).toContain('"...P" on a node');
+  });
+
+  it('default warns for a document the parser cannot read as one', async () => {
+    const warns: string[] = [];
+    await compileReadShape(
+      readShapes['fragment: query keyword document'],
+      undefined,
+      warns,
+    );
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain('not read as a document');
+  });
+
+  it('strict expands spreads like the equivalent inline fields', async () => {
+    const [expanded] = await compileReadShape(
+      readShapes['fragment: spread + definition'],
+      true,
+    );
+    const [inline] = await compileReadShape(
+      (ogm) =>
+        ogm.model('RsUser').find({
+          selectionSet:
+            '{ name ... on RsUser { id } pets { ... on RsPet { name } } }',
+        }),
+      true,
+    );
+    expect(expanded).toEqual(inline);
+    expect(expanded).toContain('.`id`');
+    const [doc] = await compileReadShape(
+      readShapes['fragment: query keyword document'],
+      true,
+    );
+    expect(doc).toContain('RETURN n { .`name` }');
+  });
+
+  it('strict throws for an unknown, cyclic, duplicate or connection-level spread', async () => {
+    await expect(
+      compileReadShape(
+        readShapes['fragment: spread without a definition'],
+        true,
+      ),
+    ).rejects.toThrow(/Unknown fragment "U"/);
+    await expect(
+      compileReadShape(
+        (ogm) =>
+          ogm.model('RsUser').find({
+            selectionSet:
+              '{ ...A } fragment A on RsUser { name ...B } fragment B on RsUser { ...A }',
+          }),
+        true,
+      ),
+    ).rejects.toThrow(
+      /Fragment "A" in selectionSet spreads itself \(A -> B -> A\)/,
+    );
+    await expect(
+      compileReadShape(
+        (ogm) =>
+          ogm.model('RsUser').find({
+            selectionSet:
+              '{ ...A } fragment A on RsUser { name } fragment A on RsUser { id }',
+          }),
+        true,
+      ),
+    ).rejects.toThrow(/defined twice/);
+    await expect(
+      compileReadShape(
+        readShapes['fragment: spread in connection edges'],
+        true,
+      ),
+    ).rejects.toThrow(/"\.\.\.E" in "petsConnection\.edges" is not supported/);
+  });
+});
