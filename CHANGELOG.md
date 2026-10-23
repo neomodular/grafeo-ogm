@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.20.0 (2026-10-23) — selection fixes
+
+> **Minor release.** It adds strict items 35–38 for selections that 2.x silently drops or answers wrongly. It also projects Point sub-selections, and accepts a selectionSet DocumentNode without location info. Without `strict`, every selection that worked in 2.19.0 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Fixed
+
+- **A selectionSet DocumentNode without location info no longer throws "Failed to parse selectionSet".** Examples are `parse(…, { noLocation: true })`, graphql-codegen `documentMode: documentNode`, or a JSON AST. It is printed, and compiles like the same document with location info.
+- **`selectionSet` now projects the `@neo4j/graphql` Point / CartesianPoint fields in both modes:** `loc { longitude latitude height crs srid }` and `cloc { x y z crs srid }`. Before, such a sub-selection was left out of the result; under strict it threw `OGMError`. Points on relationship edge properties are not covered yet.
+
+### Strict mode
+
+- **Item 35:** a node-, interface- or union-typed `@cypher` field selected with a sub-selection (`topPost { id title }`) was silently left out of the result. Strict mode projects it (one node, or every row of a list field) and applies the target's read policy. Default mode warns once (`selection-cypher-node-field`) and keeps leaving it out.
+- **Item 36:** named fragment spreads (`...F` with its fragment definition in the same selectionSet document) were silently ignored. Strict mode expands them; default mode warns once (`selection-fragment-spread`).
+- **Item 37:** a selection nested deeper than the model's maxDepth (5; InterfaceModel 12) was silently cut off. Strict mode throws `OGMError`; default mode warns once (`selection-max-depth`).
+- **Item 38:** a `@cypher` field selected on a union ran the first member's statement for every member. This applies through member fragments or bare, in a relationship or a connection. Strict mode runs each member's own statement. Default mode warns once (`union-member-cypher-field`) when the members' statements differ.
+
+### Docs
+
+- A driver created with `useBigInt: true` returns `bigint` integers, which do not match the generated `number` types. Use the default driver or `disableLosslessIntegers: true`.
+
 ## 2.19.0 (2026-10-23) — ignored write input and params
 
 > **Minor release.** It adds strict items 32–34, for input that 2.x ignores silently. Without `strict`, every input that worked in 2.18.0 compiles to byte-identical Cypher; the only addition is one warning per OGM instance and shape. Generated types are unchanged.
