@@ -1538,6 +1538,24 @@ await users.update({ where: { id }, connect: { post: [{ where: { node: { id: 'p1
 
 The keys of a `connect` / `disconnect` map name relationship fields of the type. Before vNEXT a key that is not one (a typo, a scalar field) was skipped, so the write ran without it and reported success, while a cascade `delete` threw for the same mistake. This applies to the root `connect` / `disconnect` of `update()` and to the nested `connect` / `disconnect` of a connect or disconnect item at any depth (in `update()`, in a nested update item, in `create()`). Keys set to `undefined` are ignored. The warning codes are `connect-unknown-relationship` and `disconnect-unknown-relationship`, logged once per OGM instance, type and key.
 
+#### 29. `@cypher` fields in write inputs (since vNEXT)
+
+```graphql
+type User @node {
+  id: ID! @id
+  n: Int
+  double: Int @cypher(statement: "RETURN this.n * 2 AS d", columnName: "d")
+}
+```
+
+```typescript
+await users.update({ where: { id }, update: { double: 98 } });
+// default: SET n.double = 98 — a stored property no read returns (and warns)
+// strict:  OGMError: Field "double" in the update input of User is a @cypher field: it is computed when read and cannot be written. …
+```
+
+A `@cypher` field is computed when it is read, and the generated create and update inputs leave it out. Before vNEXT every write path accepted it anyway and stored it as a property of the same name, which reads never return (they run the statement). This applies to `create()`, `update()`, `updateMany()`, `createMany()`, both branches of `upsert()`, and nested creates and updates at any depth. A key set to `undefined` is ignored. The warning code is `cypher-field-write`, logged once per OGM instance, type and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

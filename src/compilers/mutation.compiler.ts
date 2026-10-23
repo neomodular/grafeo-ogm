@@ -929,7 +929,7 @@ export class MutationCompiler {
         if (nodeDef.relationships.has(key)) continue;
         if (value === undefined) continue;
         assertSafePropertyName(key, 'update property');
-        assertKnownField(nodeDef, key, 'update');
+        assertKnownField(nodeDef, key, 'update', this.strictMode);
         const propDef = nodeDef.properties.get(key);
         const paramName = `update_${key}`;
         const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -1358,7 +1358,7 @@ export class MutationCompiler {
         throw upsertRelationshipError(nodeDef, key, 'create');
       }
       assertSafePropertyName(key, 'create property');
-      assertKnownField(nodeDef, key, 'create');
+      assertKnownField(nodeDef, key, 'create', this.strictMode);
       const propDef = nodeDef.properties.get(key);
       const paramName = `onCreate_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -1407,7 +1407,7 @@ export class MutationCompiler {
         throw upsertRelationshipError(nodeDef, key, 'update');
       }
       assertSafePropertyName(key, 'update property');
-      assertKnownField(nodeDef, key, 'update');
+      assertKnownField(nodeDef, key, 'update', this.strictMode);
       const propDef = nodeDef.properties.get(key);
       const paramName = `onMatch_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -1540,7 +1540,7 @@ export class MutationCompiler {
             `createMany does not support relationship fields. Found: "${key}" in data[${index}]. Use create() for nested operations.`,
           );
         assertSafePropertyName(key, 'createMany property');
-        assertKnownField(nodeDef, key, 'createMany');
+        assertKnownField(nodeDef, key, 'createMany', this.strictMode);
         scalarKeys.push(key);
       }
 
@@ -1768,7 +1768,7 @@ export class MutationCompiler {
       if (nodeDef.relationships.has(key)) continue;
       if (value === undefined) continue;
       assertSafePropertyName(key, 'create property');
-      assertKnownField(nodeDef, key, 'create');
+      assertKnownField(nodeDef, key, 'create', this.strictMode);
       const propDef = nodeDef.properties.get(key);
       const paramName = `${prefix}_${key}`;
       const valueExpr = wrapWriteExpr(`$${paramName}`, value, propDef);
@@ -3465,7 +3465,12 @@ export class MutationCompiler {
               if (targetNodeDef.relationships.has(prop)) continue;
               if (val === undefined) continue;
               assertSafePropertyName(prop, 'nested update property');
-              assertKnownField(targetNodeDef, prop, 'nested update');
+              assertKnownField(
+                targetNodeDef,
+                prop,
+                'nested update',
+                this.strictMode,
+              );
               const nodePropDef = targetNodeDef.properties.get(prop);
               const paramName = `${itemPrefix}_set_${prop}`;
               setClauses.push(
@@ -4169,13 +4174,36 @@ export function unwrapAbstractCreateNode(
  * type (v2.5.0). Pre-2.5.0 only its spelling was checked, so a typo
  * (`nmae`) was stored as a stray property and the intended field was left
  * untouched — at every depth (nested creates and updates included).
+ *
+ * vNEXT — strict item 29: a `@cypher` field is computed when read, never
+ * stored, and the generated write inputs leave it out. Pre-vNEXT (and
+ * still by default) it was written as a stored property that no read
+ * ever returns. Default: one warning per OGM, type and field; strict:
+ * `OGMError`.
  */
 function assertKnownField(
   nodeDef: NodeDefinition,
   key: string,
   input: 'create' | 'update' | 'createMany' | 'nested update',
+  strictMode: StrictMode,
 ): void {
-  if (nodeDef.properties.has(key) || nodeDef.relationships.has(key)) return;
+  const propDef = nodeDef.properties.get(key);
+  if (propDef?.isCypher) {
+    if (strictMode.strict)
+      throw new OGMError(
+        `Field "${key}" in the ${input} input of ${nodeDef.typeName} is a @cypher field: it is computed when ` +
+          `read and cannot be written. Remove it from the input.`,
+      );
+    strictMode.warn(
+      'cypher-field-write',
+      `${nodeDef.typeName}\u0000${key}`,
+      `Field "${key}" in the ${input} input of ${nodeDef.typeName} is a @cypher field, computed when read; ` +
+        `it is written as a stored property that no read returns.`,
+      'throw an OGMError for @cypher fields in write inputs',
+    );
+    return;
+  }
+  if (propDef || nodeDef.relationships.has(key)) return;
   throw new OGMError(
     `Unknown field "${key}" in the ${input} input of ${nodeDef.typeName}: it is neither a property nor a ` +
       `relationship of the type. Declare it in the schema, or fix the key.`,
