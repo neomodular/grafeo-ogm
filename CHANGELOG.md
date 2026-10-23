@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.10.1 (2026-10-23) — runtime labels follow the policies of the type they name
+
+> **Security patch.** A runtime label that names another declared node type now runs that type's policies. OGMs without `policies` (or under a bypass) compile to byte-identical Cypher, and labels that no declared type carries are unchanged. Generated types are unchanged.
+
+### Security
+
+- **Runtime labels bypassed the Node-Level Security policies of the type they named (high).** `create`, `createMany` and `upsert` take `labels`, and `setLabels` takes `addLabels` / `removeLabels`. These labels were only validated as identifiers, and only the root model's policies ran. A label that another declared type carries therefore put the node into that type without any of its policies:
+  - `Public.create({ labels: ['Secret'], … })` forged a `Secret` owned by someone else, past `Secret`'s `create` policy and `WITH CHECK`;
+  - `setLabels({ addLabels: ['Secret'] })` converted the caller's own row into a `Secret`;
+  - a context that could update a `Secret` but not read it relabelled it into an unprotected type and read it there.
+
+  A runtime label now follows the nested-write principle: the write enforces what the equivalent direct write on that type would.
+  - **Adding** a declared type's label is a `create` on that type: default deny plus `WITH CHECK` on each input (for `upsert`, the create input and, in default mode, the update input; `setLabels` carries no properties, so it is checked as an empty input).
+  - **Relabelling an existing node** (`setLabels`, and the matched-node path of a default-mode `upsert` / `createMany({ skipDuplicates: true })`) also requires the root type's `read` row filter beside its `update` filter, because the node becomes reachable through the other type's model.
+  - **Removing** a declared type's label is a `delete` on that type: its `delete` row filter applies.
+
+  The label-triggered policies are listed in `policiesEvaluated`. Present since policies shipped in 1.7.0 (confirmed on 1.7.0); affects 1.7.0 through 2.10.0.
+
+### Behavior change
+
+- With `policies` configured, a write whose runtime labels add or remove a declared type's label now needs that type's `create` / `delete` policy (and, for a relabel, the root type's `read` policy). Without a matching permissive the write is denied, exactly as the equivalent direct write on that type would be. Writes whose labels name no declared type behave exactly as in 2.10.0.
+
 ## 2.10.0 (2026-10-22) — unknown keys in nested write inputs
 
 > **Minor release.** Unknown keys in nested write inputs warn by default and throw under `strict: true` (strict item 22). Without `strict`, every input that worked in 2.9.1 compiles to byte-identical Cypher. Generated types are unchanged.
