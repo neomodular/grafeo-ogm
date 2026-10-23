@@ -1,3 +1,4 @@
+import { format } from 'node:util';
 import {
   Driver,
   isInt,
@@ -44,8 +45,29 @@ export function formatParamsForLog(params: unknown): string {
   }
 }
 
-/** No-op logger used when no logger is provided and debug is off. */
+/** No-op logger used for non-debug messages when no logger is provided. */
 const NOOP_LOGGER: OGMLogger = { debug: () => {}, warn: () => {} };
+
+/**
+ * Fallback for `Executor.debug = true` without a logger: one line per
+ * message on stderr, formatted like `console` (`%s`, `%d`, `%o`).
+ */
+const STDERR_DEBUG_LOGGER: OGMLogger = {
+  debug: (message: string, ...args: unknown[]) => {
+    process.stderr.write(`${format(message, ...args)}\n`);
+  },
+};
+
+/**
+ * The logger `Executor.debug` lines go to: the caller's logger, else stderr.
+ *
+ * vNEXT — pre-vNEXT the debug lines went to a no-op logger when the OGM had
+ * no `logger`, so `Executor.debug = true` printed nothing although the
+ * README promises it logs every query. A configured logger is unchanged.
+ */
+export function debugLogger(logger?: OGMLogger): OGMLogger {
+  return logger ?? STDERR_DEBUG_LOGGER;
+}
 
 /**
  * Execution context for running queries within an existing transaction or session.
@@ -109,12 +131,15 @@ export class Executor {
   static debug = false;
 
   private logger: OGMLogger;
+  /** Target of the `Executor.debug` lines (stderr when no logger). */
+  private debugLog: OGMLogger;
 
   constructor(
     private driver: Driver,
     logger?: OGMLogger,
   ) {
     this.logger = logger ?? NOOP_LOGGER;
+    this.debugLog = debugLogger(logger);
   }
 
   /**
@@ -128,8 +153,8 @@ export class Executor {
     options?: ExecuteOptions,
   ): Promise<QueryResult> {
     if (Executor.debug) {
-      this.logger.debug('[OGM] Cypher: %s', cypher);
-      this.logger.debug('[OGM] Params: %s', formatParamsForLog(params));
+      this.debugLog.debug('[OGM] Cypher: %s', cypher);
+      this.debugLog.debug('[OGM] Params: %s', formatParamsForLog(params));
     }
 
     // Legacy backward compatibility
@@ -155,9 +180,12 @@ export class Executor {
         ? await session.run(cypher, params, { metadata: context.metadata })
         : await session.run(cypher, params);
       if (Executor.debug) {
-        this.logger.debug('[OGM] Records returned: %d', result.records.length);
+        this.debugLog.debug(
+          '[OGM] Records returned: %d',
+          result.records.length,
+        );
         if (result.records.length > 0 && result.records.length <= 5)
-          this.logger.debug(
+          this.debugLog.debug(
             '[OGM] First record keys: %o',
             result.records[0].keys,
           );

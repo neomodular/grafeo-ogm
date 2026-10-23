@@ -2608,7 +2608,7 @@ Optional server features:
 
 ### Do I need to know Cypher?
 
-For most CRUD work, no. `find`, `create`, `update`, and the rest cover 95% of typical applications. For complex queries (custom scoring, multi-hop algorithms), use `@cypher` directives in your schema or `ogm.$queryRaw(...)` for ad-hoc Cypher. grafeo-ogm doesn't hide Cypher — it generates it transparently and you can log every query via `Executor.debug = true`.
+For most CRUD work, no. `find`, `create`, `update`, and the rest cover 95% of typical applications. For complex queries (custom scoring, multi-hop algorithms), use `@cypher` directives in your schema or `ogm.$queryRaw(...)` for ad-hoc Cypher. grafeo-ogm doesn't hide Cypher — it generates it transparently and you can log every query via `Executor.debug = true` (to the OGM's `logger.debug`, or to stderr when no `logger` is configured).
 
 ### Can I use grafeo-ogm with a GraphQL server (Apollo, Yoga, etc.)?
 

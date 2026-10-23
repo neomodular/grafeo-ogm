@@ -73,3 +73,55 @@ describe('debug logging of params', () => {
     expect(logged(debug)).toContain('9007199254740993');
   });
 });
+
+/**
+ * vNEXT — `Executor.debug = true` without a logger used to print nothing
+ * (the README FAQ says it logs every query). It now writes to stderr; a
+ * configured logger still gets every line and stderr stays untouched.
+ */
+describe('Executor.debug without a logger', () => {
+  let write: jest.SpyInstance;
+  const stderrText = () => write.mock.calls.map((c) => String(c[0])).join('');
+
+  beforeEach(() => {
+    write = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    write.mockRestore();
+    Executor.debug = false;
+  });
+
+  it('writes the Cypher and params of model queries to stderr', async () => {
+    Executor.debug = true;
+    const { driver } = mockDriver();
+    await new Executor(driver).execute('RETURN $x', { x: 7 });
+    expect(stderrText()).toContain('[OGM] Cypher: RETURN $x');
+    expect(stderrText()).toContain('"x": 7');
+    expect(stderrText()).toContain('[OGM] Records returned: 0');
+  });
+
+  it('writes $queryRaw / $executeRaw lines to stderr', async () => {
+    Executor.debug = true;
+    const { driver } = mockDriver();
+    const ogm = new OGM({ typeDefs: 'type A @node { id: ID! }', driver });
+    await ogm.$queryRaw('RETURN 1 AS q');
+    await ogm.$executeRaw('RETURN 2 AS e');
+    expect(stderrText()).toContain('[OGM $queryRaw] Cypher: RETURN 1 AS q');
+    expect(stderrText()).toContain('[OGM $executeRaw] Cypher: RETURN 2 AS e');
+  });
+
+  it('stays silent when debug is off', async () => {
+    const { driver } = mockDriver();
+    await new Executor(driver).execute('RETURN 1', {});
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('a configured logger gets the lines and stderr stays untouched', async () => {
+    Executor.debug = true;
+    const { driver } = mockDriver();
+    const debug = jest.fn();
+    await new Executor(driver, { debug }).execute('RETURN 1', {});
+    expect(debug).toHaveBeenCalledWith('[OGM] Cypher: %s', 'RETURN 1');
+    expect(write).not.toHaveBeenCalled();
+  });
+});

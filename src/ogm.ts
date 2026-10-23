@@ -11,7 +11,12 @@ import {
   WhereCompilerOptions,
 } from './compilers/where.compiler';
 import { OGMError } from './errors';
-import { Executor, formatParamsForLog, OGMLogger } from './execution/executor';
+import {
+  debugLogger,
+  Executor,
+  formatParamsForLog,
+  OGMLogger,
+} from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
 import { InterfaceModel, InterfaceModelCompilers } from './interface-model';
 import {
@@ -719,12 +724,11 @@ export class OGM<
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<T[]> {
-    if (Executor.debug && this.config.logger) {
-      this.config.logger.debug('[OGM $queryRaw] Cypher: %s', cypher);
-      this.config.logger.debug(
-        '[OGM $queryRaw] Params: %s',
-        formatParamsForLog(params),
-      );
+    if (Executor.debug) {
+      // vNEXT — without a logger the lines go to stderr (see debugLogger).
+      const log = debugLogger(this.config.logger);
+      log.debug('[OGM $queryRaw] Cypher: %s', cypher);
+      log.debug('[OGM $queryRaw] Params: %s', formatParamsForLog(params));
     }
 
     const session = this.config.driver.session();
@@ -744,12 +748,11 @@ export class OGM<
     cypher: string,
     params: Record<string, unknown> = {},
   ): Promise<{ recordsAffected: number }> {
-    if (Executor.debug && this.config.logger) {
-      this.config.logger.debug('[OGM $executeRaw] Cypher: %s', cypher);
-      this.config.logger.debug(
-        '[OGM $executeRaw] Params: %s',
-        formatParamsForLog(params),
-      );
+    if (Executor.debug) {
+      // vNEXT — without a logger the lines go to stderr (see debugLogger).
+      const log = debugLogger(this.config.logger);
+      log.debug('[OGM $executeRaw] Cypher: %s', cypher);
+      log.debug('[OGM $executeRaw] Params: %s', formatParamsForLog(params));
     }
 
     const session = this.config.driver.session();
