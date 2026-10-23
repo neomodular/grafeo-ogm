@@ -266,6 +266,7 @@ export default defineConfig({
     // @vector SDL carries no dimensions; db push reads them here, keyed by index name
     BookEmbedding: { dimensions: 1536, similarity: 'cosine' },
   },
+  // strict: true, // the same value as your new OGM({ strict }); see Strict mode, item 23
 });
 ```
 
@@ -342,6 +343,7 @@ It is **additive by default** and **idempotent** — a second run with no schema
 | `--dry-run` | Print the full plan (including the exact Cypher, drops included) and exit without writing |
 | `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes, and dropping + recreating indexes whose definition changed |
 | `--yes` | Confirm destructive drops non-interactively (required with `--force-drop` in CI) |
+| `--strict` | Plan constraints and indexes as `new OGM({ strict: true })` uses the labels: a type with `@node(labels: [...])` gets them on its first listed label ([strict item 23](#23-nodelabels--replaces-the-type-name-since-2110)). Same as `strict: true` in the config file |
 | `--schema <path>`, `--uri`, `--username`, `--database` | Schema path and connection overrides |
 
 > **Vector indexes** declare no dimensions in the SDL (the `@vector` directive only names the index and its embedding property), but Neo4j requires them at creation time. Supply them in `vectorIndexes` (keyed by index name) in your config. A `@vector` index without configured dimensions is reported and skipped — never silently created or dropped.
@@ -1359,6 +1361,41 @@ The nested write objects are compiled from a fixed set of keys, and before 2.10.
 | an item's `update`, when it has `node` or `edge` | `node`, `edge` |
 
 A nested create item without `node` and an `update` without `node` / `edge` are the flat forms: every key is a field of the target type, and an unknown one throws in both modes (since 2.5.0). Keys set to `undefined` are ignored. Connect / disconnect items are [item 1](#1-unknown-keys-in-connect--disconnect-items). The warning code is `nested-write-unknown-key`, logged once per OGM instance, input shape, field and key set.
+
+#### 23. `@node(labels: [...])` replaces the type name (since 2.11.0)
+
+```graphql
+type Person @node(labels: ["Human"]) { id: ID! @id @unique  name: String }
+```
+
+```typescript
+await people.find({ where: { name: 'Ann' } });
+// default: MATCH (n:Person)                 — a :Human node written by @neo4j/graphql is not found (warned once when the OGM is built)
+// strict:  MATCH (n:Human)                  — as in @neo4j/graphql
+await people.create({ input: [{ name: 'Ann' }] });
+// default: CREATE (n:Person:Human { … })    · strict: CREATE (n:Human { … })
+// db push / assertIndexesAndConstraints:
+// default: Person_id_unique FOR (n:Person)  · strict: Human_id_unique FOR (n:Human)
+```
+
+In `@neo4j/graphql` the listed labels are used **instead of** the type name: reads match all of them, creates write exactly them, and constraints and indexes go on the first one. 2.x matches the type name, creates the type name plus the listed labels, and puts constraints, fulltext and vector indexes on the type name. Strict mode follows upstream everywhere a node's label is used: root reads and writes, relationship targets (selections, connections, `<rel>Aggregate`, filters), connect / disconnect, nested create, `upsert`, `createMany`, `setLabels`, cascade delete, the members of an interface or union (`MATCH (n:((K9&Pet)|Cat))`, per-member policy predicates), and `db push` / `assertIndexesAndConstraints`. The runtime `labels` argument is added on top, as before. `__typename` is still the GraphQL type name: strict mode tells members apart by their label sets (`CASE WHEN n:K9:Pet THEN 'Dog' …`, in declaration order, so give each member a label set no other member's nodes carry).
+
+- **Labels that include the type name** (`@node(labels: ["Book", "Resource"])` on `Book`): nodes grafeo-ogm wrote are unchanged, but strict reads also require `:Resource`, and constraints go on the first label. With `["Resource", "Book"]` they move to `:Resource`, so a `@unique` field declared on several such types is unique across all of them, as upstream.
+- **`$jwt` / `$context` placeholders** in `labels` (supported by upstream) are not supported. 2.x keeps matching by the type name and rejects the label on create; strict mode throws `OGMError` when the OGM is built.
+- **`db push`** has no OGM to read `strict` from: set `strict: true` in `grafeo.config.*` (or pass `--strict`) to the same value as your OGM. Without it, push keeps planning on the type name and prints a warning for each such type.
+
+Only types whose `labels` are not just their own name are affected, and only they warn. **Switching is a data migration**: every node grafeo-ogm created carries the extra type-name label, and its constraints sit on the type name. Strict mode still finds those nodes (they carry the listed labels too), but new nodes no longer get the type-name label, and `db push --strict` creates the constraints on the first listed label and reports the old `Person_id_unique` as an orphan, which `--force-drop` removes. For each such type:
+
+```cypher
+// 1. before `db push --strict`: the first listed label must be unique where the
+//    constraint will be (it may now cover nodes of other types or written by others)
+MATCH (n:Human) WITH n.id AS id, count(*) AS c WHERE c > 1 RETURN id, c;
+// 2. optional: drop the type-name label from nodes grafeo-ogm wrote (only if
+//    nothing else in your app matches :Person)
+MATCH (n:Human:Person) REMOVE n:Person;
+```
+
+Staying on the default instead and reading nodes written by `@neo4j/graphql`? Add the type name to them (only if every `:Human` node is a `Person`): `MATCH (n:Human) WHERE NOT n:Person SET n:Person`.
 
 #### Not behind the switch: `aggregate` on list fields
 
