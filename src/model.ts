@@ -405,15 +405,24 @@ export class Model<
   private _defaultSelection: SelectionNode[] | undefined;
 
   /**
-   * Global selection cache capped at 500 entries. No eviction — assumes bounded
-   * selection set variety (fixed set of selectionSet strings used across resolvers).
-   * In practice, NestJS services use a fixed set of selection strings, so growth is bounded.
+   * Selection cache, one map per parsed schema, each capped at 500 entries.
+   * No eviction — assumes bounded selection set variety (fixed set of
+   * selectionSet strings used across resolvers). In practice, NestJS services
+   * use a fixed set of selection strings, so growth is bounded.
+   *
+   * v2.12.4 — keyed by schema identity. Pre-2.12.4 one map was shared by
+   * every OGM in the process, so a parse made against OGM A's schema (and
+   * its duplicate-field conflict warnings) was reused by OGM B with a
+   * different schema.
    */
-  private static _selectionCache = new Map<string, SelectionNode[]>();
+  private static _selectionCache = new WeakMap<
+    SchemaMetadata,
+    Map<string, SelectionNode[]>
+  >();
 
   /** Clear the static selection cache. Useful in tests to prevent cross-test pollution. */
   static clearSelectionCache(): void {
-    Model._selectionCache.clear();
+    Model._selectionCache = new WeakMap();
   }
 
   private whereCompiler: WhereCompiler;
@@ -2148,18 +2157,22 @@ export class Model<
       typeof selectionSet === 'string'
         ? selectionSet
         : (selectionSet.loc?.source?.body ?? String(selectionSet));
-    // v2.6.0 — strict mode parses some selectionSets differently, and this
-    // cache is shared by every OGM, so strict entries get their own key.
+    // v2.6.0 — strict mode parses some selectionSets differently, and two
+    // OGMs may share one schema, so strict entries get their own key.
     // Default-mode keys are unchanged.
     const cacheKey = this.strictMode.strict ? `strict\u0000${selStr}` : selStr;
-    const cached = Model._selectionCache.get(cacheKey);
+    let cache = Model._selectionCache.get(this.schema);
+    if (!cache) {
+      cache = new Map();
+      Model._selectionCache.set(this.schema, cache);
+    }
+    const cached = cache.get(cacheKey);
     if (cached) {
       this.selectionCompiler.replayParseWarnings(cached);
       return cached;
     }
     const parsed = this.selectionCompiler.parseSelectionSet(selStr);
-    if (Model._selectionCache.size < 500)
-      Model._selectionCache.set(cacheKey, parsed);
+    if (cache.size < 500) cache.set(cacheKey, parsed);
     return parsed;
   }
 

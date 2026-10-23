@@ -10,18 +10,39 @@ import {
 } from '../utils/validation';
 
 /**
- * Module-level cache for resolved union/interface target definitions.
- * Bounded by the number of unique type names in the schema (~50-100 entries).
+ * Module-level cache for resolved union/interface target definitions,
+ * one inner map per parsed schema. Each inner map is bounded by the number
+ * of unique type names in that schema (~50-100 entries).
+ *
+ * v2.12.4 — keyed by schema identity. Pre-2.12.4 a single map was keyed by
+ * type name only, so two OGMs with different schemas shared entries: an
+ * interface/union resolved by OGM A was served to OGM B (wrong property
+ * types, false unknown-field warnings). The `WeakMap` lets a discarded
+ * schema's entries be collected with it.
  * Use `clearResolveTargetDefCache()` to reset (e.g., between tests).
  */
-const resolveTargetDefCache = new Map<string, NodeDefinition | null>();
+let resolveTargetDefCache = new WeakMap<
+  SchemaMetadata,
+  Map<string, NodeDefinition | null>
+>();
+
+function schemaResolveCache(
+  schema: SchemaMetadata,
+): Map<string, NodeDefinition | null> {
+  let cache = resolveTargetDefCache.get(schema);
+  if (!cache) {
+    cache = new Map();
+    resolveTargetDefCache.set(schema, cache);
+  }
+  return cache;
+}
 
 /**
- * Clear the module-level resolve cache.
+ * Clear the module-level resolve cache (every schema's entries).
  * Useful in tests to prevent cross-test state pollution.
  */
 export function clearResolveTargetDefCache(): void {
-  resolveTargetDefCache.clear();
+  resolveTargetDefCache = new WeakMap();
 }
 
 /**
@@ -38,7 +59,8 @@ export function resolveTargetDef(
   const direct = schema.nodes.get(target);
   if (direct) return direct;
 
-  const cached = resolveTargetDefCache.get(target);
+  const cache = schemaResolveCache(schema);
+  const cached = cache.get(target);
   if (cached !== undefined) return cached;
 
   // Check interfaces — build a NodeDefinition from the interface definition
@@ -54,13 +76,13 @@ export function resolveTargetDef(
       fulltextIndexes: [],
       implementsInterfaces: [],
     };
-    resolveTargetDefCache.set(target, result);
+    cache.set(target, result);
     return result;
   }
 
   const unionMembers = schema.unions?.get(target);
   if (!unionMembers || unionMembers.length === 0) {
-    resolveTargetDefCache.set(target, null);
+    cache.set(target, null);
     return null;
   }
 
@@ -90,7 +112,7 @@ export function resolveTargetDef(
     implementsInterfaces: [],
   };
 
-  resolveTargetDefCache.set(target, result);
+  cache.set(target, result);
   return result;
 }
 
