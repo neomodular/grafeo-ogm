@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.14.0 (2026-10-23) — list `@cypher` fields under strict mode
+
+> **Minor release.** A list-typed `@cypher` field warns once by default and, under `strict: true` (strict item 24), returns every row its statement produces, as `@neo4j/graphql` does. Without `strict`, every input that worked in 2.13.0 compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Strict mode
+
+- **List `@cypher` fields return the whole list.** Every `@cypher` field's column was reduced with `head(collect(…))` (since v2.4.0), so a list field whose statement returns one row per element (`MATCH (this)-[:TAGGED]->(t) RETURN t.name AS tags`) came back as a single element from an unspecified row instead of the list. Strict unwinds and collects the column as `@neo4j/graphql` 5.x does: one row per element gives the list in row order with duplicates kept, a single row holding a list gives that list, several list rows are concatenated, `null` elements are dropped, and no rows give `[]`. Each node still yields exactly one row. This applies to root and nested selections, connection edges and nodes, interface and union fragments, typed `select` and `selectionSet`, mutation responses, and list `@cypher` fields in `where` (equality, `_IN`, through relationship filters). Scalar `@cypher` fields and sort are unchanged in both modes.
+
+### Deprecations
+
+- **`cypher-list-field`** (logged once per OGM and list `@cypher` field): the field resolves to its statement's first row only. 3.0 returns the list, as `strict: true` does today.
+
 ## 2.13.0 (2026-10-23) — `extend type` and other type extensions
 
 > **Minor release.** Type extensions in the SDL (`extend type`, `extend interface`, `extend union`, `extend enum`) are now merged into the definitions they extend. Schemas without extensions parse, compile and generate exactly as before.
