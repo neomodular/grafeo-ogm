@@ -16,10 +16,10 @@ import {
 /** No-op logger used when no logger is provided. */
 const NOOP_LOGGER: OGMLogger = { debug: () => {} };
 
-/** Options for {@link cloneSubgraph} (vNEXT). */
+/** Options for {@link cloneSubgraph} (v2.16.0). */
 export interface CloneSubgraphOptions {
   /**
-   * vNEXT — strict item 41: a reference relationship between two owned
+   * v2.16.0 — strict item 26: a reference relationship between two owned
    * nodes is cloned once, clone to clone. Without it (the 2.x default) the
    * clone also gets a copy pointing back at the source's original node, and
    * a warning is logged. `OGM.$cloneSubgraph` follows `new OGM({ strict })`.
@@ -51,6 +51,14 @@ function cloneStrictMode(
 }
 
 const INTERNAL_REFERENCE_WARN = 'subgraph-internal-reference';
+
+/**
+ * Reference relationships already checked for strict item 26, per warn-once
+ * log. The detection query runs at most once per log and reference
+ * relationship, so a subgraph that never has an internal reference doesn't
+ * pay for it on every clone.
+ */
+const internalReferenceChecked = new WeakMap<StrictMode, Set<string>>();
 
 /**
  * An owned relationship entry: a type with an optional APOC direction
@@ -169,7 +177,7 @@ function validateConfig(
  * @param config - Defines which nodes to clone vs reference
  * @param transaction - Caller-managed Neo4j transaction
  * A relationship between two owned nodes is cloned by APOC, clone to
- * clone, whatever its type. vNEXT — under `strict` (strict item 41), a
+ * clone, whatever its type. v2.16.0 — under `strict` (strict item 26), a
  * reference relationship whose target is itself an owned node is not
  * re-attached in Phase 2. Without it, Phase 2 also links the clone to the
  * source's original target, so the clone has the relationship twice (once
@@ -177,7 +185,7 @@ function validateConfig(
  * logs a warning once.
  *
  * @param logger - Optional logger for debug output
- * @param options - `{ strict: true }` for the strict-mode behaviour (vNEXT)
+ * @param options - `{ strict: true }` for the strict-mode behaviour (v2.16.0)
  * @returns The cloned root node id, a mapping of original→cloned node ids,
  *          and the cloned node ids grouped by label
  */
@@ -322,7 +330,7 @@ async function executeApocClone(
   strict: boolean,
 ): Promise<{
   result: SubgraphCloneResult;
-  /** Element ids of the cloned originals (strict mode only, vNEXT). */
+  /** Element ids of the cloned originals (strict mode only, v2.16.0). */
   originalElementIds?: string[];
 }> {
   const relFilter = ownedRelationshipFilter(config);
@@ -467,12 +475,13 @@ async function executeApocClone(
 }
 
 /**
- * vNEXT — default mode only: log the strict item 41 warning when a
+ * v2.16.0 — default mode only: log the strict item 26 warning when a
  * reference relationship joins two owned nodes, which Phase 2 re-attaches
  * from the clone back to the source's original (on top of the clone-to-
  * clone copy APOC made). A read-only query, run only when the warning
- * would be logged (a logger with `warn`, not warned yet), so callers
- * without a logger send exactly the statements they did before.
+ * would be logged (a logger with `warn`, not warned yet) and at most once
+ * per log and reference relationship, so callers without a logger send
+ * exactly the statements they did before.
  */
 async function warnInternalReferences(
   sourceRootId: string,
@@ -485,6 +494,13 @@ async function warnInternalReferences(
   for (const refRel of config.referenceRelationships) {
     const detail = `${refRel.fromLabel}:${refRel.relationshipType}:${refRel.direction}`;
     if (!strictMode.wouldWarn(INTERNAL_REFERENCE_WARN, detail)) continue;
+    let checked = internalReferenceChecked.get(strictMode);
+    if (!checked) {
+      checked = new Set();
+      internalReferenceChecked.set(strictMode, checked);
+    }
+    if (checked.has(detail)) continue;
+    checked.add(detail);
     const escapedRelType = escapeIdentifier(refRel.relationshipType);
     const escapedLabel = assertSafeLabel(refRel.fromLabel);
     const pattern =
@@ -536,7 +552,7 @@ async function reattachReferenceRelationships(
   transaction: Transaction,
   logger: OGMLogger,
   /**
-   * vNEXT — strict mode: the element ids of the cloned originals. A target
+   * v2.16.0 — strict mode: the element ids of the cloned originals. A target
    * among them is an owned node, whose relationship APOC already cloned
    * clone to clone, so it is not re-attached.
    */

@@ -710,8 +710,8 @@ describe('cloneSubgraph owned-node ids (v2.5.0)', () => {
   });
 });
 
-// vNEXT — strict item 41: a reference relationship between two owned nodes.
-describe('cloneSubgraph reference relationships between owned nodes (vNEXT)', () => {
+// v2.16.0 — strict item 26: a reference relationship between two owned nodes.
+describe('cloneSubgraph reference relationships between owned nodes (v2.16.0)', () => {
   const config: SubgraphConfig = {
     ownedLabels: ['Post', 'Comment'],
     ownedRelationships: ['HAS_COMMENT'],
@@ -796,5 +796,25 @@ describe('cloneSubgraph reference relationships between owned nodes (vNEXT)', ()
     await cloneSubgraph('root-1', config, tx2, logger);
     expect((tx2.run as jest.Mock).mock.calls).toHaveLength(3);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('the default runs the detection query once per logger, also when nothing is internal', async () => {
+    const warn = jest.fn();
+    const logger = { debug: () => {}, warn };
+    const tx = createMockTransaction([
+      ...cloneResults(),
+      { records: [mockRecord({ internal: 0 })] },
+      { records: [mockRecord({ totalCreated: 1 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx, logger);
+    expect((tx.run as jest.Mock).mock.calls).toHaveLength(4);
+
+    const tx2 = createMockTransaction([
+      ...cloneResults(),
+      { records: [mockRecord({ totalCreated: 1 })] },
+    ]);
+    await cloneSubgraph('root-1', config, tx2, logger);
+    expect((tx2.run as jest.Mock).mock.calls).toHaveLength(3);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
