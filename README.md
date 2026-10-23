@@ -1528,6 +1528,16 @@ await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { t
 
 A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field.
 
+#### 28. An unknown relationship in a connect / disconnect map (since vNEXT)
+
+```typescript
+await users.update({ where: { id }, connect: { post: [{ where: { node: { id: 'p1' } } }] } });
+// default: links nothing, reports success (and warns)
+// strict:  OGMError: Unknown relationship "post" in the connect input of User: it is not a relationship field of the type. …
+```
+
+The keys of a `connect` / `disconnect` map name relationship fields of the type. Before vNEXT a key that is not one (a typo, a scalar field) was skipped, so the write ran without it and reported success, while a cascade `delete` threw for the same mistake. This applies to the root `connect` / `disconnect` of `update()` and to the nested `connect` / `disconnect` of a connect or disconnect item at any depth (in `update()`, in a nested update item, in `create()`). Keys set to `undefined` are ignored. The warning codes are `connect-unknown-relationship` and `disconnect-unknown-relationship`, logged once per OGM instance, type and key.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

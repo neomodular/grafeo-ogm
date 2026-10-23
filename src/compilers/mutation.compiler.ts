@@ -487,6 +487,37 @@ export class MutationCompiler {
   }
 
   /**
+   * vNEXT — strict item 28. A key of a connect / disconnect map (root,
+   * or the nested `connect` / `disconnect` of an item) that is not a
+   * relationship of `nodeDef`. Pre-vNEXT (and still by default) it is
+   * skipped, so the write runs without it and reports success; a cascade
+   * `delete` throws for the same mistake. Default: one warning per OGM,
+   * type, kind and key; strict: `OGMError`. A key set to `undefined` is
+   * ignored in both modes.
+   */
+  private checkLinkRelationship(
+    nodeDef: NodeDefinition,
+    fieldName: string,
+    value: unknown,
+    kind: 'connect' | 'disconnect',
+  ): void {
+    if (value === undefined) return;
+    const msg = `Unknown relationship "${fieldName}" in the ${kind} input of ${nodeDef.typeName}`;
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `${msg}: it is not a relationship field of the type. Declare it in the schema, or fix the key.`,
+      );
+    this.strictMode.warn(
+      `${kind}-unknown-relationship`,
+      `${nodeDef.typeName}\u0000${fieldName}`,
+      `${msg} is ignored: it is not a relationship field of the type, so nothing is ${
+        kind === 'connect' ? 'connected' : 'disconnected'
+      } for it.`,
+      `throw an OGMError for unknown relationships in ${kind} inputs`,
+    );
+  }
+
+  /**
    * v2.10.0 — strict item 22. Keys of a nested write object that the
    * compiler does not read (connect / disconnect items are
    * {@link checkLinkItemKeys}). Pre-2.10.0 (and still by default) they are
@@ -2059,7 +2090,10 @@ export class MutationCompiler {
 
     for (const [fieldName, spec] of Object.entries(connect)) {
       const relDef = nodeDef.relationships.get(fieldName);
-      if (!relDef) continue;
+      if (!relDef) {
+        this.checkLinkRelationship(nodeDef, fieldName, spec, 'connect');
+        continue;
+      }
       // v2.5.1 — `{ rel: null }` (the generated input is `InputMaybe`)
       // connects nothing. Since 2.4.8 it reached the item compiler with no
       // `where`, so the MATCH had no filter and EVERY target was linked.
@@ -2507,7 +2541,10 @@ export class MutationCompiler {
 
     for (const [fieldName, spec] of Object.entries(disconnect)) {
       const relDef = nodeDef.relationships.get(fieldName);
-      if (!relDef) continue;
+      if (!relDef) {
+        this.checkLinkRelationship(nodeDef, fieldName, spec, 'disconnect');
+        continue;
+      }
 
       const abstract = abstractTarget(relDef.target, this.schema);
       // `null` / `{}` stays a blanket disconnect of the whole relationship.
