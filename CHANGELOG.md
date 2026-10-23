@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.20.1 (2026-10-23) — security: @cypher node fields and read policies
+
+> **Security patch.** A `@cypher` field returning a node type ignored that type's `read` policies. OGMs without `policies` emit byte-identical Cypher.
+
+### Security
+
+- **Node-typed `@cypher` fields bypassed the target type's read policy.** This covers a `@cypher` field whose type is a node, interface or union type, selected without a sub-selection (`{ topPost }`, `select: { topPost: true }`). It returned the nodes its statement matched with every property, and applied none of the target type's `read` policies. This happened:
+  - in default and strict mode;
+  - at the root and nested;
+  - through `InterfaceModel`;
+  - in mutation responses.
+
+  The target type's read policy now filters the value, per member for interface/union targets: a hidden node becomes `null`, and hidden list elements are removed. A target policy that depends on a `@cypher` field now throws there, as it does on relationships. `bypassPolicies` and overrides are unchanged. Affects 1.7.0-beta.0 through 2.20.0.
+
 ## 2.20.0 (2026-10-23) — selection fixes
 
 > **Minor release.** It adds strict items 35–38 for selections that 2.x silently drops or answers wrongly. It also projects Point sub-selections, and accepts a selectionSet DocumentNode without location info. Without `strict`, every selection that worked in 2.19.0 compiles to byte-identical Cypher. Generated types are unchanged.
