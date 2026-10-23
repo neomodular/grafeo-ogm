@@ -61,7 +61,7 @@ const STDERR_DEBUG_LOGGER: OGMLogger = {
 /**
  * The logger `Executor.debug` lines go to: the caller's logger, else stderr.
  *
- * vNEXT — pre-vNEXT the debug lines went to a no-op logger when the OGM had
+ * v2.17.0 — pre-v2.17.0 the debug lines went to a no-op logger when the OGM had
  * no `logger`, so `Executor.debug = true` printed nothing although the
  * README promises it logs every query. A configured logger is unchanged.
  */

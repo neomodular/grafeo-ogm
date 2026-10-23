@@ -533,7 +533,7 @@ type WrittenBy @relationshipProperties
 }
 ```
 
-`indexName` (the `@neo4j/graphql` 4+ spelling) is accepted as an alias of `name` since vNEXT: `{ indexName: "BookSearch", queryName: "booksByTitle", fields: ["title"] }` defines the same index (`queryName` is accepted and ignored; search with the index name). Giving both with different values is [strict item 37](#37-fulltext-name-and-indexname-disagree-since-vnext).
+`indexName` (the `@neo4j/graphql` 4+ spelling) is accepted as an alias of `name` since 2.17.0: `{ indexName: "BookSearch", queryName: "booksByTitle", fields: ["title"] }` defines the same index (`queryName` is accepted and ignored; search with the index name). Giving both with different values is [strict item 27](#27-fulltext-name-and-indexname-disagree-since-2170).
 
 ---
 
@@ -1083,7 +1083,7 @@ Some input shapes compile to something other than what they say. A typo'd connec
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
-Generated types are the same in both modes, except that root operation types are left out under strict (item 40): pass `strict` to `generateTypes()`, or set it in `grafeo.config.*` for `grafeo generate`, to the same value as your OGM.
+Generated types are the same in both modes, except that root operation types are left out under strict (item 30): pass `strict` to `generateTypes()`, or set it in `grafeo.config.*` for `grafeo generate`, to the same value as your OGM.
 
 #### 1. Unknown keys in connect / disconnect items
 
@@ -1461,7 +1461,7 @@ await ogm.$cloneSubgraph('book-a', config);
 
 APOC clones every relationship among the owned nodes, clone to clone, whatever its type. Phase 2 then re-attached each reference relationship from the clone to the original's target, also when that target was itself an owned node, so the clone got the relationship twice: once to its own copy and once into the source subgraph. Strict mode re-attaches only references whose target is outside the cloned subgraph. References to shared nodes (a language, a status) are re-attached in both modes. The standalone `cloneSubgraph(rootId, config, tx, logger, { strict: true })` takes the same switch. The warning code is `subgraph-internal-reference`, logged once per OGM instance (or logger, for the standalone function) and reference relationship. To detect it, default mode runs one extra read-only query per reference relationship, once per OGM instance (or logger), and only when the logger has a `warn` method.
 
-#### 37. `@fulltext` `name` and `indexName` disagree (since vNEXT)
+#### 27. `@fulltext` `name` and `indexName` disagree (since 2.17.0)
 
 ```graphql
 type Book @node @fulltext(indexes: [{ name: "BookSearch", indexName: "BookTitles", fields: ["title"] }]) { title: String }
@@ -1474,7 +1474,7 @@ new OGM({ typeDefs, driver, logger });
 
 2.x reads `name`; `@neo4j/graphql` 5.x prefers `indexName`. With two different names neither is clearly meant, so strict mode rejects the schema when the OGM is built. The same value in both, or either one alone, is fine in both modes. The warning code is `fulltext-name-conflict`.
 
-#### 38. `@relationship` without `type` or `direction` (since vNEXT)
+#### 28. `@relationship` without `type` or `direction` (since 2.17.0)
 
 ```graphql
 type Product @node { colour: Colour @relationship(type: "OF_COLOUR") }
@@ -1487,7 +1487,7 @@ type Product @node { colour: Colour @relationship(type: "OF_COLOUR") }
 
 Both arguments are required in `@neo4j/graphql`. The warning code is `relationship-missing-argument`.
 
-#### 39. Unknown type names (since vNEXT)
+#### 29. Unknown type names (since 2.17.0)
 
 ```graphql
 type Product @node { name: Strng  maker: Persn @relationship(type: "MADE_BY", direction: OUT) }
@@ -1500,7 +1500,7 @@ type Product @node { name: Strng  maker: Persn @relationship(type: "MADE_BY", di
 
 A field type must be a built-in scalar (`String`, `Int`, `Float`, `Boolean`, `ID`, `BigInt`, the temporal types, `Duration`, `Point`, `CartesianPoint`) or a type, interface, union, enum, input or `scalar` the SDL defines. `@neo4j/graphql` rejects the schema otherwise. The warning code is `unknown-type`.
 
-#### 40. `type Query` / `Mutation` / `Subscription` in the SDL (since vNEXT)
+#### 30. `type Query` / `Mutation` / `Subscription` in the SDL (since 2.17.0)
 
 ```graphql
 type Movie @node { title: String }
@@ -1515,7 +1515,7 @@ ogm.model('Query');
 
 `@neo4j/graphql` 5.x treats these three names as GraphQL root operation types, never as nodes. Strict mode skips them in the OGM, `db push` and the type generator (`strict` in `grafeo.config.*` or `generateTypes({ strict: true })`). The warning code is `root-operation-type`.
 
-**`db push` and `grafeo generate`** read `strict` from `grafeo.config.*` (`db push` also takes `--strict`), and items 37–40 apply there too: default mode prints a `warning:` line per shape, strict fails before connecting (37–39) or skips the type (40).
+**`db push` and `grafeo generate`** read `strict` from `grafeo.config.*` (`db push` also takes `--strict`), and items 27–30 apply there too: default mode prints a `warning:` line per shape, strict fails before connecting (27–29) or skips the type (30).
 
 #### Not behind the switch: `aggregate` on list fields
 

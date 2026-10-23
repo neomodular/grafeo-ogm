@@ -1,5 +1,5 @@
 /**
- * Live `@fulltext(indexes: [{ indexName }])` and strict root types (vNEXT,
+ * Live `@fulltext(indexes: [{ indexName }])` and strict root types (v2.17.0,
  * scan-5 S5t-5 / S5t-14).
  *
  * Opt-in: runs only when NEO4J_URI is set (credentials from NEO4J_USER /
@@ -7,7 +7,7 @@
  * run's `runId` and is removed in `afterAll`; the `It`-prefixed fulltext
  * index is dropped there too.
  *
- * Pre-vNEXT `indexName` (the `@neo4j/graphql` 4+ spelling) was ignored:
+ * Pre-v2.17.0 `indexName` (the `@neo4j/graphql` 4+ spelling) was ignored:
  * `assertIndexesAndConstraints({ create: true })` made no index and a
  * fulltext search on it threw "Unknown fulltext index".
  */

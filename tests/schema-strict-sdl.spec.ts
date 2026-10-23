@@ -1,13 +1,13 @@
 /**
- * vNEXT — malformed SDL and root operation types (scan-5 S5t-5 / S5t-14).
+ * v2.17.0 — malformed SDL and root operation types (scan-5 S5t-5 / S5t-14).
  *
  * - `@fulltext(indexes: [{ indexName }])` (the `@neo4j/graphql` 4+
  *   spelling) made no index; it is now an alias of `name` (both modes).
- * - strict item 37: `name` and `indexName` that disagree.
- * - strict item 38: `@relationship` without `type` / `direction` dropped
+ * - strict item 27: `name` and `indexName` that disagree.
+ * - strict item 28: `@relationship` without `type` / `direction` dropped
  *   the field silently.
- * - strict item 39: unknown type names were accepted.
- * - strict item 40: `type Query` / `Mutation` / `Subscription` became node
+ * - strict item 29: unknown type names were accepted.
+ * - strict item 30: `type Query` / `Mutation` / `Subscription` became node
  *   models; `@neo4j/graphql` 5.x treats them as root operation types.
  *
  * Default mode keeps the 2.x result and warns once per OGM instance and
@@ -80,7 +80,7 @@ describe('@fulltext indexName (alias of name)', () => {
     ]);
   });
 
-  describe('strict item 37: name and indexName disagree', () => {
+  describe('strict item 27: name and indexName disagree', () => {
     const conflict = `type P @node
       @fulltext(indexes: [{ name: "Old", indexName: "New", fields: ["t"] }]) { t: String }`;
 
@@ -103,7 +103,7 @@ describe('@fulltext indexName (alias of name)', () => {
   });
 });
 
-describe('strict item 38: @relationship without type / direction', () => {
+describe('strict item 28: @relationship without type / direction', () => {
   const sdl = `type Product @node {
     id: ID!
     colour: Colour! @relationship(type: "OF_COLOUR")
@@ -134,7 +134,7 @@ describe('strict item 38: @relationship without type / direction', () => {
   });
 });
 
-describe('strict item 39: unknown type names', () => {
+describe('strict item 29: unknown type names', () => {
   const sdl = `type Product @node {
     name: String
     weird: Strng
@@ -190,7 +190,7 @@ describe('strict item 39: unknown type names', () => {
   });
 });
 
-describe('strict item 40: root operation types', () => {
+describe('strict item 30: root operation types', () => {
   const sdl = `type Movie @node { title: String }
     type Query { movies: [Movie!]! }
     type Mutation { touch: Int }`;

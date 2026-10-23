@@ -239,7 +239,7 @@ describe('grafeo init (cli-init spec)', () => {
     expect(config).not.toContain(`schema: './${evil}.graphql'`);
   });
 
-  it('starter Person keeps name a user-supplied field with a separate generated id (vNEXT)', async () => {
+  it('starter Person keeps name a user-supplied field with a separate generated id (v2.17.0)', async () => {
     const io = makeIO();
     await runInit([], io);
     const person = parseSchema(read(io.cwd, 'schema.graphql')).nodes.get(
@@ -253,7 +253,7 @@ describe('grafeo init (cli-init spec)', () => {
     expect(id.isUnique).toBe(true);
   });
 
-  it('keeps an absolute --schema / --out absolute in the config (vNEXT)', async () => {
+  it('keeps an absolute --schema / --out absolute in the config (v2.17.0)', async () => {
     const io = makeIO();
     const absSchema = path.join(io.cwd, 'graph', 'schema.graphql');
     const absOut = path.join(io.cwd, 'gen', 'types.ts');

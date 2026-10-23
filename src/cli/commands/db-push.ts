@@ -249,7 +249,7 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
   const schemaPath = resolveSchemaPath(flags, config, io.cwd);
   const typeDefs = fs.readFileSync(schemaPath, 'utf-8');
   const strict = flags.strict === true || config.strict === true;
-  // vNEXT — strict items 37–40: malformed SDL throws under strict (as the
+  // v2.17.0 — strict items 27–30: malformed SDL throws under strict (as the
   // app's strict OGM would at construction); default mode prints a warning.
   const schema = parseSchema(typeDefs, {
     strict,

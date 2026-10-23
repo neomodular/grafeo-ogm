@@ -35,8 +35,8 @@ import { OGMError } from '../errors';
 import { mergeTypeExtensions } from './type-extensions';
 
 /**
- * vNEXT — a schema shape whose 2.x handling `strict: true` changes
- * (strict items 37–40). Default mode keeps the 2.x behaviour and reports
+ * v2.17.0 — a schema shape whose 2.x handling `strict: true` changes
+ * (strict items 27–30). Default mode keeps the 2.x behaviour and reports
  * it through {@link ParseSchemaOptions.onWarning}; strict mode throws or
  * takes the corrected path instead.
  */
@@ -52,7 +52,7 @@ export interface SchemaWarning {
 }
 
 export interface ParseSchemaOptions {
-  /** vNEXT — apply the strict-mode schema rules (items 37–40). */
+  /** v2.17.0 — apply the strict-mode schema rules (items 27–30). */
   strict?: boolean;
   /** Called once per occurrence in default mode; never in strict mode. */
   onWarning?: (warning: SchemaWarning) => void;
@@ -234,7 +234,7 @@ function parseField(
   );
   const where = `${ownerName}.${field.name.value}`;
 
-  // vNEXT — strict item 39: a type name the SDL never defines (a typo such
+  // v2.17.0 — strict item 29: a type name the SDL never defines (a typo such
   // as `Strng` or `Persn`) is a GraphQL validation error upstream. 2.x
   // keeps the field (as a property, or a relationship to a missing type).
   if (!SCALAR_TYPES.has(typeName) && !knownTypes.has(typeName))
@@ -267,7 +267,7 @@ function parseField(
     );
 
     if (!relType || !direction) {
-      // vNEXT — strict item 38: `type` and `direction` are required
+      // v2.17.0 — strict item 28: `type` and `direction` are required
       // arguments upstream. 2.x drops the field silently.
       const missing = [!relType && 'type', !direction && 'direction']
         .filter(Boolean)
@@ -423,8 +423,8 @@ function parseFulltextIndexes(
       if (field.name.value === 'name' && field.value.kind === Kind.STRING)
         name = (field.value as StringValueNode).value;
 
-      // vNEXT — `indexName` is the `@neo4j/graphql` 4+ spelling (`name` is
-      // deprecated there). Pre-vNEXT it was ignored and no index was made.
+      // v2.17.0 — `indexName` is the `@neo4j/graphql` 4+ spelling (`name` is
+      // deprecated there). Pre-v2.17.0 it was ignored and no index was made.
       if (field.name.value === 'indexName' && field.value.kind === Kind.STRING)
         indexName = (field.value as StringValueNode).value;
 
@@ -434,7 +434,7 @@ function parseFulltextIndexes(
     }
 
     if (indexName && name && indexName !== name) {
-      // vNEXT — strict item 37: two different names for one index. 2.x
+      // v2.17.0 — strict item 27: two different names for one index. 2.x
       // used `name`; upstream prefers `indexName`. Neither is clearly meant.
       const t = node.name.value;
       ctx.flag(
@@ -634,7 +634,7 @@ export function parseSchema(
     const objDef = def as ObjectTypeDefinitionNode;
     const typeName = objDef.name.value;
 
-    // vNEXT — strict item 40: `@neo4j/graphql` 5.x treats Query / Mutation /
+    // v2.17.0 — strict item 30: `@neo4j/graphql` 5.x treats Query / Mutation /
     // Subscription as root operation types, never as nodes. 2.x makes them
     // node models (and generated types); strict mode skips them.
     if (ROOT_OPERATION_TYPES.has(typeName)) {

@@ -41,7 +41,7 @@ function parseInitFlags(argv: string[]): InitFlags {
 
 // The classic Neo4j movie graph, expressed in grafeo SDL — recognizable to
 // Neo4j users and it exercises relationship arity/direction both ways.
-// vNEXT — Person has its own generated `id`; pre-vNEXT `name` carried
+// v2.17.0 — Person has its own generated `id`; pre-v2.17.0 `name` carried
 // `@id`, so it was left out of the create input and stored as a UUID.
 const MOVIE_SCHEMA = `# grafeo schema — the Neo4j movie example.
 # Run \`npx grafeo generate\` (or \`npm run generate\`) to emit typed models.
@@ -105,7 +105,7 @@ export default defineConfig({
 /**
  * Normalize a path for the config file: relative paths get a `./` prefix,
  * absolute ones (POSIX `/x`, Windows `C:\x` / `\\server\x`) are kept as-is.
- * vNEXT — pre-vNEXT an absolute `--schema /abs/s.graphql` became
+ * v2.17.0 — pre-v2.17.0 an absolute `--schema /abs/s.graphql` became
  * `.//abs/s.graphql`, a relative path the config then resolved against cwd.
  */
 function rel(p: string): string {

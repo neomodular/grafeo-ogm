@@ -66,7 +66,7 @@ describe('grafeo generate (cli-generate spec)', () => {
     );
   });
 
-  // vNEXT — strict items 37–40: default mode warns, `strict: true` in
+  // v2.17.0 — strict items 27–30: default mode warns, `strict: true` in
   // grafeo.config generates what a strict OGM uses (no Query model).
   it('warns about root operation types; strict: true in the config skips them', async () => {
     const sdl = `${VALID_SCHEMA}\ntype Query { books: [Book!]! }`;

@@ -588,10 +588,10 @@ type Toy @node {
   });
 });
 
-// vNEXT — S5t-5 / S5t-14: `indexName` plans the fulltext index; malformed
-// SDL (strict items 37–39) and root operation types (item 40) warn in
+// v2.17.0 — S5t-5 / S5t-14: `indexName` plans the fulltext index; malformed
+// SDL (strict items 27–29) and root operation types (item 30) warn in
 // default mode and throw / are skipped with strict, as the app's OGM does.
-describe('grafeo db push — malformed SDL and strict (items 37–40)', () => {
+describe('grafeo db push — malformed SDL and strict (items 27–30)', () => {
   const sdlIO = (driver: Driver, sdl: string) => {
     const io = makeIO(driver);
     fs.writeFileSync(path.join(io.cwd, 'schema.graphql'), sdl);

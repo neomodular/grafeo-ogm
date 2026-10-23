@@ -44,7 +44,7 @@ export interface GenerateTypesOptions {
   /** Optional configuration */
   config?: GenerateTypesConfig;
   /**
-   * vNEXT — apply the strict-mode schema rules (items 37–40), as an OGM
+   * v2.17.0 — apply the strict-mode schema rules (items 27–30), as an OGM
    * built with `strict: true` does: malformed SDL throws and root
    * operation types (`Query`, `Mutation`) get no model types. Set it to
    * the same value as your OGM's `strict`. Default `false`: 2.x output,

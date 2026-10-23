@@ -342,7 +342,7 @@ export class OGM<
     const strictMode = new StrictMode(config.strict === true, config.logger);
 
     // Parse schema synchronously so model() works before init().
-    // vNEXT — strict items 37–40 (malformed SDL, root operation types):
+    // v2.17.0 — strict items 27–30 (malformed SDL, root operation types):
     // strict throws / skips here, default mode warns once through `logger`.
     this.schema = parseSchema(this.config.typeDefs, {
       strict: strictMode.strict,
@@ -731,7 +731,7 @@ export class OGM<
     params: Record<string, unknown> = {},
   ): Promise<T[]> {
     if (Executor.debug) {
-      // vNEXT — without a logger the lines go to stderr (see debugLogger).
+      // v2.17.0 — without a logger the lines go to stderr (see debugLogger).
       const log = debugLogger(this.config.logger);
       log.debug('[OGM $queryRaw] Cypher: %s', cypher);
       log.debug('[OGM $queryRaw] Params: %s', formatParamsForLog(params));
@@ -755,7 +755,7 @@ export class OGM<
     params: Record<string, unknown> = {},
   ): Promise<{ recordsAffected: number }> {
     if (Executor.debug) {
-      // vNEXT — without a logger the lines go to stderr (see debugLogger).
+      // v2.17.0 — without a logger the lines go to stderr (see debugLogger).
       const log = debugLogger(this.config.logger);
       log.debug('[OGM $executeRaw] Cypher: %s', cypher);
       log.debug('[OGM $executeRaw] Params: %s', formatParamsForLog(params));

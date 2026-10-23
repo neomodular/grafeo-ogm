@@ -75,7 +75,7 @@ describe('debug logging of params', () => {
 });
 
 /**
- * vNEXT — `Executor.debug = true` without a logger used to print nothing
+ * v2.17.0 — `Executor.debug = true` without a logger used to print nothing
  * (the README FAQ says it logs every query). It now writes to stderr; a
  * configured logger still gets every line and stderr stays untouched.
  */
