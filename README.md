@@ -441,6 +441,8 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 
 A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since vNEXT a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before vNEXT such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Not yet supported on relationship (edge) properties.
 
+**Integers and the driver's `useBigInt` option:** results are mapped from what the driver returns. With the default (lossless) driver or `disableLosslessIntegers: true`, an `Int` comes back as a JS `number` (a Neo4j `Integer` outside the safe range becomes a `bigint`), as the generated types say. A driver created with `neo4j.driver(url, auth, { useBigInt: true })` returns every integer as a `bigint` (`Int` fields, `count()`, `totalCount`, aggregate `count` / `min` / `max` / `sum`, a point's `srid`, integer `@cypher` columns), and grafeo-ogm passes them through unchanged, so the values do not match the generated `number` types. Use the default driver configuration or `disableLosslessIntegers: true` with grafeo-ogm.
+
 ### Relationships
 
 ```graphql
