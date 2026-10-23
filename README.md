@@ -439,7 +439,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `Point` | Point | Geographical coordinates (WGS-84) |
 | `CartesianPoint` | Point | 2D/3D Cartesian coordinates |
 
-A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since vNEXT a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before vNEXT such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Not yet supported on relationship (edge) properties.
+A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since 2.20.0 a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before v2.20.0 such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Not yet supported on relationship (edge) properties.
 
 **Integers and the driver's `useBigInt` option:** results are mapped from what the driver returns. With the default (lossless) driver or `disableLosslessIntegers: true`, an `Int` comes back as a JS `number` (a Neo4j `Integer` outside the safe range becomes a `bigint`), as the generated types say. A driver created with `neo4j.driver(url, auth, { useBigInt: true })` returns every integer as a `bigint` (`Int` fields, `count()`, `totalCount`, aggregate `count` / `min` / `max` / `sum`, a point's `srid`, integer `@cypher` columns), and grafeo-ogm passes them through unchanged, so the values do not match the generated `number` types. Use the default driver configuration or `disableLosslessIntegers: true` with grafeo-ogm.
 
@@ -1549,13 +1549,6 @@ type User @node {
   id: ID! @id
   n: Int
   double: Int @cypher(statement: "RETURN this.n * 2 AS d", columnName: "d")
-
-#### 31. A node-typed `@cypher` field with a sub-selection (since vNEXT)
-
-```graphql
-type User @node {
-  id: ID! @unique
-  topPost: Post @cypher(statement: "MATCH (this)-[:WROTE]->(p:Post) RETURN p ORDER BY p.rank DESC LIMIT 1", columnName: "p")
 }
 ```
 
@@ -1577,6 +1570,16 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 
 Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
+#### 35. A node-typed `@cypher` field with a sub-selection (since 2.20.0)
+
+```graphql
+type User @node {
+  id: ID! @unique
+  topPost: Post @cypher(statement: "MATCH (this)-[:WROTE]->(p:Post) RETURN p ORDER BY p.rank DESC LIMIT 1", columnName: "p")
+}
+```
+
+```typescript
 await users.find({ selectionSet: '{ id topPost { id title } }' });
 // default: [{ id: 'u1' }]                                  — topPost is left out (and warns)
 // strict:  [{ id: 'u1', topPost: { id: 'p2', title: … } }]
@@ -1584,7 +1587,7 @@ await users.find({ selectionSet: '{ id topPost { id title } }' });
 
 A `@cypher` field whose type is a node, interface or union type was compiled like a relationship, matched none, and was left out of the result whenever it had a sub-selection. Strict mode projects the sub-selection over what the statement returns: one node (`null` when the statement returns no row), or every row for a list field (`[Post]`, as [item 24](#24-list-cypher-fields-since-2140) collects them), with nested relationships, `__typename` and inline fragments on an abstract type. The target type's `read` policy applies, as it does on a relationship. Arguments on the field (`topPost(where: …)`) and a sub-selection reached through a fragment on an interface or union member throw `OGMError`. Selected bare (`{ topPost }`) the field still returns the whole node, in both modes. The warning code is `selection-cypher-node-field`, logged once per OGM instance, type and field.
 
-#### 32. Named fragment spreads in a `selectionSet` (since vNEXT)
+#### 36. Named fragment spreads in a `selectionSet` (since 2.20.0)
 
 ```typescript
 await users.find({
@@ -1596,7 +1599,7 @@ await users.find({
 
 2.x reads only inline fragments (`... on Post { … }`): a named spread was skipped, so the fields it selects were missing from the result, and a document that starts with `query` (a `gql` tag holding `query { ...F } fragment F …`) came back as `{ id }` only. Strict mode reads a selectionSet that contains spreads as one document: one selection (`{ … }` or `query { … }`) plus its `fragment F on Type { … }` definitions. Each spread is expanded like the inline fragment `... on Type { … }`, with `@include` / `@skip` and nesting. A spread whose fragment is not defined in the same document, a fragment that spreads itself, a fragment defined twice and a spread directly inside a connection (its own keys, `edges` or `pageInfo`; spreads inside `node { … }` work) throw `OGMError`. The warning code is `selection-fragment-spread`, logged once per OGM instance and fragment name.
 
-#### 33. A selection deeper than `maxDepth` (since vNEXT)
+#### 37. A selection deeper than `maxDepth` (since 2.20.0)
 
 ```typescript
 await users.find({ selectionSet: '{ friends { friends { friends { friends { friends { friends { name } } } } } } }' });
@@ -1606,7 +1609,7 @@ await users.find({ selectionSet: '{ friends { friends { friends { friends { frie
 
 A `Model` read projects at most 5 levels of relationships, connections and `<rel>Aggregate` below the root (an `InterfaceModel` read 12), and 2.x silently cut a deeper selection off at that level. Strict mode throws instead, so a truncated result is never mistaken for missing data. Raise the limit per model with `model.maxDepth = 8`. The warning code is `selection-max-depth`, logged once per OGM instance, limit and field.
 
-#### 35. A union member's `@cypher` field (since vNEXT)
+#### 38. A union member's `@cypher` field (since 2.20.0)
 
 ```graphql
 union Item = Post | Doc

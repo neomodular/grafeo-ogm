@@ -1,5 +1,5 @@
 /**
- * vNEXT — a DocumentNode `selectionSet` without location info
+ * v2.20.0 — a DocumentNode `selectionSet` without location info
  * (`parse(…, { noLocation: true })`, graphql-codegen `documentMode:
  * documentNode`, a JSON-serialized AST) used to become `"[object Object]"`
  * and throw a parse error. It is now printed. A DocumentNode WITH `loc`

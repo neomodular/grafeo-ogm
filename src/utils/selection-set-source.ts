@@ -1,7 +1,7 @@
 import { print, type DocumentNode } from 'graphql';
 
 /**
- * vNEXT — the text of a `selectionSet` given as a string or a DocumentNode.
+ * v2.20.0 — the text of a `selectionSet` given as a string or a DocumentNode.
  *
  * A DocumentNode that still carries `loc.source.body` (a `gql` tag, plain
  * `parse()`) keeps using that body, so parse-cache keys and the compiled

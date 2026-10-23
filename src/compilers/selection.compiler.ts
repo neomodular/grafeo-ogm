@@ -278,16 +278,16 @@ interface ParseContext {
    */
   possibleTypes: (typeName: string) => readonly string[];
   /**
-   * vNEXT — strict item 32: the fragment definitions of the selectionSet
+   * v2.20.0 — strict item 36: the fragment definitions of the selectionSet
    * document (strict mode only; 2.x ignores named fragment spreads).
    */
   fragments?: ReadonlyMap<string, FragmentDefinitionNode>;
-  /** vNEXT — fragments being expanded, to reject a cycle. */
+  /** v2.20.0 — fragments being expanded, to reject a cycle. */
   fragmentStack?: string[];
 }
 
 /**
- * vNEXT — strict item 32: a named fragment spread (`...F`). 2.x ignores
+ * v2.20.0 — strict item 36: a named fragment spread (`...F`). 2.x ignores
  * it (the fields it selects are left out) and warns; strict mode expands
  * it from the fragment definitions of the same document (see
  * `parseSelectionSet`), or throws when it cannot.
@@ -750,7 +750,7 @@ function assertNoVariables(value: ValueNode, where: string): void {
  * warns; strict honours a literal `if: true | false` and rejects anything
  * else, `$variables` included (selectionSet strings have no variables).
  */
-/** vNEXT — whether a parsed document holds a named fragment spread. */
+/** v2.20.0 — whether a parsed document holds a named fragment spread. */
 function containsFragmentSpread(doc: DocumentNode): boolean {
   let found = false;
   visit(doc, {
@@ -763,7 +763,7 @@ function containsFragmentSpread(doc: DocumentNode): boolean {
 }
 
 /**
- * vNEXT — strict item 32: read a selectionSet that uses named fragment
+ * v2.20.0 — strict item 36: read a selectionSet that uses named fragment
  * spreads as a whole document: one operation (`{ … }` or `query { … }`)
  * plus its `fragment F on T { … }` definitions.
  */
@@ -800,7 +800,7 @@ function parseNamedFragments(source: string): {
 }
 
 /**
- * vNEXT — strict item 32: a named fragment spread where only fields are
+ * v2.20.0 — strict item 36: a named fragment spread where only fields are
  * read (a connection's own keys, `edges`, `pageInfo`): 2.x ignores it and
  * warns; strict mode throws, as it cannot expand it there.
  */
@@ -1094,7 +1094,7 @@ export function propertyTypeName(prop: PropertyDefinition): string {
 }
 
 /**
- * vNEXT — the fields of the upstream `Point` / `CartesianPoint` object
+ * v2.20.0 — the fields of the upstream `Point` / `CartesianPoint` object
  * types, as Cypher over a point value `p`. `longitude` / `latitude` read
  * `x` / `y` (as upstream's resolvers do, so a cartesian value stored in a
  * `Point` field still projects); `height` / `z` are `null` on a 2D point,
@@ -1119,14 +1119,14 @@ const POINT_FIELDS: Record<string, Record<string, (p: string) => string>> = {
   },
 };
 
-/** vNEXT — `"longitude", "latitude", …` of a point field's object type. */
+/** v2.20.0 — `"longitude", "latitude", …` of a point field's object type. */
 export function pointFieldList(prop: PropertyDefinition): string {
   return Object.keys(POINT_FIELDS[prop.type] ?? {})
     .map((f) => `"${f}"`)
     .join(', ');
 }
 
-/** vNEXT — whether `prop` is a stored `Point` / `CartesianPoint` field. */
+/** v2.20.0 — whether `prop` is a stored `Point` / `CartesianPoint` field. */
 export function isPointProperty(prop: PropertyDefinition): boolean {
   return (
     !prop.isCypher &&
@@ -1135,7 +1135,7 @@ export function isPointProperty(prop: PropertyDefinition): boolean {
 }
 
 /**
- * vNEXT — the sub-selected fields of a `Point` / `CartesianPoint` field
+ * v2.20.0 — the sub-selected fields of a `Point` / `CartesianPoint` field
  * that its object type does not declare (`[]`: the selection is valid).
  */
 export function unknownPointFields(
@@ -1154,9 +1154,9 @@ export function unknownPointFields(
 }
 
 /**
- * vNEXT — `loc { longitude latitude }` on a `Point` field (S5r-9): a map
+ * v2.20.0 — `loc { longitude latitude }` on a `Point` field (S5r-9): a map
  * with the selected keys, `null` for a missing point; a list field maps
- * each element. Pre-vNEXT the sub-selection was left out of the result
+ * each element. Pre-v2.20.0 the sub-selection was left out of the result
  * (strict: rejected). Returns `null` when a sub-field is not a field of
  * the point type (the caller keeps the old behaviour).
  */
@@ -1470,7 +1470,7 @@ export class SelectionCompiler {
       const hasChildren = !node.isScalar;
       const prop = owner.def.properties.get(field);
       if (prop) {
-        // vNEXT — strict item 31: strict mode projects the sub-selection
+        // v2.20.0 — strict item 35: strict mode projects the sub-selection
         // of a node-typed `@cypher` field, so check it against the target.
         if (
           hasChildren &&
@@ -1489,7 +1489,7 @@ export class SelectionCompiler {
             );
           continue;
         }
-        // vNEXT — a `Point` / `CartesianPoint` field takes its object
+        // v2.20.0 — a `Point` / `CartesianPoint` field takes its object
         // type's fields; another sub-field leaves the field out.
         if (hasChildren && isPointProperty(prop)) {
           const bad = unknownPointFields(prop, node.children ?? []);
@@ -1775,7 +1775,7 @@ export class SelectionCompiler {
 
         assertSafeIdentifier(node.fieldName, 'selection field');
 
-        // vNEXT — strict item 35: a union's `@cypher` field whose members
+        // v2.20.0 — strict item 38: a union's `@cypher` field whose members
         // declare different statements.
         if (unionMembers && unionMembers.length > 0) {
           const perMember = this.compileUnionMemberCypherScalar(
@@ -1858,7 +1858,7 @@ export class SelectionCompiler {
         continue;
       }
 
-      // vNEXT — a `Point` / `CartesianPoint` field with a sub-selection.
+      // v2.20.0 — a `Point` / `CartesianPoint` field with a sub-selection.
       if (!node.isConnection) {
         const pointProp = nodeDef.properties.get(node.fieldName);
         const pointCypher = pointProp
@@ -1874,7 +1874,7 @@ export class SelectionCompiler {
         }
       }
 
-      // vNEXT — strict item 31: a node-typed `@cypher` field with a
+      // v2.20.0 — strict item 35: a node-typed `@cypher` field with a
       // sub-selection (`undefined`: not one).
       if (!node.isConnection) {
         const cypherNode = this.compileCypherNodeField(
@@ -2070,7 +2070,7 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
     /**
-     * vNEXT — strict item 35: project each type's own field even when the
+     * v2.20.0 — strict item 38: project each type's own field even when the
      * abstract type declares it as `@cypher` (a union's merged definition
      * carries only its first member's statement).
      */
@@ -2139,7 +2139,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * vNEXT — strict item 35. A union type has no fields of its own: its
+   * v2.20.0 — strict item 38. A union type has no fields of its own: its
    * merged definition carries the first member's definition of each
    * field, so a `@cypher` field selected on a union (through member
    * fragments, or bare) ran the FIRST member's statement for every
@@ -2266,7 +2266,7 @@ export class SelectionCompiler {
     const hasSpread = containsFragmentSpread(doc);
     let root: SelectionSetNode | undefined;
     if (ctx.strict && hasSpread) {
-      // vNEXT — strict item 32: expand named fragment spreads from the
+      // v2.20.0 — strict item 36: expand named fragment spreads from the
       // fragment definitions of the same document.
       const named = parseNamedFragments(trimmed);
       root = named.selectionSet;
@@ -2281,7 +2281,7 @@ export class SelectionCompiler {
       if (!root && !hasSpread) return [];
     }
     const result = root ? this.convertSelectionSet(root, undefined, ctx) : [];
-    // vNEXT — strict item 32: a spread the walk above never reached (the
+    // v2.20.0 — strict item 36: a spread the walk above never reached (the
     // selection was parsed as something else, e.g. `query { ...F } …`).
     if (
       hasSpread &&
@@ -2364,7 +2364,7 @@ export class SelectionCompiler {
         continue;
       }
 
-      // vNEXT — strict item 32: a named fragment spread.
+      // v2.20.0 — strict item 36: a named fragment spread.
       if (sel.kind === Kind.FRAGMENT_SPREAD) {
         const fragment = namedFragment(sel, 'on a node', ctx);
         if (
@@ -2931,7 +2931,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * vNEXT — strict item 33: whether a relationship / connection /
+   * v2.20.0 — strict item 37: whether a relationship / connection /
    * aggregate selection at `currentDepth` lies beyond `maxDepth`. 2.x
    * leaves such a selection out of the result (warning once); strict mode
    * throws instead of silently truncating the result.
@@ -2958,7 +2958,7 @@ export class SelectionCompiler {
   }
 
   /**
-   * vNEXT — strict item 31: a `@cypher` field whose type is a node,
+   * v2.20.0 — strict item 35: a `@cypher` field whose type is a node,
    * interface or union type, selected with a sub-selection
    * (`topPost { id title }`). 2.x matched no relationship and left it out
    * of the result, even under strict mode.

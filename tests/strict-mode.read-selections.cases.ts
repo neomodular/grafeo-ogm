@@ -1,6 +1,6 @@
 /**
- * vNEXT — selectionSet shapes 2.x silently drops, truncates or projects
- * wrongly (strict items 31–36). `readShapes` compile each one with a
+ * v2.20.0 — selectionSet shapes 2.x silently drops, truncates or projects
+ * wrongly (strict items 35–36). `readShapes` compile each one with a
  * recording driver; default-mode Cypher must stay byte-identical to
  * v2.15.0 (golden: `fixtures/strict-mode.read-selections.default.golden.json`,
  * captured from 6572bdc with these shapes).

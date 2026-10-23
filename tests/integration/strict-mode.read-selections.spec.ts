@@ -1,6 +1,6 @@
 /**
  * Live suite for selectionSet shapes that 2.x silently drops or
- * truncates (vNEXT, strict items 31–36). Default mode keeps the old result
+ * truncates (v2.20.0, strict items 35–36). Default mode keeps the old result
  * and warns once; `strict: true` does the corrected thing.
  *
  * Opt-in on NEO4J_URI. Labels are `Lr`-prefixed, every node carries this
@@ -128,7 +128,7 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
     await driver.close();
   });
 
-  describe('strict item 33 — a selection deeper than maxDepth', () => {
+  describe('strict item 37 — a selection deeper than maxDepth', () => {
     const nested = (levels: number) => {
       let sel = '{ name }';
       for (let i = 0; i < levels; i++) sel = `{ name friends ${sel} }`;
@@ -237,7 +237,7 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
     });
   });
 
-  describe('strict item 32 — named fragment spreads', () => {
+  describe('strict item 36 — named fragment spreads', () => {
     const sel = `{ name ...U items { ...P ... on LrDoc { body } } }
       fragment U on LrUser { friends { name } }
       fragment P on LrPost { title }`;
@@ -295,7 +295,7 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
     });
   });
 
-  describe('strict item 31 — a node-typed @cypher field with a sub-selection', () => {
+  describe('strict item 35 — a node-typed @cypher field with a sub-selection', () => {
     const sel = `{ name
       topPost { title owners { name } }
       postsByRank { title }
@@ -387,7 +387,7 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
     });
   });
 
-  describe("strict item 35 — a union member fragment's @cypher field", () => {
+  describe("strict item 38 — a union member fragment's @cypher field", () => {
     const labels = async (
       strict: boolean | undefined,
       selectionSet: string,

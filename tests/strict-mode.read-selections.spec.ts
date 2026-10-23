@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict items 31–36: selectionSet shapes 2.x silently drops,
+ * v2.20.0 — strict items 35–36: selectionSet shapes 2.x silently drops,
  * truncates or projects wrongly. Default-mode Cypher is byte-identical to
  * v2.15.0 (golden captured from 6572bdc); strict mode corrects or rejects
  * the shape. Live behaviour: `integration/strict-mode.read-selections.spec.ts`.
@@ -37,7 +37,7 @@ describe('read selection shapes — default mode is byte-identical to v2.15.0', 
   }
 });
 
-describe('strict item 33 — a selection deeper than maxDepth', () => {
+describe('strict item 37 — a selection deeper than maxDepth', () => {
   it('default warns once per OGM', async () => {
     const warns: string[] = [];
     await compileReadShape(
@@ -128,7 +128,7 @@ describe('Point / CartesianPoint sub-selection (both modes, additive)', () => {
   });
 });
 
-describe('strict item 32 — named fragment spreads', () => {
+describe('strict item 36 — named fragment spreads', () => {
   it('default warns once per fragment name', async () => {
     const warns: string[] = [];
     await compileReadShape(
@@ -212,7 +212,7 @@ describe('strict item 32 — named fragment spreads', () => {
   });
 });
 
-describe('strict item 31 — a node-typed @cypher field with a sub-selection', () => {
+describe('strict item 35 — a node-typed @cypher field with a sub-selection', () => {
   it('default warns once per field', async () => {
     const warns: string[] = [];
     await compileReadShape(
@@ -263,7 +263,7 @@ describe('strict item 31 — a node-typed @cypher field with a sub-selection', (
   });
 });
 
-describe("strict item 35 — a union member fragment's @cypher field", () => {
+describe("strict item 38 — a union member fragment's @cypher field", () => {
   it('default warns once, only when the statements differ', async () => {
     const warns: string[] = [];
     await compileReadShape(
