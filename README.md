@@ -439,6 +439,8 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `Point` | Point | Geographical coordinates (WGS-84) |
 | `CartesianPoint` | Point | 2D/3D Cartesian coordinates |
 
+A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since vNEXT a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before vNEXT such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Not yet supported on relationship (edge) properties.
+
 ### Relationships
 
 ```graphql

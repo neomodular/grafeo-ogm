@@ -20,6 +20,9 @@ const typeDefs = /* GraphQL */ `
     id: ID! @unique
     runId: String
     name: String
+    loc: Point
+    cloc: CartesianPoint
+    locs: [Point!]
     friends: [LrUser!]! @relationship(type: "LR_FRIEND", direction: OUT)
   }
 `;
@@ -57,7 +60,10 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
       { disableLosslessIntegers: true },
     );
     await run(
-      `CREATE (a:LrUser {id: $a, runId: $runId, name: 'Alice'})
+      `CREATE (a:LrUser {id: $a, runId: $runId, name: 'Alice',
+         loc: point({longitude: 1.5, latitude: 2.5}),
+         cloc: point({x: 1.0, y: 2.0, z: 3.0}),
+         locs: [point({longitude: 1.0, latitude: 2.0, height: 3.0}), point({longitude: 4.0, latitude: 5.0, height: 6.0})]})
        CREATE (b:LrUser {id: $b, runId: $runId, name: 'Bob'})
        CREATE (c:LrUser {id: $c, runId: $runId, name: 'Carol'})
        CREATE (a)-[:LR_FRIEND]->(b) CREATE (b)-[:LR_FRIEND]->(c)
@@ -124,6 +130,62 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
         selectionSet: nested(6),
       })) as Row[];
       expect(depthOf(rows[0])).toBe(6);
+    });
+  });
+
+  describe('Point / CartesianPoint sub-selection (both modes)', () => {
+    for (const strict of [undefined, true]) {
+      it(`strict: ${strict} — projects the upstream point fields`, async () => {
+        const m = ogm(strict).model('LrUser');
+        const rows = (await m.find({
+          where: { id_IN: [id('a'), id('b')] },
+          selectionSet: `{ name
+            loc { longitude latitude height srid crs __typename }
+            cloc { x y z crs }
+            locs { lng: longitude height }
+          }`,
+          options: { sort: [{ name: 'ASC' }] },
+        })) as Row[];
+        expect(rows).toEqual([
+          {
+            name: 'Alice',
+            loc: {
+              longitude: 1.5,
+              latitude: 2.5,
+              height: null,
+              srid: 4326,
+              crs: 'wgs-84',
+              __typename: 'Point',
+            },
+            cloc: { x: 1, y: 2, z: 3, crs: 'cartesian-3d' },
+            locs: [
+              { lng: 1, height: 3 },
+              { lng: 4, height: 6 },
+            ],
+          },
+          { name: 'Bob', loc: null, cloc: null, locs: null },
+        ]);
+        expect(warns).toEqual([]);
+      });
+    }
+
+    it('an unknown point sub-field keeps the old behaviour', async () => {
+      const rows = (await ogm()
+        .model('LrUser')
+        .find({
+          where: { id: id('a') },
+          selectionSet: '{ name loc { longitude x } }',
+        })) as Row[];
+      expect(rows).toEqual([{ name: 'Alice' }]);
+      expect(warns.join('\n')).toContain('"loc"');
+      await expect(
+        ogm(true)
+          .model('LrUser')
+          .find({
+            where: { id: id('a') },
+            selectionSet: '{ name loc { longitude x } }',
+          }),
+      ).rejects.toThrow(/is a Point field, whose sub-selection takes only/);
     });
   });
 });

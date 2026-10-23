@@ -77,3 +77,53 @@ describe('strict item 33 — a selection deeper than maxDepth', () => {
     );
   });
 });
+
+describe('Point / CartesianPoint sub-selection (both modes, additive)', () => {
+  for (const strict of [undefined, true]) {
+    it(`strict: ${strict} — projects the upstream fields, no warning`, async () => {
+      const warns: string[] = [];
+      const [cypher] = await compileReadShape(
+        (ogm) =>
+          ogm.model('RsUser').find({
+            selectionSet:
+              '{ loc { longitude latitude height } cloc { x z crs } locs { lng: longitude } }',
+          }),
+        strict,
+        warns,
+      );
+      expect(cypher).toContain(
+        "`loc`: CASE WHEN n.`loc` IS NULL THEN null ELSE { `longitude`: n.`loc`.x, `latitude`: n.`loc`.y, `height`: CASE WHEN n.`loc`.crs ENDS WITH '-3d' THEN n.`loc`.z END } END",
+      );
+      expect(cypher).toContain(
+        "`cloc`: CASE WHEN n.`cloc` IS NULL THEN null ELSE { `x`: n.`cloc`.x, `z`: CASE WHEN n.`cloc`.crs ENDS WITH '-3d' THEN n.`cloc`.z END, `crs`: n.`cloc`.crs } END",
+      );
+      expect(cypher).toContain(
+        '`locs`: [__pt IN n.`locs` | { `lng`: __pt.x }]',
+      );
+      expect(warns).toEqual([]);
+    });
+  }
+
+  it('a CartesianPoint field does not take Point field names', async () => {
+    await expect(
+      compileReadShape(
+        (ogm) =>
+          ogm.model('RsUser').find({ selectionSet: '{ cloc { longitude } }' }),
+        true,
+      ),
+    ).rejects.toThrow(
+      /"cloc" in selectionSet on type "RsUser" is a CartesianPoint field, whose sub-selection takes only "x", "y", "z", "crs", "srid", "__typename" \(not "longitude"\)/,
+    );
+  });
+
+  it('an unknown sub-field warns in default mode', async () => {
+    const warns: string[] = [];
+    await compileReadShape(
+      readShapes['point: unknown sub-field'],
+      undefined,
+      warns,
+    );
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain('(not "x")');
+  });
+});

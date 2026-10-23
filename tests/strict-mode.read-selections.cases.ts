@@ -12,6 +12,9 @@ export const readTypeDefs = /* GraphQL */ `
   type RsUser @node {
     id: ID! @unique
     name: String
+    loc: Point
+    cloc: CartesianPoint
+    locs: [Point!]
     friends: [RsUser!]! @relationship(type: "RS_FRIEND", direction: OUT)
   }
 `;
@@ -33,6 +36,8 @@ export const readShapes: Record<string, ReadRun> = {
     ogm.model('RsUser').find({
       selectionSet: `{ name friends { friends { friends { friends { friends { friendsConnection { totalCount edges { node { name } } } } } } } } }`,
     }),
+  'point: unknown sub-field': (ogm) =>
+    ogm.model('RsUser').find({ selectionSet: '{ name loc { longitude x } }' }),
 };
 
 /** Compile `run` and return its statements. */

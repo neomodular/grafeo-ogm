@@ -975,6 +975,93 @@ export function propertyTypeName(prop: PropertyDefinition): string {
 }
 
 /**
+ * vNEXT — the fields of the upstream `Point` / `CartesianPoint` object
+ * types, as Cypher over a point value `p`. `longitude` / `latitude` read
+ * `x` / `y` (as upstream's resolvers do, so a cartesian value stored in a
+ * `Point` field still projects); `height` / `z` are `null` on a 2D point,
+ * where Neo4j rejects the accessor.
+ */
+const POINT_FIELDS: Record<string, Record<string, (p: string) => string>> = {
+  Point: {
+    longitude: (p) => `${p}.x`,
+    latitude: (p) => `${p}.y`,
+    height: (p) => `CASE WHEN ${p}.crs ENDS WITH '-3d' THEN ${p}.z END`,
+    crs: (p) => `${p}.crs`,
+    srid: (p) => `${p}.srid`,
+    __typename: () => `'Point'`,
+  },
+  CartesianPoint: {
+    x: (p) => `${p}.x`,
+    y: (p) => `${p}.y`,
+    z: (p) => `CASE WHEN ${p}.crs ENDS WITH '-3d' THEN ${p}.z END`,
+    crs: (p) => `${p}.crs`,
+    srid: (p) => `${p}.srid`,
+    __typename: () => `'CartesianPoint'`,
+  },
+};
+
+/** vNEXT — `"longitude", "latitude", …` of a point field's object type. */
+export function pointFieldList(prop: PropertyDefinition): string {
+  return Object.keys(POINT_FIELDS[prop.type] ?? {})
+    .map((f) => `"${f}"`)
+    .join(', ');
+}
+
+/** vNEXT — whether `prop` is a stored `Point` / `CartesianPoint` field. */
+export function isPointProperty(prop: PropertyDefinition): boolean {
+  return (
+    !prop.isCypher &&
+    Object.prototype.hasOwnProperty.call(POINT_FIELDS, prop.type)
+  );
+}
+
+/**
+ * vNEXT — the sub-selected fields of a `Point` / `CartesianPoint` field
+ * that its object type does not declare (`[]`: the selection is valid).
+ */
+export function unknownPointFields(
+  prop: PropertyDefinition,
+  children: readonly SelectionNode[],
+): string[] {
+  const fields = POINT_FIELDS[prop.type];
+  return children
+    .filter(
+      (c) =>
+        !c.isScalar ||
+        !fields ||
+        !Object.prototype.hasOwnProperty.call(fields, c.fieldName),
+    )
+    .map((c) => c.fieldName);
+}
+
+/**
+ * vNEXT — `loc { longitude latitude }` on a `Point` field (S5r-9): a map
+ * with the selected keys, `null` for a missing point; a list field maps
+ * each element. Pre-vNEXT the sub-selection was left out of the result
+ * (strict: rejected). Returns `null` when a sub-field is not a field of
+ * the point type (the caller keeps the old behaviour).
+ */
+export function compilePointSelection(
+  valueExpr: string,
+  prop: PropertyDefinition,
+  children: readonly SelectionNode[],
+): string | null {
+  if (!isPointProperty(prop) || children.length === 0) return null;
+  if (unknownPointFields(prop, children).length > 0) return null;
+  const fields = POINT_FIELDS[prop.type];
+  const map = (p: string) =>
+    `{ ${children
+      .map((c) => {
+        const key = c.alias ?? c.fieldName;
+        assertSafeIdentifier(key, 'selection alias');
+        return `${escapeIdentifier(key)}: ${fields[c.fieldName](p)}`;
+      })
+      .join(', ')} }`;
+  if (prop.isArray) return `[__pt IN ${valueExpr} | ${map('__pt')}]`;
+  return `CASE WHEN ${valueExpr} IS NULL THEN null ELSE ${map(valueExpr)} END`;
+}
+
+/**
  * v2.8.0 — the problems of a connection's `pageInfo` and `cursor`
  * selections (`node` and its strict-mode extra edge sets): `pageInfo`
  * without fields, a field `PageInfo` does not declare, a scalar given a
@@ -1264,6 +1351,22 @@ export class SelectionCompiler {
       const hasChildren = !node.isScalar;
       const prop = owner.def.properties.get(field);
       if (prop) {
+        // vNEXT — a `Point` / `CartesianPoint` field takes its object
+        // type's fields; another sub-field leaves the field out.
+        if (hasChildren && isPointProperty(prop)) {
+          const bad = unknownPointFields(prop, node.children ?? []);
+          if (bad.length > 0)
+            pushUnknown(out, {
+              owner: `type "${owner.def.typeName}"`,
+              field,
+              subSelection: true,
+              shape: {
+                expected: `is a ${prop.type} field, whose sub-selection takes only ${pointFieldList(prop)} (not ${bad.map((f) => `"${f}"`).join(', ')})`,
+                outcome: LEFT_OUT,
+              },
+            });
+          continue;
+        }
         // v2.8.0 — a scalar given a sub-selection is left out of the result.
         if (hasChildren && isScalarProperty(prop, this.schema))
           pushUnknown(out, {
@@ -1595,6 +1698,22 @@ export class SelectionCompiler {
             : `.${escapeIdentifier(node.fieldName)}`,
         );
         continue;
+      }
+
+      // vNEXT — a `Point` / `CartesianPoint` field with a sub-selection.
+      if (!node.isConnection) {
+        const pointProp = nodeDef.properties.get(node.fieldName);
+        const pointCypher = pointProp
+          ? compilePointSelection(
+              `${nodeVar}.${escapeIdentifier(node.fieldName)}`,
+              pointProp,
+              node.children ?? [],
+            )
+          : null;
+        if (pointCypher) {
+          parts.push(`${escapeIdentifier(key)}: ${pointCypher}`);
+          continue;
+        }
       }
 
       // v2.6.0 — strict: one key selected with different arguments by
