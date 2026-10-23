@@ -17,6 +17,16 @@ export const readTypeDefs = /* GraphQL */ `
     locs: [Point!]
     friends: [RsUser!]! @relationship(type: "RS_FRIEND", direction: OUT)
     pets: [RsPet!]! @relationship(type: "RS_HAS_PET", direction: OUT)
+    bestPet: RsPet
+      @cypher(
+        statement: "MATCH (this)-[:RS_HAS_PET]->(p) RETURN p LIMIT 1"
+        columnName: "p"
+      )
+    petList: [RsPet!]
+      @cypher(
+        statement: "MATCH (this)-[:RS_HAS_PET]->(p) RETURN p"
+        columnName: "p"
+      )
   }
   type RsPet @node {
     id: ID! @unique
@@ -58,6 +68,14 @@ export const readShapes: Record<string, ReadRun> = {
     ogm.model('RsUser').find({
       selectionSet:
         '{ petsConnection { edges { ...E node { name } } } } fragment E on RsUserPetsRelationship { cursor }',
+    }),
+  'cypher node field: root sub-selection': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet: '{ name bestPet { name } petList { id } }',
+    }),
+  'cypher node field: nested sub-selection': (ogm) =>
+    ogm.model('RsUser').find({
+      selectionSet: '{ friends { bestPet { name } } }',
     }),
 };
 

@@ -211,3 +211,54 @@ describe('strict item 32 — named fragment spreads', () => {
     ).rejects.toThrow(/"\.\.\.E" in "petsConnection\.edges" is not supported/);
   });
 });
+
+describe('strict item 31 — a node-typed @cypher field with a sub-selection', () => {
+  it('default warns once per field', async () => {
+    const warns: string[] = [];
+    await compileReadShape(
+      readShapes['cypher node field: root sub-selection'],
+      undefined,
+      warns,
+    );
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toContain('"RsUser.bestPet" returns a node type');
+    expect(warns[1]).toContain('"RsUser.petList" returns a node type');
+  });
+
+  it('strict projects over the CALL prelude column at the root', async () => {
+    const [cypher] = await compileReadShape(
+      readShapes['cypher node field: root sub-selection'],
+      true,
+    );
+    expect(cypher).toContain('RETURN head(collect(`p`)) AS __sel_n_bestPet');
+    expect(cypher).toContain(
+      '`bestPet`: head([n0 IN [__sel_n_bestPet] | n0 { .`name` }])',
+    );
+    // A list field collects every row (strict item 24) and maps each node.
+    expect(cypher).toContain(
+      '`petList`: [n0 IN __sel_n_petList | n0 { .`id` }]',
+    );
+  });
+
+  it('strict projects inline inside a nested selection', async () => {
+    const [cypher] = await compileReadShape(
+      readShapes['cypher node field: nested sub-selection'],
+      true,
+    );
+    expect(cypher).toContain(
+      '`bestPet`: head([n1 IN [head(COLLECT { WITH n0 AS this\n  MATCH (this)-[:RS_HAS_PET]->(p) RETURN p LIMIT 1\n})] | n1 { .`name` }])',
+    );
+  });
+
+  it('strict rejects arguments on the field', async () => {
+    await expect(
+      compileReadShape(
+        (ogm) =>
+          ogm.model('RsUser').find({
+            selectionSet: '{ bestPet(where: { name: "x" }) { name } }',
+          }),
+        true,
+      ),
+    ).rejects.toThrow(/arguments on the @cypher field "RsUser.bestPet"/);
+  });
+});

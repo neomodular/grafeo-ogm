@@ -1547,6 +1547,13 @@ type User @node {
   id: ID! @id
   n: Int
   double: Int @cypher(statement: "RETURN this.n * 2 AS d", columnName: "d")
+
+#### 31. A node-typed `@cypher` field with a sub-selection (since vNEXT)
+
+```graphql
+type User @node {
+  id: ID! @unique
+  topPost: Post @cypher(statement: "MATCH (this)-[:WROTE]->(p:Post) RETURN p ORDER BY p.rank DESC LIMIT 1", columnName: "p")
 }
 ```
 
@@ -1567,6 +1574,13 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 ```
 
 Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
+
+await users.find({ selectionSet: '{ id topPost { id title } }' });
+// default: [{ id: 'u1' }]                                  — topPost is left out (and warns)
+// strict:  [{ id: 'u1', topPost: { id: 'p2', title: … } }]
+```
+
+A `@cypher` field whose type is a node, interface or union type was compiled like a relationship, matched none, and was left out of the result whenever it had a sub-selection. Strict mode projects the sub-selection over what the statement returns: one node (`null` when the statement returns no row), or every row for a list field (`[Post]`, as [item 24](#24-list-cypher-fields-since-2140) collects them), with nested relationships, `__typename` and inline fragments on an abstract type. The target type's `read` policy applies, as it does on a relationship. Arguments on the field (`topPost(where: …)`) and a sub-selection reached through a fragment on an interface or union member throw `OGMError`. Selected bare (`{ topPost }`) the field still returns the whole node, in both modes. The warning code is `selection-cypher-node-field`, logged once per OGM instance, type and field.
 
 #### 32. Named fragment spreads in a `selectionSet` (since vNEXT)
 

@@ -1470,6 +1470,25 @@ export class SelectionCompiler {
       const hasChildren = !node.isScalar;
       const prop = owner.def.properties.get(field);
       if (prop) {
+        // vNEXT — strict item 31: strict mode projects the sub-selection
+        // of a node-typed `@cypher` field, so check it against the target.
+        if (
+          hasChildren &&
+          this.strictMode.strict &&
+          prop.isCypher &&
+          !isScalarProperty(prop, this.schema)
+        ) {
+          const target = resolveTargetDef(prop.type, this.schema);
+          if (target)
+            this.collectUnknownFields(
+              node.children ?? [],
+              target,
+              out,
+              false,
+              depth + 1,
+            );
+          continue;
+        }
         // vNEXT — a `Point` / `CartesianPoint` field takes its object
         // type's fields; another sub-field leaves the field out.
         if (hasChildren && isPointProperty(prop)) {
@@ -1831,6 +1850,28 @@ export class SelectionCompiler {
           : null;
         if (pointCypher) {
           parts.push(`${escapeIdentifier(key)}: ${pointCypher}`);
+          continue;
+        }
+      }
+
+      // vNEXT — strict item 31: a node-typed `@cypher` field with a
+      // sub-selection (`undefined`: not one).
+      if (!node.isConnection) {
+        const cypherNode = this.compileCypherNodeField(
+          node,
+          nodeVar,
+          nodeDef,
+          isAbstract === true,
+          maxDepth,
+          currentDepth,
+          params,
+          paramCounter,
+          cypherScope,
+          policyContext,
+        );
+        if (cypherNode !== undefined) {
+          if (cypherNode !== null)
+            parts.push(`${escapeIdentifier(key)}: ${cypherNode}`);
           continue;
         }
       }
@@ -2719,10 +2760,9 @@ export class SelectionCompiler {
     paramCounter?: { count: number },
     policyContext: PolicyContextBundle | null = null,
   ): string | null {
-    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
-
     const relDef = parentDef.relationships.get(node.fieldName);
     if (!relDef) return null;
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
     if (node.directed !== undefined)
       throw new OGMError(
         `Unsupported argument "directed" on selectionSet field "${node.fieldName}": ` +
@@ -2822,6 +2862,122 @@ export class SelectionCompiler {
       'reject selections nested deeper than the maximum depth',
     );
     return true;
+  }
+
+  /**
+   * vNEXT — strict item 31: a `@cypher` field whose type is a node,
+   * interface or union type, selected with a sub-selection
+   * (`topPost { id title }`). 2.x matched no relationship and left it out
+   * of the result, even under strict mode.
+   *
+   * Strict mode projects it over the value the statement returns (the
+   * `CALL` prelude's column, or the inline `COLLECT { }` inside a nested
+   * selection): `head([n0 IN [<value>] WHERE <read policy> | n0 { … }])`,
+   * or `[n0 IN <list> WHERE … | n0 { … }]` for a list field. The target
+   * type's read policy applies, as on a relationship. Default mode warns
+   * once and keeps leaving it out.
+   *
+   * @returns the projection; `null` to leave the field out; `undefined`
+   *   when `node` is not such a field (the caller goes on).
+   */
+  private compileCypherNodeField(
+    node: SelectionNode,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    isAbstract: boolean,
+    maxDepth: number,
+    currentDepth: number,
+    params: Record<string, unknown> | undefined,
+    paramCounter: { count: number } | undefined,
+    cypherScope: CypherFieldScope | null,
+    policyContext: PolicyContextBundle | null,
+  ): string | null | undefined {
+    if (node.isScalar) return undefined;
+    const isCypherNode = (p: PropertyDefinition | undefined) =>
+      !!p?.isCypher && !!p.cypherStatement && !isScalarProperty(p, this.schema);
+    const prop = nodeDef.properties.get(node.fieldName);
+    if (!isCypherNode(prop)) {
+      // Selected through a fragment on a member of an abstract type.
+      const viaFragment =
+        isAbstract &&
+        (node.typeConditions ?? []).find((t) =>
+          isCypherNode(
+            this.schema.nodes.get(t)?.properties.get(node.fieldName),
+          ),
+        );
+      if (!viaFragment) return undefined;
+      const field = `${viaFragment}.${node.fieldName}`;
+      if (this.strictMode.strict)
+        throw new OGMError(
+          `The @cypher field "${field}" returns a node type; selecting it with a sub-selection ` +
+            `through a fragment on "${nodeDef.typeName}" is not supported. Select it on "${viaFragment}" directly.`,
+        );
+      this.warnCypherNodeField(field);
+      return null;
+    }
+    const field = `${nodeDef.typeName}.${node.fieldName}`;
+    if (!this.strictMode.strict) {
+      this.warnCypherNodeField(field);
+      return null;
+    }
+    if (node.hasArguments)
+      throw new OGMError(
+        `selectionSet arguments on the @cypher field "${field}" are not supported.`,
+      );
+    if (this.beyondMaxDepth(node, currentDepth, maxDepth)) return null;
+    const targetDef = resolveTargetDef(prop!.type, this.schema);
+    if (!targetDef)
+      throw new OGMError(
+        `The @cypher field "${field}" returns unknown type "${prop!.type}".`,
+      );
+    const asList = cypherFieldAsList(
+      this.strictMode,
+      nodeDef.typeName,
+      node.fieldName,
+      prop!,
+    );
+    const value = cypherScope
+      ? cypherScope.register(node.fieldName, prop!, undefined, asList)
+      : buildInlineCypherFieldExpr(
+          prop!.cypherStatement!,
+          nodeVar,
+          field,
+          asList ? (prop!.cypherColumnName ?? node.fieldName) : undefined,
+        );
+    const childVar = `n${currentDepth}`;
+    const inner = this.compile(
+      node.children ?? [],
+      childVar,
+      targetDef,
+      maxDepth,
+      currentDepth + 1,
+      params,
+      paramCounter,
+      null,
+      policyContext,
+    );
+    const where = this.compileNestedWhere({
+      node,
+      childVar,
+      targetDef,
+      params,
+      paramCounter,
+      policyContext,
+      contextLabel: `@cypher field "${field}"`,
+      userWhere: undefined,
+    });
+    return asList
+      ? `[${childVar} IN ${value}${where} | ${inner}]`
+      : `head([${childVar} IN [${value}]${where} | ${inner}])`;
+  }
+
+  private warnCypherNodeField(field: string): void {
+    this.strictMode.warn(
+      'selection-cypher-node-field',
+      field,
+      `The @cypher field "${field}" returns a node type and is selected with a sub-selection; 2.x leaves it out of the result.`,
+      'project the sub-selection over the nodes the statement returns',
+    );
   }
 
   /**

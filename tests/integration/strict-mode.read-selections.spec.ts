@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
+import { permissive } from '../../src/policy/types';
 
 jest.setTimeout(60_000);
 
@@ -25,6 +26,21 @@ const typeDefs = /* GraphQL */ `
     locs: [Point!]
     friends: [LrUser!]! @relationship(type: "LR_FRIEND", direction: OUT)
     items: [LrItem!]! @relationship(type: "LR_HAS_ITEM", direction: OUT)
+    topPost: LrPost
+      @cypher(
+        statement: "MATCH (this)-[:LR_HAS_ITEM]->(p:LrPost) RETURN p ORDER BY p.rank DESC LIMIT 1"
+        columnName: "p"
+      )
+    postsByRank: [LrPost!]
+      @cypher(
+        statement: "MATCH (this)-[:LR_HAS_ITEM]->(p:LrPost) RETURN p ORDER BY p.rank"
+        columnName: "p"
+      )
+    firstItem: LrItem
+      @cypher(
+        statement: "MATCH (this)-[:LR_HAS_ITEM]->(i) RETURN i ORDER BY i.rank LIMIT 1"
+        columnName: "i"
+      )
   }
   union LrItem = LrPost | LrDoc
   type LrPost @node {
@@ -32,6 +48,8 @@ const typeDefs = /* GraphQL */ `
     runId: String
     title: String
     rank: Int
+    secret: Boolean
+    owners: [LrUser!]! @relationship(type: "LR_HAS_ITEM", direction: IN)
   }
   type LrDoc @node {
     id: ID! @unique
@@ -82,8 +100,8 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
        CREATE (c:LrUser {id: $c, runId: $runId, name: 'Carol'})
        CREATE (a)-[:LR_FRIEND]->(b) CREATE (b)-[:LR_FRIEND]->(c)
        CREATE (c)-[:LR_FRIEND]->(a)
-       CREATE (p1:LrPost {id: $p1, runId: $runId, title: 'hello', rank: 1})
-       CREATE (p2:LrPost {id: $p2, runId: $runId, title: 'graph', rank: 5})
+       CREATE (p1:LrPost {id: $p1, runId: $runId, title: 'hello', rank: 1, secret: false})
+       CREATE (p2:LrPost {id: $p2, runId: $runId, title: 'graph', rank: 5, secret: true})
        CREATE (d1:LrDoc {id: $d1, runId: $runId, body: 'manual', rank: 3})
        CREATE (a)-[:LR_HAS_ITEM]->(p1) CREATE (a)-[:LR_HAS_ITEM]->(p2)
        CREATE (a)-[:LR_HAS_ITEM]->(d1)`,
@@ -270,6 +288,98 @@ describeLive('selectionSet shapes 2.x drops — live Neo4j', () => {
           .model('LrUser')
           .find({ where: { id: id('a') }, selectionSet: '{ name ...U }' }),
       ).rejects.toThrow(/Unknown fragment "U" in selectionSet/);
+    });
+  });
+
+  describe('strict item 31 — a node-typed @cypher field with a sub-selection', () => {
+    const sel = `{ name
+      topPost { title owners { name } }
+      postsByRank { title }
+      firstItem { __typename ... on LrPost { title } ... on LrDoc { body } }
+      friends { name topPost { title } }
+    }`;
+
+    it('default: left out, and warns once per field', async () => {
+      const m = ogm().model('LrUser');
+      const rows = (await m.find({
+        where: { id: id('a') },
+        selectionSet: sel,
+      })) as Row[];
+      expect(rows).toEqual([{ name: 'Alice', friends: [{ name: 'Bob' }] }]);
+      await m.find({ where: { id: id('a') }, selectionSet: sel });
+      const w = warns.filter((x) => x.includes('returns a node type'));
+      expect(w.map((x) => x.match(/"(LrUser\.\w+)"/)![1]).sort()).toEqual([
+        'LrUser.firstItem',
+        'LrUser.postsByRank',
+        'LrUser.topPost',
+      ]);
+    });
+
+    it('strict: projected at the root, as a list, on a union and nested', async () => {
+      const rows = (await ogm(true)
+        .model('LrUser')
+        .find({
+          where: { id_IN: [id('a'), id('b')] },
+          selectionSet: sel,
+          options: { sort: [{ name: 'ASC' }] },
+        })) as Row[];
+      expect(rows).toEqual([
+        {
+          name: 'Alice',
+          topPost: { title: 'graph', owners: [{ name: 'Alice' }] },
+          postsByRank: [{ title: 'hello' }, { title: 'graph' }],
+          firstItem: { __typename: 'LrPost', title: 'hello', body: null },
+          friends: [{ name: 'Bob', topPost: null }],
+        },
+        {
+          name: 'Bob',
+          topPost: null,
+          postsByRank: [],
+          firstItem: null,
+          friends: [{ name: 'Carol', topPost: null }],
+        },
+      ]);
+      expect(warns).toEqual([]);
+    });
+
+    it("strict: the target type's read policy applies", async () => {
+      const secured = new OGM({
+        typeDefs,
+        driver,
+        strict: true,
+        policies: {
+          LrPost: [
+            permissive({
+              operations: ['read'],
+              name: 'post.public',
+              when: () => ({ secret_NOT: true }),
+            }),
+          ],
+        },
+      });
+      const rows = (await secured
+        .withContext({})
+        .model('LrUser')
+        .find({
+          where: { id: id('a') },
+          selectionSet: '{ topPost { title } postsByRank { title } }',
+        })) as Row[];
+      expect(rows).toEqual([
+        { topPost: null, postsByRank: [{ title: 'hello' }] },
+      ]);
+    });
+
+    it('strict: an unknown field in the sub-selection throws', async () => {
+      await expect(
+        ogm(true)
+          .model('LrUser')
+          .find({
+            where: { id: id('a') },
+            selectionSet: '{ topPost { titel } }',
+          }),
+      ).rejects.toThrow(
+        /Unknown field "titel" in selectionSet on type "LrPost"/,
+      );
     });
   });
 });

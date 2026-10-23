@@ -22,5 +22,11 @@
   ],
   "fragment: spread in connection edges": [
     "MATCH (n:`RsUser`)\nRETURN n { petsConnection: { edges: [(n)-[e0:`RS_HAS_PET`]->(n0:`RsPet`) | { node: n0 { .`name` } }] } }"
+  ],
+  "cypher node field: root sub-selection": [
+    "MATCH (n:`RsUser`)\nRETURN n { .`name` }"
+  ],
+  "cypher node field: nested sub-selection": [
+    "MATCH (n:`RsUser`)\nRETURN n { friends: [(n)-[:`RS_FRIEND`]->(n0:`RsUser`) | n0 {  }] }"
   ]
 }
