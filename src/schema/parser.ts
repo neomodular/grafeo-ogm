@@ -32,6 +32,7 @@ import type {
 
 import { assertSafeIdentifier } from '../utils/validation';
 import { OGMError } from '../errors';
+import { mergeTypeExtensions } from './type-extensions';
 
 /**
  * Generate a plural name from a type name following OGM conventions.
@@ -420,7 +421,8 @@ function parseNodeLabels(node: ObjectTypeDefinitionNode): string[] | undefined {
  * Parse a GraphQL schema string into SchemaMetadata.
  */
 export function parseSchema(schemaSource: string): SchemaMetadata {
-  const document: DocumentNode = parse(schemaSource);
+  // v2.13.0 — `extend type X { … }` and friends are folded into X first.
+  const document: DocumentNode = mergeTypeExtensions(parse(schemaSource));
 
   const customScalars = new Set<string>();
   const metadata: SchemaMetadata = {
