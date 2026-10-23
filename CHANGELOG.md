@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.12.2 (2026-10-23) — `where` depth limit counts relationship and connection hops
+
+> **Security patch.** The `where` nesting limit (10) now counts relationship and connection hops as well as `AND` / `OR` / `NOT` levels, on every path that compiles a filter. Every filter within the limit compiles to byte-identical Cypher. Generated types are unchanged.
+
+### Security
+
+- **Deeply nested relationship filters could crash the compiler or stall the database (medium, denial of service).** The `where` depth limit counted only `AND` / `OR` / `NOT` nesting, and every relationship or connection hop (`_SOME` / `_NONE` / `_ALL` / `_SINGLE`, `<rel>Connection_*`, union member keys) restarted it; filters inside a connection input had no limit at all. A filter about 1,000 hops deep threw a raw `RangeError: Maximum call stack size exceeded`, and much shallower ones were expensive for the server: on Neo4j 5.26 the planner alone takes ~50 ms at 10 hops, ~200 ms at 14 and ~9 s at 20, and execution grows with the fan-out at each hop. Node-Level Security adds a policy clause at every hop. Anyone who can pass a `where` to the OGM could send one.
+
+  One limit now covers the whole filter: each `AND` / `OR` / `NOT` level and each relationship or connection hop counts one, up to 10. A connection's `node` / `node_NOT` / `edge` and a union or interface member key belong to the hop they are in and cost nothing extra; policy clauses count at the depth of the node they apply to. The check runs before each level is compiled, at every entry point: root reads and writes, nested selection, connection and `<rel>Aggregate` filters, fulltext / vector `where`, `InterfaceModel`, `explainPolicies`, policy `when` partials, and nested connect / disconnect / update / delete `where`. Past the limit the call throws `OGMError` before anything is sent to the database.
+
+### Behavior change
+
+- A `where` whose relationship / connection hops plus `AND` / `OR` / `NOT` levels exceed 10 now throws `OGMError` (`WHERE clause nesting depth exceeds maximum (10)`). Filters that use only `AND` / `OR` / `NOT` keep exactly their previous limit. Flatten the filter or split the query.
+
 ## 2.12.1 (2026-10-23) — policy `cypher:` params no longer collide across types
 
 > **Security patch.** Policies that use the raw `cypher:` form now get statement-unique parameter names. OGMs without `policies` compile to byte-identical Cypher. Generated types are unchanged.
