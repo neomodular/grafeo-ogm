@@ -414,7 +414,7 @@ export function coerceWhereValue(
 }
 
 /**
- * vNEXT — strict item 42: a JS `Date` in a where filter on a temporal field
+ * v2.21.0 — strict item 42: a JS `Date` in a where filter on a temporal field
  * other than `DateTime` (`Date`, `LocalDateTime`, `Time`, `LocalTime`,
  * `Duration`), scalar or list, for a comparison-shaped operator.
  *

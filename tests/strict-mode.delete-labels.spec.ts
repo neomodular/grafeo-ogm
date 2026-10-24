@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 39: runtime `labels` on `delete()` / `deleteMany()`.
+ * v2.21.0 — strict item 39: runtime `labels` on `delete()` / `deleteMany()`.
  *
  * 2.x never applied them: `delete({ where, labels: ['Archived'] })` deleted
  * every node `where` matched, archived or not (since v2.19.0 with an
@@ -41,7 +41,7 @@ function setup(strict?: boolean) {
   return { users: ogm.model('User'), records, warnings };
 }
 
-/** Pre-vNEXT Cypher (main @ a962f44). */
+/** Pre-2.21.0 Cypher (main @ a962f44). */
 const BEFORE = 'MATCH (n:`User`)\nWHERE n.`id` = $param0\nDETACH DELETE n';
 const BEFORE_CASCADE =
   'MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`WROTE`]->(cascade_0:`Post`)\nDETACH DELETE cascade_0\nRETURN count(*) AS _del_posts_0\n}\nDETACH DELETE n';

@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 42: a JS `Date` in a where filter on a temporal field
+ * v2.21.0 — strict item 42: a JS `Date` in a where filter on a temporal field
  * other than `DateTime`. The driver packs the Date as an empty map, so the
  * filter never matches (equality, ranges, `_IN`) or matches every row with
  * the field set (`_NOT`, `_NOT_IN`). Default mode keeps the Cypher and
@@ -51,7 +51,7 @@ const shapes: Record<string, Record<string, unknown>> = {
   'relationship filter': { links_SOME: { day: D } },
 };
 
-/** Pre-vNEXT Cypher (captured from a962f44, v2.20.1). */
+/** Pre-2.21.0 Cypher (captured from a962f44, v2.20.1). */
 const BEFORE: Record<string, string> = {
   'Date eq': 'n.`day` = $param0',
   'Date _NOT': 'n.`day` <> $param0',

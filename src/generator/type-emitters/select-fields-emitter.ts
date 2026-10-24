@@ -21,7 +21,7 @@ import { toPascalCase } from './helpers';
 export function emitSelectFieldTypes(schema: SchemaMetadata): string {
   const blocks: string[] = [];
 
-  // vNEXT — the select fields of a point sub-selection, when a stored
+  // v2.21.0 — the select fields of a point sub-selection, when a stored
   // `Point` / `CartesianPoint` field references them.
   const pointBlocks = emitPointSelectFields(schema);
   if (pointBlocks.length > 0) blocks.push(...pointBlocks);
@@ -359,7 +359,7 @@ function buildScalarMembers(
   return members;
 }
 
-/** vNEXT — stored `Point` / `CartesianPoint` fields → their sub-selection fields. */
+/** v2.21.0 — stored `Point` / `CartesianPoint` fields → their sub-selection fields. */
 const POINT_SELECT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   Point: ['longitude', 'latitude', 'height', 'crs', 'srid', '__typename'],
   CartesianPoint: ['x', 'y', 'z', 'crs', 'srid', '__typename'],
@@ -373,7 +373,7 @@ function isStoredPoint(prop: PropertyDefinition): boolean {
 }
 
 /**
- * `field?: boolean;`, or (vNEXT) for a stored point field
+ * `field?: boolean;`, or (2.21.0) for a stored point field
  * `loc?: boolean | { select: PointSelectFields };`, the typed form of the
  * `loc { longitude latitude }` sub-selection.
  */
@@ -384,7 +384,7 @@ function scalarSelectMember(prop: PropertyDefinition): string {
 }
 
 /**
- * vNEXT — `PointSelectFields` / `CartesianPointSelectFields`, emitted only
+ * v2.21.0 — `PointSelectFields` / `CartesianPointSelectFields`, emitted only
  * when a stored field of that type exists (node, interface or relationship
  * properties), so schemas without points generate the same file as before.
  */

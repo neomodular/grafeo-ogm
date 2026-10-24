@@ -2250,7 +2250,7 @@ export type SelectFields = Record<
   boolean | { select: SelectFields } | { where?: unknown; select: unknown }
 >;
 
-/** vNEXT — the result of a point field's `{ select: { longitude: true } }`. */
+/** v2.21.0 — the result of a point field's `{ select: { longitude: true } }`. */
 type PointValueShape = { x: number; y: number; z?: number; srid: number };
 
 type IsPointValue<V> = [V] extends [PointValueShape]

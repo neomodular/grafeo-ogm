@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT): point sub-selection on relationship properties
+ * Live suite (2.21.0): point sub-selection on relationship properties
  * (`edges { properties { at { longitude latitude } } }`) and in the typed
  * `select` (`at: { select: { longitude: true } }`, node and edge).
  *
@@ -42,7 +42,7 @@ const typeDefs = /* GraphQL */ `
 
 type Edge = { node: { id: string }; properties: Record<string, unknown> };
 
-describeLive('point sub-selection on edge properties (vNEXT) — live', () => {
+describeLive('point sub-selection on edge properties (2.21.0) — live', () => {
   const runId = `it-${randomUUID()}`;
   const id = (s: string) => `${runId}-${s}`;
   let driver: Driver;

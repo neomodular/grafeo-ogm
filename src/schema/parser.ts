@@ -408,7 +408,7 @@ function parseFulltextIndexes(
   if (!ftDirective) return [];
 
   const t = node.name.value;
-  // vNEXT — strict item 40: an index the parser cannot use (no `indexes`
+  // v2.21.0 — strict item 40: an index the parser cannot use (no `indexes`
   // list, an entry that is not an object, no name, no string field) was
   // dropped silently, so `db push` never created it and a `fulltext`
   // query naming it threw "Unknown fulltext index". Default: still

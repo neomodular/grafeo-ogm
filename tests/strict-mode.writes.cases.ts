@@ -179,7 +179,7 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       disconnect: { posts: [undefined] },
     }),
-  // vNEXT — strict item 41: a disconnect item that is not an object. The
+  // v2.21.0 — strict item 41: a disconnect item that is not an object. The
   // value-level casts are the point: the generated types reject them.
   'disconnect: string item in an array': (ogm) =>
     user(ogm).update({

@@ -112,7 +112,7 @@ describeLive('schema strict SDL — live Neo4j', () => {
     expect(rows).toEqual([{ title: `${word} two` }]);
   });
 
-  // vNEXT — strict item 40: an index with no fields (or no name) never
+  // v2.21.0 — strict item 40: an index with no fields (or no name) never
   // worked: no index is created and a search naming it throws.
   const incompleteDefs = /* GraphQL */ `
     type ItSsdlNote @node @fulltext(indexes: [{ name: "ItSsdlNoFields" }]) {

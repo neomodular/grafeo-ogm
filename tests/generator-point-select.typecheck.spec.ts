@@ -1,8 +1,8 @@
 /**
- * vNEXT — the typed `select` takes a point sub-selection on a stored
+ * v2.21.0 — the typed `select` takes a point sub-selection on a stored
  * `Point` / `CartesianPoint` field of a node, an interface and relationship
  * properties: `loc: { select: { longitude: true } }`, the typed form of
- * the `loc { longitude }` selectionSet sub-selection. Pre-vNEXT the select
+ * the `loc { longitude }` selectionSet sub-selection. Pre-2.21.0 the select
  * types offered only `loc?: boolean`, and the runtime left the object form
  * out of the result. These cases compile the generated file and real user
  * code against it.
@@ -40,7 +40,7 @@ const typeDefs = /* GraphQL */ `
   }
 `;
 
-describe('typed select: point sub-selection (vNEXT)', () => {
+describe('typed select: point sub-selection (2.21.0)', () => {
   it('emits the point select fields and types the result', async () => {
     const { generated, errors } = await typecheckGenerated(
       typeDefs,

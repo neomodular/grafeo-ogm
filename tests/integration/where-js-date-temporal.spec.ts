@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT — strict item 42): a JS `Date` in a where filter on a
+ * Live suite (v2.21.0 — strict item 42): a JS `Date` in a where filter on a
  * `Date` / `LocalDateTime` / `Time` / `LocalTime` field.
  *
  * The driver packs a JS Date as an empty map, so on a962f44 (v2.20.1)

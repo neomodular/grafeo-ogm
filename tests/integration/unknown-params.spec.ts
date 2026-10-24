@@ -10,7 +10,7 @@
  * deletes nothing, `deleteMany({ where, delete })` does not cascade and
  * `delete({ where, labels })` deletes without the label filter.
  * `strict: true` throws `OGMError` and writes nothing, except that since
- * vNEXT (strict item 39) it applies the `labels` of delete / deleteMany.
+ * v2.21.0 (strict item 39) it applies the `labels` of delete / deleteMany.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -136,7 +136,7 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
     const { authors, warnings } = makeOgm();
     await authors.delete(extra({ where: { id: u }, labels: ['ItUpArchived'] }));
     expect(await exists(u)).toBe(false);
-    // vNEXT — strict item 39 warns instead of item 34.
+    // v2.21.0 — strict item 39 warns instead of item 34.
     expect(paramWarnings(warnings)).toEqual([]);
     expect(
       warnings.filter((m) => m.includes('ignores the runtime "labels"')),
@@ -144,7 +144,7 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
   });
 
   it.each(['delete', 'deleteMany'] as const)(
-    'strict (vNEXT, item 39): %s() with "labels" deletes only nodes with the label',
+    'strict (v2.21.0, item 39): %s() with "labels" deletes only nodes with the label',
     async (method) => {
       const plain = await seed(false);
       const archived = await seed(true);
@@ -159,7 +159,7 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
     },
   );
 
-  it('strict (vNEXT, item 39): a cascade delete() with "labels" skips an unlabelled root and its posts', async () => {
+  it('strict (v2.21.0, item 39): a cascade delete() with "labels" skips an unlabelled root and its posts', async () => {
     const { u, a } = await seed(false);
     const { authors } = makeOgm(true);
     await authors.delete(

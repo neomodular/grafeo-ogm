@@ -439,7 +439,7 @@ grafeo-ogm uses standard GraphQL SDL with Neo4j directives to define your graph 
 | `Point` | Point | Geographical coordinates (WGS-84) |
 | `CartesianPoint` | Point | 2D/3D Cartesian coordinates |
 
-A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since 2.20.0 a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before v2.20.0 such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Since vNEXT the same works on relationship properties (`edges { properties { at { longitude latitude } } }`), and the typed `select` takes the object form on node and relationship properties alike: `loc: { select: { longitude: true, latitude: true } }` (the generated `PointSelectFields` / `CartesianPointSelectFields`; `SelectResult` types the selected keys). Model methods still declare the node type as their result, so a typed result for a point sub-selection comes from `SelectResult<Place, typeof select>`.
+A `Point` / `CartesianPoint` field selected bare (`{ loc }`, `select: { loc: true }`) returns `{ x, y, z?, srid }`. Since 2.20.0 a `selectionSet` can also select the `@neo4j/graphql` point fields, in both modes: `loc { longitude latitude height crs srid }` on a `Point`, `cloc { x y z crs srid }` on a `CartesianPoint` (aliases and `__typename` included, list fields per element). `height` / `z` are `null` on a 2D point, and a missing point is `null`. Before v2.20.0 such a sub-selection was left out of the result (strict mode: `OGMError`); a sub-field the point type does not declare still is. Since v2.21.0 the same works on relationship properties (`edges { properties { at { longitude latitude } } }`), and the typed `select` takes the object form on node and relationship properties alike: `loc: { select: { longitude: true, latitude: true } }` (the generated `PointSelectFields` / `CartesianPointSelectFields`; `SelectResult` types the selected keys). Model methods still declare the node type as their result, so a typed result for a point sub-selection comes from `SelectResult<Place, typeof select>`.
 
 **Integers and the driver's `useBigInt` option:** results are mapped from what the driver returns. With the default (lossless) driver or `disableLosslessIntegers: true`, an `Int` comes back as a JS `number` (a Neo4j `Integer` outside the safe range becomes a `bigint`), as the generated types say. A driver created with `neo4j.driver(url, auth, { useBigInt: true })` returns every integer as a `bigint` (`Int` fields, `count()`, `totalCount`, aggregate `count` / `min` / `max` / `sum`, a point's `srid`, integer `@cypher` columns), and grafeo-ogm passes them through unchanged, so the values do not match the generated `number` types. Use the default driver configuration or `disableLosslessIntegers: true` with grafeo-ogm.
 
@@ -1625,7 +1625,7 @@ await users.find({ selectionSet: '{ items { ... on Post { label } ... on Doc { l
 
 A union has no fields of its own, so 2.x projected a `@cypher` field selected on a union (through member fragments or bare, in a relationship or a connection `node`) with the first member's statement for every member. Strict mode runs each member's own statement (a member that declares the field as a stored property reads it). The warning is logged only when the selected members' statements actually differ; unions whose members share one statement compile as before in both modes. The warning code is `union-member-cypher-field`, logged once per OGM instance, union and field.
 
-#### 39. `labels` on `delete()` / `deleteMany()` (since vNEXT)
+#### 39. `labels` on `delete()` / `deleteMany()` (since 2.21.0)
 
 ```typescript
 await users.delete({ where: { id_IN: ids }, labels: ['Archived'] });
@@ -1635,7 +1635,7 @@ await users.delete({ where: { id_IN: ids }, labels: ['Archived'] });
 
 `find()`, `count()`, `update()` and `updateMany()` add runtime `labels` to their `MATCH`; `delete()` and `deleteMany()` never did, so a label-scoped delete removed nodes without those labels (since 2.19.0 with an `unknown-param` warning, an `OGMError` under strict). Strict mode applies them to the root `MATCH`; a cascade `delete` then only reaches the related nodes of the matched roots. The labels are not in the method signatures in 2.x, so this affects untyped callers and objects built outside the call. The warning code is `delete-labels-ignored`, logged once per OGM instance, type and method.
 
-#### 40. An incomplete `@fulltext` index (since vNEXT)
+#### 40. An incomplete `@fulltext` index (since 2.21.0)
 
 ```graphql
 type Book @node @fulltext(indexes: [{ name: "BookSearch" }]) { title: String }
@@ -1649,7 +1649,7 @@ new OGM({ typeDefs, driver, logger });
 
 An index needs a `name` (or `indexName`) and at least one field name. 2.x silently dropped an index without one, an `indexes` entry that is not an object, and a `@fulltext` without an `indexes` list: `db push` / `assertIndexesAndConstraints` never created it, and a `fulltext` search naming it threw `Unknown fulltext index`. Strict mode rejects the schema when the OGM is built, and `db push` / `grafeo generate` with `strict` in `grafeo.config.*` fail the same way (default mode prints a `warning:` line). `@fulltext(indexes: [])` declares nothing and is fine in both modes. The warning code is `fulltext-incomplete-index`, logged once per OGM instance, type and index.
 
-#### 41. A disconnect item that is not an object (since vNEXT)
+#### 41. A disconnect item that is not an object (since 2.21.0)
 
 ```typescript
 await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id instead of { where: { node: { id: 'p1' } } }
@@ -1659,7 +1659,7 @@ await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id
 
 A string, number, boolean or array where a disconnect item (or a relationship's disconnect value) belongs carries no `where`, so it compiled to the blanket form, which unlinks every related node the caller can read. Strict mode rejects it, as a non-object connect item has been rejected since 2.5.1. This extends [item 31](#31-a-null--undefined-item-in-a-disconnect-array-since-2180) (`null` / `undefined` items) to the other non-objects, at every depth: top-level disconnects, per union / interface member, a `disconnect` inside another disconnect item, and nested `update: { posts: [{ disconnect: [...] }] }`. `{ posts: [{}] }` and `{ posts: null }` stay the blanket disconnect in both modes. The warning code is `disconnect-non-object-item`, logged once per OGM instance and relationship field.
 
-#### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since vNEXT)
+#### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since 2.21.0)
 
 ```typescript
 await events.find({ where: { day: new Date('2024-01-15T10:30:00Z') } });

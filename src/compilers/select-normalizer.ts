@@ -36,10 +36,10 @@ import {
 } from './selection.compiler';
 
 /**
- * vNEXT — `loc: { select: { longitude: true, latitude: true } }` on a stored
+ * v2.21.0 — `loc: { select: { longitude: true, latitude: true } }` on a stored
  * `Point` / `CartesianPoint` field of a node or of relationship properties:
  * the typed-select form of the `loc { longitude latitude }` sub-selection
- * (v2.20.0 for node properties in a selectionSet). Pre-vNEXT it was left
+ * (v2.20.0 for node properties in a selectionSet). Pre-2.21.0 it was left
  * out of the result (strict: `OGMError`).
  *
  * Returns `undefined` when `value` is not that shape (the caller reports
@@ -211,7 +211,7 @@ export class SelectNormalizer {
         });
       // v2.8.0 — a scalar given anything but `true` is left out.
       else if (prop && value !== true && isScalarProperty(prop, this.schema)) {
-        // vNEXT — except a point field's `{ select: { longitude: true } }`.
+        // v2.21.0 — except a point field's `{ select: { longitude: true } }`.
         const point = pointSelectNode(
           prop,
           fieldName,
@@ -839,7 +839,7 @@ export class SelectNormalizer {
       // v2.8.0 — an edge property given anything but `true` is left out.
       const edgeProp = props?.properties.get(fieldName);
       if (edgeProp && value != null && value !== false && value !== true) {
-        // vNEXT — except a point field's `{ select: { longitude: true } }`.
+        // v2.21.0 — except a point field's `{ select: { longitude: true } }`.
         const point = pointSelectNode(
           edgeProp,
           fieldName,

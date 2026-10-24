@@ -1646,7 +1646,7 @@ export class SelectionCompiler {
       ])
         for (const child of children) {
           const edgeProp = props?.properties.get(child.fieldName);
-          // vNEXT — a `Point` / `CartesianPoint` edge property takes its
+          // v2.21.0 — a `Point` / `CartesianPoint` edge property takes its
           // object type's fields, as on a node (v2.20.0).
           if (edgeProp && !child.isScalar && isPointProperty(edgeProp)) {
             const bad = unknownPointFields(edgeProp, child.children ?? []);
@@ -4233,10 +4233,10 @@ export class SelectionCompiler {
 
   /**
    * The map entries of an edge `properties { … }` selection over `edgeVar`:
-   * `.note` / `alias: e0.note` for a scalar, and (vNEXT) a `Point` /
+   * `.note` / `alias: e0.note` for a scalar, and (2.21.0) a `Point` /
    * `CartesianPoint` edge property with a sub-selection
    * (`at { longitude latitude }`) as the map `compilePointSelection` builds
-   * for node properties since v2.20.0. Pre-vNEXT such a sub-selection was
+   * for node properties since v2.20.0. Pre-2.21.0 such a sub-selection was
    * left out of the result (strict: `OGMError`). Any other non-scalar
    * entry is still left out, so selections without a point sub-selection
    * compile byte for byte as before.

@@ -89,7 +89,7 @@ export class StrictMode {
  * Pre-v2.19.0 (and still by default) they are ignored, so an upstream-style
  * `update({ where, delete })` or a `deleteMany({ where, delete })` cascade
  * silently does nothing (`labels` on delete / deleteMany has been strict
- * item 39, `Model.deleteLabels`, since vNEXT). Default: one warning per OGM, owner and key set (not
+ * item 39, `Model.deleteLabels`, since 2.21.0). Default: one warning per OGM, owner and key set (not
  * per method, so a find routed through findFirst warns once);
  * strict: `OGMError`. Keys set to `undefined` are ignored in both modes.
  *

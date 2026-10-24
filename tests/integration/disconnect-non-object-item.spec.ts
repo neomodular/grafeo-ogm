@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT, strict item 41): disconnect items that are not objects.
+ * Live suite (v2.21.0, strict item 41): disconnect items that are not objects.
  *
  * A string / number / boolean / array item (`disconnect: { posts: ['p1'] }`,
  * `posts: true`, a nested `disconnect: [5]`) carries no `where`, so it
@@ -45,7 +45,7 @@ const typeDefs = /* GraphQL */ `
 /** Garbage the generated types reject; the cast is the point. */
 const garbage = (v: unknown) => v as never;
 
-describeLive('non-object disconnect items (vNEXT) — live Neo4j', () => {
+describeLive('non-object disconnect items (2.21.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   let driver: Driver;
 

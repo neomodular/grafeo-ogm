@@ -327,7 +327,7 @@ describe('item 31 — a null / undefined item inside a disconnect array (v2.18.0
   });
 });
 
-describe('item 41 — a disconnect item that is not an object (vNEXT)', () => {
+describe('item 41 — a disconnect item that is not an object (2.21.0)', () => {
   const cases: [string, string][] = [
     ['disconnect: string item in an array', 'a string'],
     ['disconnect: boolean spec', 'a boolean'],

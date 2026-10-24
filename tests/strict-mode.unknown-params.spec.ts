@@ -3,7 +3,7 @@
  * does not read. Pre-v2.19.0 they were ignored: an upstream-style
  * `update({ where, delete })` deleted nothing, `deleteMany({ where,
  * delete })` did not cascade, and `delete({ where, labels })` deleted
- * without the label filter (vNEXT: strict item 39, its own spec).
+ * without the label filter (v2.21.0: strict item 39, its own spec).
  *
  * - Default mode: byte-identical to v2.15.0 (hard-coded below, captured
  *   from main @ 6572bdc); warns once per OGM, owner and key set

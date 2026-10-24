@@ -2463,7 +2463,7 @@ export class WhereCompiler {
     // BigInt filter given a string (its generated input type) and a
     // DateTime filter given a JS `Date` silently matched nothing.
     const propDef = propsHolder?.properties.get(fieldName);
-    // vNEXT — strict item 42 (JS Date on a non-DateTime temporal field).
+    // v2.21.0 — strict item 42 (JS Date on a non-DateTime temporal field).
     checkWhereJsDate(
       value,
       propDef,

@@ -1083,7 +1083,7 @@ export class MutationCompiler {
     /** Shared `param<N>` counter, continued from the root WHERE. */
     paramCounter?: { count: number },
     /**
-     * vNEXT — strict item 39: runtime labels added to the root MATCH, as in
+     * v2.21.0 — strict item 39: runtime labels added to the root MATCH, as in
      * compileUpdate. `Model` passes them only in strict mode.
      */
     labels?: string[],
@@ -2679,7 +2679,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 41: a disconnect item that is not an object — a
+   * v2.21.0 — strict item 41: a disconnect item that is not an object — a
    * string, number, boolean or array (`disconnect: { posts: ['p1'] }`,
    * `posts: true`, a nested `disconnect: [5]`). It carries no `where`, so
    * it compiled to the blanket form and unlinked EVERY related node (the
@@ -3738,7 +3738,7 @@ export class MutationCompiler {
     let coerced: Record<string, unknown> | undefined;
     for (const [key, val] of Object.entries(nodeWhere)) {
       const { baseProp } = this.parseOperatorSuffix(key);
-      // vNEXT — strict item 42, as in the WhereCompiler.
+      // v2.21.0 — strict item 42, as in the WhereCompiler.
       checkWhereJsDate(
         val,
         targetNodeDef.properties.get(baseProp),

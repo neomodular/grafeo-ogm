@@ -84,7 +84,7 @@ export const badParamShapes: Record<string, BadParamShape> = {
     hint: 'deleteMany() does not cascade: use delete({ where, delete }).',
     run: (ogm) => user(ogm).deleteMany(extra({ where, delete: { posts: {} } })),
   },
-  // vNEXT — `labels` on delete() / deleteMany() moved to strict item 39
+  // v2.21.0 — `labels` on delete() / deleteMany() moved to strict item 39
   // (tests/strict-mode.delete-labels.spec.ts).
   'find() with a Prisma-style "orderBy" and "take"': {
     call: 'User.find',

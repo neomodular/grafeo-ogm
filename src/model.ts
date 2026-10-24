@@ -110,7 +110,7 @@ const PARAMS = {
     'context',
     'unsafe',
   ],
-  // vNEXT — `labels` on delete / deleteMany is strict item 39
+  // v2.21.0 — `labels` on delete / deleteMany is strict item 39
   // (`Model.deleteLabels`), not an unknown param.
   delete: ['where', 'delete', 'labels', 'context', 'unsafe'],
   aggregate: ['where', 'aggregate', 'labels', 'fulltext', 'context', 'unsafe'],
@@ -577,7 +577,7 @@ export class Model<
    * — checked here and propagated by `assertNotDeniedAtCompile`.
    */
   /**
-   * vNEXT — strict item 39: the runtime `labels` of `delete()` /
+   * v2.21.0 — strict item 39: the runtime `labels` of `delete()` /
    * `deleteMany()`. They are not in the method signatures, and 2.x never
    * applied them: `delete({ where, labels })` deleted every node `where`
    * matched, with or without the labels (since v2.19.0 with an

@@ -103,7 +103,7 @@ describe('@fulltext indexName (alias of name)', () => {
   });
 });
 
-describe('strict item 40 — incomplete @fulltext index (vNEXT)', () => {
+describe('strict item 40 — incomplete @fulltext index (2.21.0)', () => {
   const cases: [string, string, string][] = [
     [
       'no name',

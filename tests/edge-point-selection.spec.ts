@@ -1,8 +1,8 @@
 /**
- * vNEXT — point sub-selection on relationship properties
+ * v2.21.0 — point sub-selection on relationship properties
  * (`edges { properties { at { longitude latitude } } }`) and in the typed
  * `select` (`at: { select: { longitude: true } }`, node and edge). v2.20.0
- * added the selectionSet form for node properties only; pre-vNEXT these
+ * added the selectionSet form for node properties only; pre-v2.21.0 these
  * were left out of the result (and warned), strict mode threw. Both modes
  * now project them, as for node properties.
  */
@@ -44,7 +44,7 @@ async function compile(
 const AT =
   '`at`: CASE WHEN e0.`at` IS NULL THEN null ELSE { `longitude`: e0.`at`.x, `latitude`: e0.`at`.y } END';
 
-describe('point sub-selection on relationship properties (vNEXT)', () => {
+describe('point sub-selection on relationship properties (2.21.0)', () => {
   for (const strict of [false, true])
     describe(strict ? 'strict' : 'default', () => {
       it('selectionSet: Point, CartesianPoint, list and alias', async () => {
