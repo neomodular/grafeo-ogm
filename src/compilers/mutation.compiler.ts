@@ -535,7 +535,7 @@ export class MutationCompiler {
   ): void {
     if (!isPlainObject(input)) return;
     const { what } = NESTED_WRITE_SHAPES[shape];
-    // vNEXT — strict item 45: strict mode applies `connectOrCreate`.
+    // v2.22.0 — strict item 43: strict mode applies `connectOrCreate`.
     const allowed =
       shape === 'update item' && this.strictMode.strict
         ? UPDATE_ITEM_KEYS_STRICT
@@ -561,7 +561,7 @@ export class MutationCompiler {
     else
       effect =
         ': with "node" or "edge" given, node fields are read only from "node".';
-    // vNEXT — strict item 45.
+    // v2.22.0 — strict item 43.
     const strictOnly =
       shape === 'update item' && unknown.includes('connectOrCreate')
         ? ' "connectOrCreate" is applied only with `strict: true`.'
@@ -887,7 +887,7 @@ export class MutationCompiler {
      */
     guardDeleted: boolean = this.strictMode.strict,
     /**
-     * vNEXT — strict item 45: the root `delete` / `connectOrCreate` /
+     * v2.22.0 — strict item 43: the root `delete` / `connectOrCreate` /
      * `create` of `update()` (@neo4j/graphql 5.x), emitted in its order:
      * delete, disconnect, update, connect, connectOrCreate, create. The
      * model passes them under strict mode only.
@@ -920,7 +920,7 @@ export class MutationCompiler {
 
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
 
-    // vNEXT — strict item 45: a root op runs as the same op nested in an
+    // v2.22.0 — strict item 43: a root op runs as the same op nested in an
     // update item of each relationship it names (`rootOpAsUpdate`), so it
     // takes the nested op's policies, member dispatch and checks.
     const emitRootOp = (kind: RootUpdateOpKind): void => {
@@ -1807,7 +1807,7 @@ export class MutationCompiler {
     nodeDef: NodeDefinition,
     prefix: string,
     /**
-     * vNEXT — properties left out entirely (no generated id, input value
+     * v2.22.0 — properties left out entirely (no generated id, input value
      * or default): the MERGE key of a connectOrCreate, already set by its
      * pattern.
      */
@@ -2583,7 +2583,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 45: one `connectOrCreate` item (@neo4j/graphql
+   * v2.22.0 — strict item 43: one `connectOrCreate` item (@neo4j/graphql
    * 5.x), nested in an update item or given at the root of `update()`:
    *
    *   WITH <carry>
@@ -3558,7 +3558,7 @@ export class MutationCompiler {
           }
 
           // --- connectOrCreate ---
-          // vNEXT — strict item 45: after connect, before create, as in
+          // v2.22.0 — strict item 43: after connect, before create, as in
           // @neo4j/graphql 5.x. Default mode ignores it (and warns, see
           // checkNestedWriteKeys).
           if (this.strictMode.strict && item.connectOrCreate != null) {
@@ -4214,7 +4214,7 @@ const NESTED_WRITE_SHAPES: Record<
 };
 
 /**
- * vNEXT — strict item 45: the keys of a nested update item under strict
+ * v2.22.0 — strict item 43: the keys of a nested update item under strict
  * mode, which also applies `connectOrCreate` (as @neo4j/graphql 5.x).
  */
 const UPDATE_ITEM_KEYS_STRICT: ReadonlySet<string> = new Set([
@@ -4234,7 +4234,7 @@ const CONNECT_OR_CREATE_ON_CREATE_KEYS: ReadonlySet<string> = new Set([
 const WHERE_NODE_KEYS: ReadonlySet<string> = new Set(['node']);
 
 /**
- * vNEXT — whether a connectOrCreate `onCreate.node` value repeats its
+ * v2.22.0 — whether a connectOrCreate `onCreate.node` value repeats its
  * `where.node` key value (allowed) rather than changing it.
  */
 function sameKeyValue(a: unknown, b: unknown): boolean {
@@ -4367,12 +4367,12 @@ export interface AbstractTarget {
  * the interface's, so every write that has to find one matches by these
  * members' labels (v2.4.8).
  */
-/** vNEXT — strict item 45: the root relationship ops of `update()`. */
+/** v2.22.0 — strict item 43: the root relationship ops of `update()`. */
 export type RootUpdateOpKind = 'delete' | 'connectOrCreate' | 'create';
 export type RootUpdateOps = Partial<Record<RootUpdateOpKind, unknown>>;
 
 /**
- * vNEXT — strict item 45: a root `delete` / `connectOrCreate` / `create`
+ * v2.22.0 — strict item 43: a root `delete` / `connectOrCreate` / `create`
  * of `update()` (@neo4j/graphql 5.x, `{ posts: [ …items ] }`, or keyed by
  * member for an abstract target) as the equivalent `update` input, the op
  * nested in one item per relationship (`{ posts: [{ create: [ …items ] }] }`,

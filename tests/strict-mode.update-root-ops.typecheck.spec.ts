@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 45 (compiler invariant 5): the generated types offer
+ * v2.22.0 — strict item 43 (compiler invariant 5): the generated types offer
  * the @neo4j/graphql 5.x update ops strict mode applies — `connectOrCreate`
  * in a nested update item (when the target has a @unique / @id field) and
  * a root `create` / `connectOrCreate` / `delete` on `update()` — and
@@ -10,7 +10,7 @@ import { rootOpsTypeDefs } from './strict-mode.update-root-ops.cases';
 
 jest.setTimeout(60_000);
 
-describe('item 45 — generated types for the update ops', () => {
+describe('item 43 — generated types for the update ops', () => {
   let generated = '';
   let errors: string[] = [];
 

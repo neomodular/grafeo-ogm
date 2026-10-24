@@ -792,7 +792,7 @@ function emitUnionRelUpdateConnectionInput(
 }
 
 // ---------------------------------------------------------------------------
-// connectOrCreate (vNEXT — strict item 45: applied only with `strict: true`)
+// connectOrCreate (v2.22.0 — strict item 43: applied only with `strict: true`)
 // ---------------------------------------------------------------------------
 
 /** The fields a connectOrCreate can match on: `@unique` / `@id`, stored. */

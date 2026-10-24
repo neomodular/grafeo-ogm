@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 45: the @neo4j/graphql 5.x relationship ops of
+ * v2.22.0 — strict item 43: the @neo4j/graphql 5.x relationship ops of
  * `update()` that strict mode applies — a nested `connectOrCreate` in an
  * update item, and a root `create` / `connectOrCreate` / `delete` —
  * shared by the unit spec and its byte-identical guard.

@@ -52,7 +52,7 @@ export interface BadNestedShape {
   field: string;
   what: string;
   allowed: string;
-  /** vNEXT — strict item 45: the allowed list under strict mode, if different. */
+  /** v2.22.0 — strict item 43: the allowed list under strict mode, if different. */
   strictAllowed?: string;
 }
 

@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 45: node-level security on the @neo4j/graphql 5.x
+ * v2.22.0 — strict item 43: node-level security on the @neo4j/graphql 5.x
  * update ops strict mode applies (nested / root `connectOrCreate`, root
  * `create` / `delete`).
  *

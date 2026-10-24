@@ -22,7 +22,7 @@ function members(generated: string, name: string): string[] {
 
 const ITEM = ['connect', 'create', 'delete', 'disconnect', 'update', 'where'];
 /**
- * vNEXT — strict item 45: strict mode also applies `connectOrCreate`,
+ * v2.22.0 — strict item 43: strict mode also applies `connectOrCreate`,
  * offered when the target type has a @unique / @id field (not for an
  * interface target, where strict mode rejects it).
  */

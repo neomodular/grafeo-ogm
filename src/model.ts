@@ -113,7 +113,7 @@ const PARAMS = {
     'unsafe',
   ],
   /**
-   * vNEXT — strict item 45: strict mode also applies the root relationship
+   * v2.22.0 — strict item 43: strict mode also applies the root relationship
    * ops of @neo4j/graphql 5.x.
    */
   updateStrict: [
@@ -176,7 +176,7 @@ const PARAMS = {
 
 /** Advice for unknown params that name an upstream / sibling feature. */
 const STRICT_ROOT_OP = (op: string) =>
-  `update() applies a root "${op}" only with \`strict: true\` (strict item 45); without it, put it in a ` +
+  `update() applies a root "${op}" only with \`strict: true\` (strict item 43); without it, put it in a ` +
   `relationship field of "update", e.g. \`update: { posts: [{ ${op}: … }] }\`.`;
 const PARAM_HINTS = {
   update: {
@@ -310,7 +310,7 @@ type RootOpField<V, K extends string> =
     : never;
 
 /**
- * vNEXT — strict item 45: the root `create` / `connectOrCreate` input of
+ * v2.22.0 — strict item 43: the root `create` / `connectOrCreate` input of
  * `update()` (@neo4j/graphql 5.x), derived from the generated update
  * input: per relationship field, what that field's nested update item
  * takes under the same key (keyed by member for a union / interface).
@@ -372,11 +372,11 @@ export interface ModelInterface<
     update?: TUpdateInput;
     connect?: TConnectInput;
     disconnect?: TDisconnectInput;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     create?: UpdateRootOpInput<TUpdateInput, 'create'>;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     connectOrCreate?: UpdateRootOpInput<TUpdateInput, 'connectOrCreate'>;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     delete?: TDeleteInput;
     labels?: string[];
     selectionSet?: string | DocumentNode;
@@ -1291,11 +1291,11 @@ export class Model<
     update?: TUpdateInput;
     connect?: TConnectInput;
     disconnect?: TDisconnectInput;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     create?: UpdateRootOpInput<TUpdateInput, 'create'>;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     connectOrCreate?: UpdateRootOpInput<TUpdateInput, 'connectOrCreate'>;
-    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    /** v2.22.0 — applied only with `strict: true` (strict item 43). */
     delete?: TDeleteInput;
     labels?: string[];
     selectionSet?: string | DocumentNode;
@@ -1331,7 +1331,7 @@ export class Model<
       policyContext,
       { connectOrCreate: strict },
     );
-    // vNEXT — strict item 45: the root relationship ops, under strict mode
+    // v2.22.0 — strict item 43: the root relationship ops, under strict mode
     // only (default mode ignores them and warns, see checkParamKeys).
     let rootOps: RootUpdateOps | undefined;
     if (strict) {

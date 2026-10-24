@@ -140,7 +140,7 @@ export function assertNestedUpdatesAllowed(
   update: Record<string, unknown> | undefined,
   bundle: PolicyContextBundle | null,
   /**
-   * vNEXT — strict item 45: check `connectOrCreate` items too (strict
+   * v2.22.0 — strict item 43: check `connectOrCreate` items too (strict
    * mode, the only mode that applies them).
    */
   options: UpdateWalkOptions = {},
@@ -285,7 +285,7 @@ function checkCreates(
 }
 
 /**
- * vNEXT — strict item 45: a `connectOrCreate` may create its node, so it
+ * v2.22.0 — strict item 43: a `connectOrCreate` may create its node, so it
  * is checked as a nested create of `{ ...onCreate.node, ...where.node }`
  * (the node it would create), whether or not the node already exists. An
  * abstract target is rejected by the compiler.

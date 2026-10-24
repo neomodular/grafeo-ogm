@@ -131,7 +131,7 @@ describe('item 34 — unknown params of Model / InterfaceModel methods', () => {
     },
   );
 
-  // vNEXT — strict item 45: strict mode applies a root create / delete.
+  // v2.22.0 — strict item 43: strict mode applies a root create / delete.
   it.each(bad.filter(([, s]) => s.strictApplies))(
     'strict applies, without warning: %s',
     async (_name, s) => {

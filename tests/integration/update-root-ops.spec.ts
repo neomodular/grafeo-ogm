@@ -1,5 +1,5 @@
 /**
- * Live suite — vNEXT strict item 45: the @neo4j/graphql 5.x relationship
+ * Live suite — v2.22.0 strict item 43: the @neo4j/graphql 5.x relationship
  * ops of `update()` / `updateMany()`: `connectOrCreate` in a nested update
  * item, and a root `create` / `connectOrCreate` / `delete`.
  *

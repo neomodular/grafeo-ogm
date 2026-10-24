@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 45: the @neo4j/graphql 5.x relationship ops of
+ * v2.22.0 — strict item 43: the @neo4j/graphql 5.x relationship ops of
  * `update()`: a `connectOrCreate` in a nested update item, and a root
  * `create` / `connectOrCreate` / `delete`.
  *
@@ -142,7 +142,7 @@ describe('strict mode off: Cypher is byte-identical to v2.20.1', () => {
   });
 });
 
-describe('item 45 — strict mode applies the upstream update ops', () => {
+describe('item 43 — strict mode applies the upstream update ops', () => {
   it.each(shapes)('%s', async (name, run) => {
     const { ogm, records, warnings } = setup(true);
     await run(ogm);

@@ -35,7 +35,7 @@ export interface BadParamShape {
   /** Advice the message ends with, if any. */
   hint?: string;
   /**
-   * vNEXT — strict item 45: strict mode applies the param (a root
+   * v2.22.0 — strict item 43: strict mode applies the param (a root
    * relationship op of `update()`) instead of throwing.
    */
   strictApplies?: true;
@@ -48,7 +48,7 @@ const where = { id: 'u1' };
 const extra = <T extends object>(o: T): T => o;
 
 const nestedOnly = (op: string) =>
-  `update() applies a root "${op}" only with \`strict: true\` (strict item 45); without it, put it in a ` +
+  `update() applies a root "${op}" only with \`strict: true\` (strict item 43); without it, put it in a ` +
   `relationship field of "update", e.g. \`update: { posts: [{ ${op}: … }] }\`.`;
 
 export const badParamShapes: Record<string, BadParamShape> = {

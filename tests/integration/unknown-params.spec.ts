@@ -11,7 +11,7 @@
  * `delete({ where, labels })` deletes without the label filter.
  * `strict: true` throws `OGMError` and writes nothing, except that since
  * v2.21.0 (strict item 39) it applies the `labels` of delete / deleteMany,
- * and it applies the root `delete` of `update()` (vNEXT, strict item 45).
+ * and it applies the root `delete` of `update()` (v2.22.0, strict item 43).
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -174,7 +174,7 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
     expect(await exists(a)).toBe(true);
   });
 
-  // vNEXT — strict item 45: strict mode applies an upstream root "delete".
+  // v2.22.0 — strict item 43: strict mode applies an upstream root "delete".
   it('strict: update() with a root "delete" deletes the post', async () => {
     const { u, a } = await seed();
     const { authors, warnings } = makeOgm(true);
