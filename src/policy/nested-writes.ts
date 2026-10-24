@@ -139,9 +139,18 @@ export function assertNestedUpdatesAllowed(
   nodeDef: NodeDefinition,
   update: Record<string, unknown> | undefined,
   bundle: PolicyContextBundle | null,
+  /**
+   * vNEXT — strict item 45: check `connectOrCreate` items too (strict
+   * mode, the only mode that applies them).
+   */
+  options: UpdateWalkOptions = {},
 ): void {
   if (!bundle || !isPlainObject(update)) return;
-  walkUpdate(schema, nodeDef, update, bundle, 0);
+  walkUpdate(schema, nodeDef, update, bundle, 0, options);
+}
+
+interface UpdateWalkOptions {
+  connectOrCreate?: boolean;
 }
 
 /** A create node spec: its relationship keys may carry nested creates. */
@@ -173,6 +182,7 @@ function walkUpdate(
   update: Record<string, unknown>,
   bundle: PolicyContextBundle,
   depth: number,
+  options: UpdateWalkOptions,
 ): void {
   assertDepth(depth);
   for (const [key, value] of Object.entries(update)) {
@@ -183,6 +193,13 @@ function walkUpdate(
         if (!isPlainObject(item)) continue;
         if (item.create)
           checkCreates(schema, targetDef, item.create, bundle, depth);
+        if (options.connectOrCreate && item.connectOrCreate != null)
+          checkConnectOrCreates(
+            schema,
+            targetDef,
+            item.connectOrCreate,
+            bundle,
+          );
         if (isPlainObject(item.update)) {
           // Same node-spec resolution as the compiler's nested update.
           const spec = item.update;
@@ -207,7 +224,7 @@ function walkUpdate(
                 'update',
                 body,
               );
-              walkUpdate(schema, memberDef, body, bundle, depth + 1);
+              walkUpdate(schema, memberDef, body, bundle, depth + 1, options);
             }
             continue;
           }
@@ -221,7 +238,14 @@ function walkUpdate(
               nodeUpdate,
             );
           if (isPlainObject(nodeUpdate))
-            walkUpdate(schema, targetDef, nodeUpdate, bundle, depth + 1);
+            walkUpdate(
+              schema,
+              targetDef,
+              nodeUpdate,
+              bundle,
+              depth + 1,
+              options,
+            );
         }
       }
   }
@@ -257,6 +281,36 @@ function checkCreates(
     );
     if (isPlainObject(nodeSpec))
       walkCreate(schema, createDef, nodeSpec, bundle, depth + 1);
+  }
+}
+
+/**
+ * vNEXT — strict item 45: a `connectOrCreate` may create its node, so it
+ * is checked as a nested create of `{ ...onCreate.node, ...where.node }`
+ * (the node it would create), whether or not the node already exists. An
+ * abstract target is rejected by the compiler.
+ */
+function checkConnectOrCreates(
+  schema: SchemaMetadata,
+  targetDef: NodeDefinition,
+  items: unknown,
+  bundle: PolicyContextBundle,
+): void {
+  if (abstractTarget(targetDef.typeName, schema)) return;
+  for (const item of asArray(items)) {
+    if (!isPlainObject(item)) continue;
+    const onCreate = isPlainObject(item.onCreate) ? item.onCreate.node : null;
+    const where = isPlainObject(item.where) ? item.where.node : null;
+    evaluateCreatePolicies(
+      targetBundle(bundle, targetDef.typeName, 'create'),
+      targetDef.typeName,
+      [
+        {
+          ...(isPlainObject(onCreate) ? onCreate : {}),
+          ...(isPlainObject(where) ? where : {}),
+        },
+      ],
+    );
   }
 }
 

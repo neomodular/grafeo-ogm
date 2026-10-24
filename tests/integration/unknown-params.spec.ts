@@ -10,7 +10,8 @@
  * deletes nothing, `deleteMany({ where, delete })` does not cascade and
  * `delete({ where, labels })` deletes without the label filter.
  * `strict: true` throws `OGMError` and writes nothing, except that since
- * v2.21.0 (strict item 39) it applies the `labels` of delete / deleteMany.
+ * v2.21.0 (strict item 39) it applies the `labels` of delete / deleteMany,
+ * and it applies the root `delete` of `update()` (vNEXT, strict item 45).
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -173,17 +174,20 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
     expect(await exists(a)).toBe(true);
   });
 
+  // vNEXT — strict item 45: strict mode applies an upstream root "delete".
+  it('strict: update() with a root "delete" deletes the post', async () => {
+    const { u, a } = await seed();
+    const { authors, warnings } = makeOgm(true);
+    await authors.update({
+      where: { id: u },
+      delete: { posts: [{ where: { node: { id: a } } }] },
+    });
+    expect(await exists(u)).toBe(true);
+    expect(await exists(a)).toBe(false);
+    expect(warnings).toEqual([]);
+  });
+
   it.each([
-    [
-      'update() with a root "delete"',
-      (m: ReturnType<typeof makeOgm>['authors'], u: string, a: string) =>
-        m.update(
-          extra({
-            where: { id: u },
-            delete: { posts: [{ where: { node: { id: a } } }] },
-          }),
-        ),
-    ],
     [
       'deleteMany() with "delete"',
       (m: ReturnType<typeof makeOgm>['authors'], u: string) =>
@@ -192,7 +196,7 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
   ])('strict: %s throws and writes nothing', async (_n, fn) => {
     const { u, a } = await seed();
     const { authors, warnings } = makeOgm(true);
-    await expect(fn(authors, u, a)).rejects.toThrow(OGMError);
+    await expect(fn(authors, u)).rejects.toThrow(OGMError);
     expect(await exists(u)).toBe(true);
     expect(await exists(a)).toBe(true);
     expect(warnings).toEqual([]);

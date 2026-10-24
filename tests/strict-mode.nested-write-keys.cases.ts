@@ -52,9 +52,12 @@ export interface BadNestedShape {
   field: string;
   what: string;
   allowed: string;
+  /** vNEXT — strict item 45: the allowed list under strict mode, if different. */
+  strictAllowed?: string;
 }
 
 const ITEM = '"where", "update", "connect", "disconnect", "create", "delete"';
+const ITEM_STRICT = `${ITEM}, "connectOrCreate"`;
 const FIELD_INPUT = '"create", "connect"';
 const WRAPPER = '"node", "edge"';
 const UPDATE_ITEM = 'a nested update item';
@@ -80,6 +83,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'posts',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update item: "updat" (update dropped)': {
     run: (ogm) =>
@@ -95,6 +99,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'posts',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update item: single object, two unknown keys': {
     run: (ogm) =>
@@ -112,6 +117,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'posts',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update item: per union member': {
     run: (ogm) =>
@@ -132,6 +138,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'media',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update item: flat interface input': {
     run: (ogm) =>
@@ -147,6 +154,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'animals',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update item: two levels down': {
     run: (ogm) =>
@@ -174,6 +182,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'tags',
     what: UPDATE_ITEM,
     allowed: ITEM,
+    strictAllowed: ITEM_STRICT,
   },
   'update body: node field beside edge (dropped)': {
     run: (ogm) =>

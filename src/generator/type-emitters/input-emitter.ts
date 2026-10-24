@@ -37,6 +37,7 @@ export function emitInputTypes(schema: SchemaMetadata): string {
   for (const [, node] of sortedNodes) {
     blocks.push(emitCreateInput(node, schema));
     blocks.push(emitUpdateInput(node, schema));
+    blocks.push(...emitConnectOrCreateNodeTypes(node, schema));
     if (node.relationships.size > 0) {
       blocks.push(emitConnectInput(node, schema));
       blocks.push(emitDisconnectInput(node, schema));
@@ -77,8 +78,16 @@ export function emitInputTypes(schema: SchemaMetadata): string {
           ...emitUnionRelDeleteFieldInput(node.typeName, rel, members, schema),
         );
         blocks.push(
-          ...emitUnionRelUpdateFieldInput(node.typeName, rel, members),
+          ...emitUnionRelUpdateFieldInput(node.typeName, rel, members, schema),
         );
+        for (const m of [...members].sort())
+          blocks.push(
+            ...emitConnectOrCreateFieldInput(
+              `${prefix}${m}`,
+              rel,
+              schema.nodes.get(m),
+            ),
+          );
         blocks.push(
           ...emitUnionRelUpdateConnectionInput(node.typeName, rel, members),
         );
@@ -89,8 +98,15 @@ export function emitInputTypes(schema: SchemaMetadata): string {
         blocks.push(emitConnectFieldInput(node.typeName, rel, schema));
         blocks.push(emitDisconnectFieldInput(node.typeName, rel, schema));
         blocks.push(emitDeleteFieldInput(node.typeName, rel, schema));
-        blocks.push(emitUpdateFieldInput(node.typeName, rel));
+        blocks.push(emitUpdateFieldInput(node.typeName, rel, schema));
         blocks.push(emitUpdateConnectionInput(node.typeName, rel));
+        blocks.push(
+          ...emitConnectOrCreateFieldInput(
+            `${node.typeName}${toPascalCase(rel.fieldName)}`,
+            rel,
+            schema.nodes.get(rel.target),
+          ),
+        );
       }
 
       // ConnectWhere — one per target node (skip unions/interfaces)
@@ -466,6 +482,7 @@ function emitDeleteFieldInput(
 function emitUpdateFieldInput(
   typeName: string,
   rel: RelationshipDefinition,
+  schema: SchemaMetadata,
 ): string {
   const pascal = toPascalCase(rel.fieldName);
   const prefix = `${typeName}${pascal}`;
@@ -490,6 +507,9 @@ function emitUpdateFieldInput(
   if (rel.isArray)
     members.push(`  delete?: InputMaybe<Array<${prefix}DeleteFieldInput>>;`);
   else members.push(`  delete?: InputMaybe<${prefix}DeleteFieldInput>;`);
+  members.push(
+    ...connectOrCreateMember(prefix, rel, schema.nodes.get(rel.target)),
+  );
 
   return `export type ${prefix}UpdateFieldInput = {\n${members.join('\n')}\n};`;
 }
@@ -699,6 +719,7 @@ function emitUnionRelUpdateFieldInput(
   typeName: string,
   rel: RelationshipDefinition,
   members: string[],
+  schema: SchemaMetadata,
 ): string[] {
   const pascal = toPascalCase(rel.fieldName);
   const prefix = `${typeName}${pascal}`;
@@ -735,6 +756,9 @@ function emitUnionRelUpdateFieldInput(
     subMembers.push(
       `  delete?: InputMaybe<Array<${prefix}${m}DeleteFieldInput>>;`,
     );
+    subMembers.push(
+      ...connectOrCreateMember(`${prefix}${m}`, rel, schema.nodes.get(m)),
+    );
     blocks.push(
       `export type ${prefix}${m}UpdateFieldInput = {\n${subMembers.join('\n')}\n};`,
     );
@@ -765,6 +789,73 @@ function emitUnionRelUpdateConnectionInput(
   }
 
   return blocks;
+}
+
+// ---------------------------------------------------------------------------
+// connectOrCreate (vNEXT — strict item 45: applied only with `strict: true`)
+// ---------------------------------------------------------------------------
+
+/** The fields a connectOrCreate can match on: `@unique` / `@id`, stored. */
+function uniqueFields(node: NodeDefinition): PropertyDefinition[] {
+  return [...node.properties.values()].filter(
+    (p) => !p.isCypher && (p.isUnique || p.isGenerated),
+  );
+}
+
+/**
+ * `<Type>UniqueWhere`, `<Type>ConnectOrCreateWhere` and
+ * `<Type>OnCreateInput` (the create input without relationships), as
+ * @neo4j/graphql 5.x names them, for a type with a unique field.
+ */
+function emitConnectOrCreateNodeTypes(
+  node: NodeDefinition,
+  schema: SchemaMetadata,
+): string[] {
+  const fields = uniqueFields(node);
+  if (fields.length === 0) return [];
+  // No `InputMaybe`: the key of a MERGE cannot be null.
+  const where = fields.map((p) => {
+    const tsType = mapInputScalar(p.type, schema.enums, schema.customScalars);
+    return `  ${p.name}?: ${p.isArray ? `Array<${tsType}>` : tsType};`;
+  });
+  const rels = [...node.relationships.keys()];
+  const onCreate =
+    rels.length > 0
+      ? `Omit<${node.typeName}CreateInput, ${rels.map((r) => JSON.stringify(r)).join(' | ')}>`
+      : `${node.typeName}CreateInput`;
+  return [
+    `export type ${node.typeName}UniqueWhere = {\n${where.join('\n')}\n};`,
+    `export type ${node.typeName}ConnectOrCreateWhere = {\n  node: ${node.typeName}UniqueWhere;\n};`,
+    `export type ${node.typeName}OnCreateInput = ${onCreate};`,
+  ];
+}
+
+/** `connectOrCreate` of an update field input, when the target can take it. */
+function connectOrCreateMember(
+  prefix: string,
+  rel: RelationshipDefinition,
+  target: NodeDefinition | undefined,
+): string[] {
+  if (!target || uniqueFields(target).length === 0) return [];
+  return [
+    `  connectOrCreate?: InputMaybe<${wrapArray(`${prefix}ConnectOrCreateFieldInput`, rel.isArray)}>;`,
+  ];
+}
+
+/** `<prefix>ConnectOrCreateFieldInput` and its `…OnCreate`. */
+function emitConnectOrCreateFieldInput(
+  prefix: string,
+  rel: RelationshipDefinition,
+  target: NodeDefinition | undefined,
+): string[] {
+  if (!target || uniqueFields(target).length === 0) return [];
+  const onCreate = [`  node: ${target.typeName}OnCreateInput;`];
+  if (rel.properties)
+    onCreate.push(`  edge?: InputMaybe<${rel.properties}CreateInput>;`);
+  return [
+    `export type ${prefix}ConnectOrCreateFieldInput = {\n  where: ${target.typeName}ConnectOrCreateWhere;\n  onCreate: ${prefix}ConnectOrCreateFieldInputOnCreate;\n};`,
+    `export type ${prefix}ConnectOrCreateFieldInputOnCreate = {\n${onCreate.join('\n')}\n};`,
+  ];
 }
 
 // ---------------------------------------------------------------------------

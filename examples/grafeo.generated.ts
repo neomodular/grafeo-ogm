@@ -598,6 +598,16 @@ export type AuthorUpdateInput = {
   books?: InputMaybe<Array<AuthorBooksUpdateFieldInput>>;
 };
 
+export type AuthorUniqueWhere = {
+  id?: Scalars["ID"]["input"];
+};
+
+export type AuthorConnectOrCreateWhere = {
+  node: AuthorUniqueWhere;
+};
+
+export type AuthorOnCreateInput = Omit<AuthorCreateInput, "books">;
+
 export type AuthorConnectInput = {
   books?: InputMaybe<Array<AuthorBooksConnectFieldInput>>;
 };
@@ -645,11 +655,22 @@ export type AuthorBooksUpdateFieldInput = {
   create?: InputMaybe<Array<AuthorBooksCreateFieldInput>>;
   update?: InputMaybe<AuthorBooksUpdateConnectionInput>;
   delete?: InputMaybe<Array<AuthorBooksDeleteFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<AuthorBooksConnectOrCreateFieldInput>>;
 };
 
 export type AuthorBooksUpdateConnectionInput = {
   node?: InputMaybe<BookUpdateInput>;
   edge?: InputMaybe<WrittenByUpdateInput>;
+};
+
+export type AuthorBooksConnectOrCreateFieldInput = {
+  where: BookConnectOrCreateWhere;
+  onCreate: AuthorBooksConnectOrCreateFieldInputOnCreate;
+};
+
+export type AuthorBooksConnectOrCreateFieldInputOnCreate = {
+  node: BookOnCreateInput;
+  edge?: InputMaybe<WrittenByCreateInput>;
 };
 
 export type BookConnectWhere = {
@@ -679,6 +700,20 @@ export type BookUpdateInput = {
   categories?: InputMaybe<Array<BookCategoriesUpdateFieldInput>>;
   reviews?: InputMaybe<Array<BookReviewsUpdateFieldInput>>;
 };
+
+export type BookUniqueWhere = {
+  id?: Scalars["ID"]["input"];
+  isbn?: Scalars["String"]["input"];
+};
+
+export type BookConnectOrCreateWhere = {
+  node: BookUniqueWhere;
+};
+
+export type BookOnCreateInput = Omit<
+  BookCreateInput,
+  "author" | "categories" | "reviews"
+>;
 
 export type BookConnectInput = {
   author?: InputMaybe<BookAuthorConnectFieldInput>;
@@ -733,11 +768,22 @@ export type BookAuthorUpdateFieldInput = {
   create?: InputMaybe<BookAuthorCreateFieldInput>;
   update?: InputMaybe<BookAuthorUpdateConnectionInput>;
   delete?: InputMaybe<BookAuthorDeleteFieldInput>;
+  connectOrCreate?: InputMaybe<BookAuthorConnectOrCreateFieldInput>;
 };
 
 export type BookAuthorUpdateConnectionInput = {
   node?: InputMaybe<AuthorUpdateInput>;
   edge?: InputMaybe<WrittenByUpdateInput>;
+};
+
+export type BookAuthorConnectOrCreateFieldInput = {
+  where: AuthorConnectOrCreateWhere;
+  onCreate: BookAuthorConnectOrCreateFieldInputOnCreate;
+};
+
+export type BookAuthorConnectOrCreateFieldInputOnCreate = {
+  node: AuthorOnCreateInput;
+  edge?: InputMaybe<WrittenByCreateInput>;
 };
 
 export type AuthorConnectWhere = {
@@ -779,11 +825,22 @@ export type BookCategoriesUpdateFieldInput = {
   create?: InputMaybe<Array<BookCategoriesCreateFieldInput>>;
   update?: InputMaybe<BookCategoriesUpdateConnectionInput>;
   delete?: InputMaybe<Array<BookCategoriesDeleteFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<BookCategoriesConnectOrCreateFieldInput>>;
 };
 
 export type BookCategoriesUpdateConnectionInput = {
   node?: InputMaybe<CategoryUpdateInput>;
   edge?: InputMaybe<InCategoryUpdateInput>;
+};
+
+export type BookCategoriesConnectOrCreateFieldInput = {
+  where: CategoryConnectOrCreateWhere;
+  onCreate: BookCategoriesConnectOrCreateFieldInputOnCreate;
+};
+
+export type BookCategoriesConnectOrCreateFieldInputOnCreate = {
+  node: CategoryOnCreateInput;
+  edge?: InputMaybe<InCategoryCreateInput>;
 };
 
 export type CategoryConnectWhere = {
@@ -823,10 +880,20 @@ export type BookReviewsUpdateFieldInput = {
   create?: InputMaybe<Array<BookReviewsCreateFieldInput>>;
   update?: InputMaybe<BookReviewsUpdateConnectionInput>;
   delete?: InputMaybe<Array<BookReviewsDeleteFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<BookReviewsConnectOrCreateFieldInput>>;
 };
 
 export type BookReviewsUpdateConnectionInput = {
   node?: InputMaybe<ReviewUpdateInput>;
+};
+
+export type BookReviewsConnectOrCreateFieldInput = {
+  where: ReviewConnectOrCreateWhere;
+  onCreate: BookReviewsConnectOrCreateFieldInputOnCreate;
+};
+
+export type BookReviewsConnectOrCreateFieldInputOnCreate = {
+  node: ReviewOnCreateInput;
 };
 
 export type ReviewConnectWhere = {
@@ -842,6 +909,16 @@ export type CategoryUpdateInput = {
   name?: InputMaybe<Scalars["String"]["input"]>;
   books?: InputMaybe<Array<CategoryBooksUpdateFieldInput>>;
 };
+
+export type CategoryUniqueWhere = {
+  id?: Scalars["ID"]["input"];
+};
+
+export type CategoryConnectOrCreateWhere = {
+  node: CategoryUniqueWhere;
+};
+
+export type CategoryOnCreateInput = Omit<CategoryCreateInput, "books">;
 
 export type CategoryConnectInput = {
   books?: InputMaybe<Array<CategoryBooksConnectFieldInput>>;
@@ -888,10 +965,20 @@ export type CategoryBooksUpdateFieldInput = {
   create?: InputMaybe<Array<CategoryBooksCreateFieldInput>>;
   update?: InputMaybe<CategoryBooksUpdateConnectionInput>;
   delete?: InputMaybe<Array<CategoryBooksDeleteFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<CategoryBooksConnectOrCreateFieldInput>>;
 };
 
 export type CategoryBooksUpdateConnectionInput = {
   node?: InputMaybe<BookUpdateInput>;
+};
+
+export type CategoryBooksConnectOrCreateFieldInput = {
+  where: BookConnectOrCreateWhere;
+  onCreate: CategoryBooksConnectOrCreateFieldInputOnCreate;
+};
+
+export type CategoryBooksConnectOrCreateFieldInputOnCreate = {
+  node: BookOnCreateInput;
 };
 
 export type PublisherCreateInput = {
@@ -904,6 +991,16 @@ export type PublisherUpdateInput = {
   website?: InputMaybe<Scalars["String"]["input"]>;
 };
 
+export type PublisherUniqueWhere = {
+  id?: Scalars["ID"]["input"];
+};
+
+export type PublisherConnectOrCreateWhere = {
+  node: PublisherUniqueWhere;
+};
+
+export type PublisherOnCreateInput = PublisherCreateInput;
+
 export type ReviewCreateInput = {
   rating: Scalars["Int"]["input"];
   comment?: InputMaybe<Scalars["String"]["input"]>;
@@ -915,6 +1012,16 @@ export type ReviewUpdateInput = {
   comment?: InputMaybe<Scalars["String"]["input"]>;
   book?: InputMaybe<ReviewBookUpdateFieldInput>;
 };
+
+export type ReviewUniqueWhere = {
+  id?: Scalars["ID"]["input"];
+};
+
+export type ReviewConnectOrCreateWhere = {
+  node: ReviewUniqueWhere;
+};
+
+export type ReviewOnCreateInput = Omit<ReviewCreateInput, "book">;
 
 export type ReviewConnectInput = {
   book?: InputMaybe<ReviewBookConnectFieldInput>;
@@ -961,10 +1068,20 @@ export type ReviewBookUpdateFieldInput = {
   create?: InputMaybe<ReviewBookCreateFieldInput>;
   update?: InputMaybe<ReviewBookUpdateConnectionInput>;
   delete?: InputMaybe<ReviewBookDeleteFieldInput>;
+  connectOrCreate?: InputMaybe<ReviewBookConnectOrCreateFieldInput>;
 };
 
 export type ReviewBookUpdateConnectionInput = {
   node?: InputMaybe<BookUpdateInput>;
+};
+
+export type ReviewBookConnectOrCreateFieldInput = {
+  where: BookConnectOrCreateWhere;
+  onCreate: ReviewBookConnectOrCreateFieldInputOnCreate;
+};
+
+export type ReviewBookConnectOrCreateFieldInputOnCreate = {
+  node: BookOnCreateInput;
 };
 
 export type InCategoryCreateInput = {

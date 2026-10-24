@@ -13,6 +13,7 @@ export type {
   FulltextLeaf,
   FulltextInput,
   UnsafeOptions,
+  UpdateRootOpInput,
 } from './model';
 export { InterfaceModel } from './interface-model';
 export type { InterfaceModelInterface } from './interface-model';

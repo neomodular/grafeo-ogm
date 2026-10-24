@@ -139,7 +139,7 @@ describeLive('Unknown keys in nested write objects — live Neo4j', () => {
     await expect(authors.update(whereTypo(u, a))).rejects.toThrow(
       new OGMError(
         'Unknown key(s) "wher" in a nested update item on "posts". ' +
-          'Allowed: "where", "update", "connect", "disconnect", "create", "delete".',
+          'Allowed: "where", "update", "connect", "disconnect", "create", "delete", "connectOrCreate".',
       ),
     );
     expect(await titles(u)).toEqual({ [a]: 'old', [b]: 'old' });

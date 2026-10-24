@@ -21,6 +21,12 @@ function members(generated: string, name: string): string[] {
 }
 
 const ITEM = ['connect', 'create', 'delete', 'disconnect', 'update', 'where'];
+/**
+ * vNEXT — strict item 45: strict mode also applies `connectOrCreate`,
+ * offered when the target type has a @unique / @id field (not for an
+ * interface target, where strict mode rejects it).
+ */
+const ITEM_COC = [...ITEM, 'connectOrCreate'].sort();
 const FIELD_INPUT = ['connect', 'create'];
 const WRAPPER = ['edge', 'node'];
 
@@ -75,8 +81,8 @@ void crt;
   });
 
   it.each([
-    ['UserPostsUpdateFieldInput', ITEM],
-    ['UserMediaPostUpdateFieldInput', ITEM],
+    ['UserPostsUpdateFieldInput', ITEM_COC],
+    ['UserMediaPostUpdateFieldInput', ITEM_COC],
     ['UserAnimalsUpdateFieldInput', ITEM],
     ['UserPostsFieldInput', FIELD_INPUT],
     ['UserMediaTagFieldInput', FIELD_INPUT],

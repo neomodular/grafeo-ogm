@@ -4,7 +4,9 @@ import { Driver, int as neo4jInt, QueryResult } from 'neo4j-driver';
 import { FulltextCompiler } from './compilers/fulltext.compiler';
 import {
   MutationCompiler,
+  rootOpAsUpdate,
   type MatchGuard,
+  type RootUpdateOps,
 } from './compilers/mutation.compiler';
 import { SelectNormalizer } from './compilers/select-normalizer';
 import {
@@ -110,6 +112,24 @@ const PARAMS = {
     'context',
     'unsafe',
   ],
+  /**
+   * vNEXT — strict item 45: strict mode also applies the root relationship
+   * ops of @neo4j/graphql 5.x.
+   */
+  updateStrict: [
+    'where',
+    'update',
+    'connect',
+    'disconnect',
+    'create',
+    'connectOrCreate',
+    'delete',
+    'labels',
+    'selectionSet',
+    'select',
+    'context',
+    'unsafe',
+  ],
   // v2.21.0 — `labels` on delete / deleteMany is strict item 39
   // (`Model.deleteLabels`), not an unknown param.
   delete: ['where', 'delete', 'labels', 'context', 'unsafe'],
@@ -155,14 +175,14 @@ const PARAMS = {
 } as const satisfies Record<string, readonly string[]>;
 
 /** Advice for unknown params that name an upstream / sibling feature. */
-const NESTED_ONLY = (op: string) =>
-  `update() has no root "${op}": put it in a relationship field of "update", e.g. ` +
-  `\`update: { posts: [{ ${op}: … }] }\`.`;
+const STRICT_ROOT_OP = (op: string) =>
+  `update() applies a root "${op}" only with \`strict: true\` (strict item 45); without it, put it in a ` +
+  `relationship field of "update", e.g. \`update: { posts: [{ ${op}: … }] }\`.`;
 const PARAM_HINTS = {
   update: {
-    create: NESTED_ONLY('create'),
-    delete: NESTED_ONLY('delete'),
-    connectOrCreate: 'connectOrCreate is not supported.',
+    create: STRICT_ROOT_OP('create'),
+    delete: STRICT_ROOT_OP('delete'),
+    connectOrCreate: STRICT_ROOT_OP('connectOrCreate'),
     data: 'update() takes "update", not "data" (that is updateMany()).',
   },
   deleteMany: {
@@ -267,6 +287,39 @@ export type MutationResponse<T = any, K extends string = any> =
       any
     : { info: MutationInfo } & { [P in K]: T[] };
 
+/** One item of a relationship input: unwraps `InputMaybe` and `Array`. */
+type RelInputItem<V> =
+  NonNullable<V> extends ReadonlyArray<infer I>
+    ? NonNullable<I>
+    : NonNullable<V>;
+
+/** The root `K` input of one relationship field (see UpdateRootOpInput). */
+type RootOpField<V, K extends string> =
+  RelInputItem<V> extends infer I
+    ? I extends Record<string, unknown>
+      ? 'where' extends keyof I
+        ? K extends keyof I
+          ? NonNullable<I[K]>
+          : never
+        : {
+            [M in keyof I]?: K extends keyof RelInputItem<I[M]>
+              ? NonNullable<RelInputItem<I[M]>[K]>
+              : never;
+          }
+      : never
+    : never;
+
+/**
+ * vNEXT — strict item 45: the root `create` / `connectOrCreate` input of
+ * `update()` (@neo4j/graphql 5.x), derived from the generated update
+ * input: per relationship field, what that field's nested update item
+ * takes under the same key (keyed by member for a union / interface).
+ */
+export type UpdateRootOpInput<
+  TUpdateInput,
+  K extends 'create' | 'connectOrCreate',
+> = { [F in keyof TUpdateInput]?: RootOpField<TUpdateInput[F], K> };
+
 /**
  * Public-facing interface for Model — used in generated XModel type aliases.
  * Excludes internal class properties (selectionSet setter, maxDepth, etc.)
@@ -319,6 +372,12 @@ export interface ModelInterface<
     update?: TUpdateInput;
     connect?: TConnectInput;
     disconnect?: TDisconnectInput;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    create?: UpdateRootOpInput<TUpdateInput, 'create'>;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    connectOrCreate?: UpdateRootOpInput<TUpdateInput, 'connectOrCreate'>;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    delete?: TDeleteInput;
     labels?: string[];
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
@@ -1232,6 +1291,12 @@ export class Model<
     update?: TUpdateInput;
     connect?: TConnectInput;
     disconnect?: TDisconnectInput;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    create?: UpdateRootOpInput<TUpdateInput, 'create'>;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    connectOrCreate?: UpdateRootOpInput<TUpdateInput, 'connectOrCreate'>;
+    /** vNEXT — applied only with `strict: true` (strict item 45). */
+    delete?: TDeleteInput;
     labels?: string[];
     selectionSet?: string | DocumentNode;
     select?: TMutationSelect;
@@ -1243,7 +1308,7 @@ export class Model<
       this.nodeDef.typeName,
       'update',
       params,
-      PARAMS.update,
+      this.strictMode.strict ? PARAMS.updateStrict : PARAMS.update,
       PARAM_HINTS.update,
     );
     if (params.select && params.selectionSet)
@@ -1258,12 +1323,33 @@ export class Model<
       'update',
       params.update as Record<string, unknown> | undefined,
     );
+    const strict = this.strictMode.strict;
     assertNestedUpdatesAllowed(
       this.schema,
       this.nodeDef,
       params.update as Record<string, unknown> | undefined,
       policyContext,
+      { connectOrCreate: strict },
     );
+    // vNEXT — strict item 45: the root relationship ops, under strict mode
+    // only (default mode ignores them and warns, see checkParamKeys).
+    let rootOps: RootUpdateOps | undefined;
+    if (strict) {
+      rootOps = {};
+      for (const kind of ['delete', 'connectOrCreate', 'create'] as const) {
+        const input = params[kind];
+        if (input === undefined || input === null) continue;
+        rootOps[kind] = input;
+        if (kind !== 'delete')
+          assertNestedUpdatesAllowed(
+            this.schema,
+            this.nodeDef,
+            rootOpAsUpdate(kind, input, this.nodeDef, this.schema),
+            policyContext,
+            { connectOrCreate: true },
+          );
+      }
+    }
 
     const compile = (guardDeleted: boolean) => {
       const paramCounter = { count: 0 };
@@ -1294,6 +1380,7 @@ export class Model<
         policyContext ?? undefined,
         paramCounter,
         guardDeleted,
+        rootOps,
       );
 
       const readPolicyContext = this.resolvePolicyContext(
@@ -2099,6 +2186,7 @@ export class Model<
       this.nodeDef,
       params.data as Record<string, unknown> | undefined,
       policyContext,
+      { connectOrCreate: this.strictMode.strict },
     );
 
     const compile = (guardDeleted: boolean) => {

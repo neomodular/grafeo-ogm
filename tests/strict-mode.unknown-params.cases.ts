@@ -34,6 +34,11 @@ export interface BadParamShape {
   keys: string;
   /** Advice the message ends with, if any. */
   hint?: string;
+  /**
+   * vNEXT — strict item 45: strict mode applies the param (a root
+   * relationship op of `update()`) instead of throwing.
+   */
+  strictApplies?: true;
 }
 
 const user = (ogm: OGM) => ogm.model('User');
@@ -43,14 +48,15 @@ const where = { id: 'u1' };
 const extra = <T extends object>(o: T): T => o;
 
 const nestedOnly = (op: string) =>
-  `update() has no root "${op}": put it in a relationship field of "update", e.g. ` +
-  `\`update: { posts: [{ ${op}: … }] }\`.`;
+  `update() applies a root "${op}" only with \`strict: true\` (strict item 45); without it, put it in a ` +
+  `relationship field of "update", e.g. \`update: { posts: [{ ${op}: … }] }\`.`;
 
 export const badParamShapes: Record<string, BadParamShape> = {
   'update() with an upstream-style root "delete"': {
     call: 'User.update',
     keys: '"delete"',
     hint: nestedOnly('delete'),
+    strictApplies: true,
     run: (ogm) =>
       user(ogm).update(
         extra({
@@ -63,6 +69,7 @@ export const badParamShapes: Record<string, BadParamShape> = {
     call: 'User.update',
     keys: '"create"',
     hint: nestedOnly('create'),
+    strictApplies: true,
     run: (ogm) =>
       user(ogm).update(
         extra({

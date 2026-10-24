@@ -110,33 +110,47 @@ describe('item 34 — unknown params of Model / InterfaceModel methods', () => {
     expect(warnings[0].endsWith(STRICT_HINT)).toBe(true);
   });
 
-  it.each(bad)('strict throws before running: %s', async (_name, s) => {
-    const { ogm, records, warnings } = setup(true);
-    const err = await s.run(ogm).then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(err).toBeInstanceOf(OGMError);
-    const message = (err as Error).message;
-    expect(message).toMatch(
-      new RegExp(
-        `^Unknown parameters? ${escape(s.keys)} of ${escape(s.call)}\\(\\)\\. Allowed: "`,
-      ),
-    );
-    if (s.hint) expect(message.endsWith(` ${s.hint}`)).toBe(true);
-    expect(records).toEqual([]);
-    expect(warnings).toEqual([]);
-  });
+  it.each(bad.filter(([, s]) => !s.strictApplies))(
+    'strict throws before running: %s',
+    async (_name, s) => {
+      const { ogm, records, warnings } = setup(true);
+      const err = await s.run(ogm).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(OGMError);
+      const message = (err as Error).message;
+      expect(message).toMatch(
+        new RegExp(
+          `^Unknown parameters? ${escape(s.keys)} of ${escape(s.call)}\\(\\)\\. Allowed: "`,
+        ),
+      );
+      if (s.hint) expect(message.endsWith(` ${s.hint}`)).toBe(true);
+      expect(records).toEqual([]);
+      expect(warnings).toEqual([]);
+    },
+  );
+
+  // vNEXT — strict item 45: strict mode applies a root create / delete.
+  it.each(bad.filter(([, s]) => s.strictApplies))(
+    'strict applies, without warning: %s',
+    async (_name, s) => {
+      const { ogm, records, warnings } = setup(true);
+      await s.run(ogm);
+      expect(records).toHaveLength(1);
+      expect(warnings).toEqual([]);
+    },
+  );
 
   it('names the allowed params in full', async () => {
     const { ogm } = setup(true);
     await expect(
-      badParamShapes['update() with an upstream-style root "delete"'].run(ogm),
+      badParamShapes['update() with "data"'].run(ogm),
     ).rejects.toThrow(
       new OGMError(
-        'Unknown parameter "delete" of User.update(). Allowed: "where", "update", "connect", "disconnect", ' +
-          '"labels", "selectionSet", "select", "context", "unsafe". update() has no root "delete": put it in a ' +
-          'relationship field of "update", e.g. `update: { posts: [{ delete: … }] }`.',
+        'Unknown parameter "data" of User.update(). Allowed: "where", "update", "connect", "disconnect", ' +
+          '"create", "connectOrCreate", "delete", "labels", "selectionSet", "select", "context", "unsafe". ' +
+          'update() takes "update", not "data" (that is updateMany()).',
       ),
     );
   });

@@ -125,7 +125,7 @@ describe('item 22 — unknown keys in nested write objects', () => {
     const { ogm, records, warnings } = setup(true);
     await expect(s.run(ogm)).rejects.toThrow(
       new OGMError(
-        `Unknown key(s) ${s.keys} in ${s.what} on "${s.field}". Allowed: ${s.allowed}.`,
+        `Unknown key(s) ${s.keys} in ${s.what} on "${s.field}". Allowed: ${s.strictAllowed ?? s.allowed}.`,
       ),
     );
     expect(records).toEqual([]);

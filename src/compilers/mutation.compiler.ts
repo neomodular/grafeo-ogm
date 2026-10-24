@@ -534,7 +534,12 @@ export class MutationCompiler {
     relDef: RelationshipDefinition,
   ): void {
     if (!isPlainObject(input)) return;
-    const { keys: allowed, what } = NESTED_WRITE_SHAPES[shape];
+    const { what } = NESTED_WRITE_SHAPES[shape];
+    // vNEXT — strict item 45: strict mode applies `connectOrCreate`.
+    const allowed =
+      shape === 'update item' && this.strictMode.strict
+        ? UPDATE_ITEM_KEYS_STRICT
+        : NESTED_WRITE_SHAPES[shape].keys;
     const unknown = unknownInputKeys(input, allowed);
     if (unknown.length === 0) return;
     const list = quoteKeys(unknown);
@@ -556,11 +561,16 @@ export class MutationCompiler {
     else
       effect =
         ': with "node" or "edge" given, node fields are read only from "node".';
+    // vNEXT — strict item 45.
+    const strictOnly =
+      shape === 'update item' && unknown.includes('connectOrCreate')
+        ? ' "connectOrCreate" is applied only with `strict: true`.'
+        : '';
     this.strictMode.warn(
       'nested-write-unknown-key',
       `${shape}\u0000${relDef.fieldName}\u0000${unknown.join(',')}`,
       `Unknown key(s) ${list} in ${what} on "${relDef.fieldName}" ` +
-        `${unknown.length > 1 ? 'are' : 'is'} ignored${effect} Allowed: ${allowedList}.`,
+        `${unknown.length > 1 ? 'are' : 'is'} ignored${effect} Allowed: ${allowedList}.${strictOnly}`,
       'throw an OGMError for unknown keys in nested write inputs',
     );
   }
@@ -876,6 +886,13 @@ export class MutationCompiler {
      * that failed with `EntityNotFound`.
      */
     guardDeleted: boolean = this.strictMode.strict,
+    /**
+     * vNEXT — strict item 45: the root `delete` / `connectOrCreate` /
+     * `create` of `update()` (@neo4j/graphql 5.x), emitted in its order:
+     * delete, disconnect, update, connect, connectOrCreate, create. The
+     * model passes them under strict mode only.
+     */
+    rootOps?: RootUpdateOps,
   ): MutationResult {
     const labelStr = this.getCachedLabelString(nodeDef);
 
@@ -902,6 +919,30 @@ export class MutationCompiler {
       lines.push(...whereResult.preludes);
 
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);
+
+    // vNEXT — strict item 45: a root op runs as the same op nested in an
+    // update item of each relationship it names (`rootOpAsUpdate`), so it
+    // takes the nested op's policies, member dispatch and checks.
+    const emitRootOp = (kind: RootUpdateOpKind): void => {
+      const input = rootOps?.[kind];
+      if (input === undefined || input === null) return;
+      lines.push(
+        ...this.buildUpdateRelationships(
+          rootOpAsUpdate(kind, input, nodeDef, this.schema),
+          nodeDef,
+          'n',
+          kind,
+          params,
+          0,
+          [],
+          policyContext,
+          counter,
+          new Set<string>(),
+          state,
+        ),
+      );
+    };
+    emitRootOp('delete');
 
     // Disconnect relationships (top-level) — must run before connects
     // so that blanket disconnects don't remove newly-connected relationships.
@@ -1010,6 +1051,8 @@ export class MutationCompiler {
       );
       lines.push(...connectLines);
     }
+    emitRootOp('connectOrCreate');
+    emitRootOp('create');
 
     lines.push(
       returnMode === 'count' ? 'RETURN count(n) AS count' : 'RETURN n',
@@ -1763,19 +1806,25 @@ export class MutationCompiler {
     input: Record<string, unknown>,
     nodeDef: NodeDefinition,
     prefix: string,
+    /**
+     * vNEXT — properties left out entirely (no generated id, input value
+     * or default): the MERGE key of a connectOrCreate, already set by its
+     * pattern.
+     */
+    skip?: ReadonlySet<string>,
   ): { propString: string; propParams: Record<string, unknown> } {
     const parts: string[] = [];
     const propParams: Record<string, unknown> = {};
 
     // Auto-generate ID if property has isGenerated
     for (const [, propDef] of nodeDef.properties)
-      if (propDef.isGenerated)
+      if (propDef.isGenerated && !skip?.has(propDef.name))
         parts.push(`${escapeIdentifier(propDef.name)}: randomUUID()`);
 
     for (const [key, value] of Object.entries(input)) {
       // Skip relationship fields and undefined values
       if (nodeDef.relationships.has(key)) continue;
-      if (value === undefined) continue;
+      if (value === undefined || skip?.has(key)) continue;
       assertSafePropertyName(key, 'create property');
       assertKnownField(nodeDef, key, 'create', this.strictMode);
       const propDef = nodeDef.properties.get(key);
@@ -1792,7 +1841,8 @@ export class MutationCompiler {
     for (const [, propDef] of nodeDef.properties) {
       if (propDef.defaultValue === undefined) continue;
       if (propDef.isGenerated || propDef.isCypher) continue;
-      if (input[propDef.name] !== undefined) continue;
+      if (input[propDef.name] !== undefined || skip?.has(propDef.name))
+        continue;
       const paramName = `${prefix}_${propDef.name}`;
       const bound = resolveDefaultWriteValue(propDef);
       const valueExpr = wrapWriteExpr(`$${paramName}`, bound, propDef);
@@ -2533,6 +2583,204 @@ export class MutationCompiler {
   }
 
   /**
+   * vNEXT — strict item 45: one `connectOrCreate` item (@neo4j/graphql
+   * 5.x), nested in an update item or given at the root of `update()`:
+   *
+   *   WITH <carry>
+   *   CALL {
+   *     WITH <carry>
+   *     OPTIONAL MATCH (t_ex:L { key })               ┐ only with a read
+   *     WITH <carry>, count(t_ex) > 0 AS t_matched    ┘ policy on the target
+   *     MERGE (t:L { key })
+   *     ON CREATE SET t += { <onCreate.node, @id, @default> }
+   *     WITH <carry>, t, t_matched                    ┐ read policy on an
+   *     WHERE NOT t_matched OR (<target read policy>) ┘ existing node
+   *     MERGE (src)-[e:TYPE]->(t)
+   *     ON CREATE SET e.<prop> = …                    (onCreate.edge, defaults)
+   *     RETURN count(*) AS <alias>
+   *   }
+   *
+   * `where.node` names `@unique` / `@id` fields only (the MERGE key, never
+   * `null`). An existing node is linked only when the target's `read`
+   * policy admits it, like a connect; a created node is checked before
+   * compile against the target's `create` policies (`nested-writes.ts`),
+   * like a nested create. The subquery keeps the row count (invariant 2).
+   */
+  private buildConnectOrCreateItem(a: {
+    spec: unknown;
+    relDef: RelationshipDefinition;
+    targetNodeDef: NodeDefinition;
+    sourceVar: string;
+    withClause: string;
+    carryVars: string[];
+    targetVar: string;
+    paramPrefix: string;
+    returnAlias: string;
+    params: Record<string, unknown>;
+    policyContext: PolicyContextBundle | undefined;
+    paramCounter: { count: number } | undefined;
+  }): string[] {
+    const { spec, relDef, targetNodeDef: def, targetVar: t } = a;
+    const field = relDef.fieldName;
+    const abstract = abstractTarget(def.typeName, this.schema);
+    if (abstract)
+      throw new OGMError(
+        `connectOrCreate on "${field}" (${abstract.kind} "${abstract.name}") must be keyed by the member type, ` +
+          `e.g. { ${field}: { ${abstract.members[0] ?? 'Member'}: [{ connectOrCreate: [{ where, onCreate }] }] } }.`,
+      );
+    if (!isPlainObject(spec))
+      throw new OGMError(
+        `A connectOrCreate item on "${field}" must be an object { where: { node: { … } }, onCreate: { node: { … } } }.`,
+      );
+    const checkKeys = (
+      obj: Record<string, unknown>,
+      allowed: ReadonlySet<string>,
+      what: string,
+    ): void => {
+      const unknown = unknownInputKeys(obj, allowed);
+      if (unknown.length > 0)
+        throw new OGMError(
+          `Unknown key(s) ${quoteKeys(unknown)} in ${what} on "${field}". Allowed: ${quoteKeys(allowed)}.`,
+        );
+    };
+    checkKeys(spec, CONNECT_OR_CREATE_KEYS, 'a connectOrCreate item');
+
+    const where = spec.where;
+    if (!isPlainObject(where) || !isPlainObject(where.node))
+      throw new OGMError(
+        `A connectOrCreate item on "${field}" needs "where: { node: { … } }" naming a @unique or @id field of ${def.typeName}.`,
+      );
+    checkKeys(where, WHERE_NODE_KEYS, 'the "where" of a connectOrCreate item');
+    const whereNode = where.node;
+    const keyNames = new Set<string>();
+    const keyParts: string[] = [];
+    for (const [k, v] of Object.entries(whereNode)) {
+      if (v === undefined) continue;
+      assertSafePropertyName(k, 'connectOrCreate where property');
+      const propDef = def.properties.get(k);
+      if (
+        !propDef ||
+        propDef.isCypher ||
+        !(propDef.isUnique || propDef.isGenerated)
+      )
+        throw new OGMError(
+          `"${k}" in the connectOrCreate "where" on "${field}" is not a @unique or @id field of ${def.typeName}: ` +
+            `connectOrCreate matches on a unique key.`,
+        );
+      if (v === null)
+        throw new OGMError(
+          `"${k}" in the connectOrCreate "where" on "${field}" is null: the key of a connectOrCreate needs a value.`,
+        );
+      const paramName = `${a.paramPrefix}_where_${k}`;
+      a.params[paramName] = coerceWriteValue(v, propDef);
+      keyParts.push(
+        `${escapeIdentifier(k)}: ${wrapWriteExpr(`$${paramName}`, v, propDef)}`,
+      );
+      keyNames.add(k);
+    }
+    if (keyParts.length === 0)
+      throw new OGMError(
+        `The connectOrCreate "where.node" on "${field}" is empty: name a @unique or @id field of ${def.typeName}.`,
+      );
+
+    const onCreate = spec.onCreate;
+    if (!isPlainObject(onCreate) || !isPlainObject(onCreate.node))
+      throw new OGMError(
+        `A connectOrCreate item on "${field}" needs "onCreate: { node: { … } }" (use { node: {} } for no other fields).`,
+      );
+    checkKeys(
+      onCreate,
+      CONNECT_OR_CREATE_ON_CREATE_KEYS,
+      'the "onCreate" of a connectOrCreate item',
+    );
+    const nodeInput = onCreate.node;
+    for (const [k, v] of Object.entries(nodeInput)) {
+      if (v === undefined) continue;
+      if (def.relationships.has(k))
+        throw new OGMError(
+          `"${k}" in the connectOrCreate "onCreate.node" on "${field}" is a relationship: onCreate takes ` +
+            `the fields of ${def.typeName} only.`,
+        );
+      if (keyNames.has(k) && !sameKeyValue(v, whereNode[k]))
+        throw new OGMError(
+          `"${k}" in the connectOrCreate "onCreate.node" on "${field}" differs from its "where.node" value: ` +
+            `the created node would not match its key.`,
+        );
+    }
+    const { propString, propParams } = this.buildCreateProperties(
+      nodeInput,
+      def,
+      `${a.paramPrefix}_create`,
+      keyNames,
+    );
+    mergeParams(a.params, propParams);
+
+    const edgeInput = onCreate.edge;
+    if (edgeInput != null && !isPlainObject(edgeInput))
+      throw new OGMError(
+        `The "onCreate.edge" of a connectOrCreate item on "${field}" must be an object.`,
+      );
+    this.checkEdgeKeys(relDef, edgeInput, 'nested create');
+    const edgeVar = `${t}_e`;
+    const edgeItems: string[] = [];
+    for (const [prop, val] of Object.entries(edgeInput ?? {})) {
+      if (val === undefined) continue;
+      assertSafePropertyName(prop, 'edge property');
+      const edgePropDef = this.getEdgePropDef(relDef, prop);
+      const paramName = `${a.paramPrefix}_edge_${prop}`;
+      a.params[paramName] = coerceWriteValue(val, edgePropDef);
+      edgeItems.push(
+        `${edgeVar}.${escapeIdentifier(prop)} = ${wrapWriteExpr(`$${paramName}`, val, edgePropDef)}`,
+      );
+    }
+    edgeItems.push(
+      ...this.edgeDefaultSetItems(
+        relDef,
+        edgeInput ?? undefined,
+        edgeVar,
+        a.paramPrefix,
+        a.params,
+      ),
+    );
+
+    const labelStr = this.getCachedLabelString(def);
+    const key = `{ ${keyParts.join(', ')} }`;
+    const readPredicate = this.buildTargetPolicyPredicate(
+      def,
+      t,
+      a.params,
+      a.policyContext,
+      a.paramCounter,
+    );
+    const carry = a.carryVars.join(', ');
+    const lines = [a.withClause, 'CALL {', a.withClause];
+    if (readPredicate)
+      lines.push(
+        `OPTIONAL MATCH (${t}_ex:${labelStr} ${key})`,
+        `WITH ${carry}, count(${t}_ex) > 0 AS ${t}_matched`,
+      );
+    lines.push(`MERGE (${t}:${labelStr} ${key})`);
+    if (propString.length > 0)
+      lines.push(`ON CREATE SET ${t} += { ${propString} }`);
+    if (readPredicate)
+      lines.push(
+        `WITH ${carry}, ${t}, ${t}_matched`,
+        `WHERE NOT ${t}_matched OR (${readPredicate})`,
+      );
+    const relPattern = buildRelPattern({
+      sourceVar: a.sourceVar,
+      relDef,
+      targetVar: t,
+      edgeVar: edgeItems.length > 0 ? edgeVar : undefined,
+    });
+    lines.push(`MERGE ${relPattern}`);
+    if (edgeItems.length > 0)
+      lines.push(`ON CREATE SET ${edgeItems.join(', ')}`);
+    lines.push(`RETURN count(*) AS ${a.returnAlias}`, '}');
+    return lines;
+  }
+
+  /**
    * Top-level `disconnect`. Abstract relationships follow the connect
    * rules (see buildConnects): per member, or flat on an interface,
    * matching implementers by their own labels (v2.4.8 — pre-2.4.8 the
@@ -3094,7 +3342,10 @@ export class MutationCompiler {
         iterated.includes(field) &&
         items.some(
           (it) =>
-            isPlainObject(it) && (it.connect != null || it.create != null),
+            isPlainObject(it) &&
+            (it.connect != null ||
+              it.create != null ||
+              (this.strictMode.strict && it.connectOrCreate != null)),
         )
       )
         state.feedback.add(field);
@@ -3301,6 +3552,36 @@ export class MutationCompiler {
                     varPrefix: '',
                     depth: 0,
                   },
+                }),
+              );
+            }
+          }
+
+          // --- connectOrCreate ---
+          // vNEXT — strict item 45: after connect, before create, as in
+          // @neo4j/graphql 5.x. Default mode ignores it (and warns, see
+          // checkNestedWriteKeys).
+          if (this.strictMode.strict && item.connectOrCreate != null) {
+            const cocItems = Array.isArray(item.connectOrCreate)
+              ? (item.connectOrCreate as unknown[])
+              : [item.connectOrCreate];
+            for (let ci = 0; ci < cocItems.length; ci++) {
+              const cocVar = `${sourceVar}_coc${varCounter}`;
+              varCounter++;
+              lines.push(
+                ...this.buildConnectOrCreateItem({
+                  spec: cocItems[ci],
+                  relDef,
+                  targetNodeDef,
+                  sourceVar,
+                  withClause,
+                  carryVars: allVars,
+                  targetVar: cocVar,
+                  paramPrefix: `${itemPrefix}_coc${ci}`,
+                  returnAlias: `_coc_${key}_${ci}`,
+                  params,
+                  policyContext,
+                  paramCounter,
                 }),
               );
             }
@@ -3932,6 +4213,37 @@ const NESTED_WRITE_SHAPES: Record<
   },
 };
 
+/**
+ * vNEXT — strict item 45: the keys of a nested update item under strict
+ * mode, which also applies `connectOrCreate` (as @neo4j/graphql 5.x).
+ */
+const UPDATE_ITEM_KEYS_STRICT: ReadonlySet<string> = new Set([
+  ...NESTED_WRITE_SHAPES['update item'].keys,
+  'connectOrCreate',
+]);
+
+/** The keys of a connectOrCreate item and of its `onCreate`. */
+const CONNECT_OR_CREATE_KEYS: ReadonlySet<string> = new Set([
+  'where',
+  'onCreate',
+]);
+const CONNECT_OR_CREATE_ON_CREATE_KEYS: ReadonlySet<string> = new Set([
+  'node',
+  'edge',
+]);
+const WHERE_NODE_KEYS: ReadonlySet<string> = new Set(['node']);
+
+/**
+ * vNEXT — whether a connectOrCreate `onCreate.node` value repeats its
+ * `where.node` key value (allowed) rather than changing it.
+ */
+function sameKeyValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (typeof a !== 'object' && typeof b !== 'object') return false;
+  return String(a) === String(b) || JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** Defined keys of a write input object that `allowed` does not contain. */
 function unknownInputKeys(
   input: Record<string, unknown>,
@@ -4055,6 +4367,46 @@ export interface AbstractTarget {
  * the interface's, so every write that has to find one matches by these
  * members' labels (v2.4.8).
  */
+/** vNEXT — strict item 45: the root relationship ops of `update()`. */
+export type RootUpdateOpKind = 'delete' | 'connectOrCreate' | 'create';
+export type RootUpdateOps = Partial<Record<RootUpdateOpKind, unknown>>;
+
+/**
+ * vNEXT — strict item 45: a root `delete` / `connectOrCreate` / `create`
+ * of `update()` (@neo4j/graphql 5.x, `{ posts: [ …items ] }`, or keyed by
+ * member for an abstract target) as the equivalent `update` input, the op
+ * nested in one item per relationship (`{ posts: [{ create: [ …items ] }] }`,
+ * `{ search: { Movie: [{ create: [ … ] }] } }`). Each key must be a
+ * relationship of the type.
+ */
+export function rootOpAsUpdate(
+  kind: RootUpdateOpKind,
+  input: unknown,
+  nodeDef: NodeDefinition,
+  schema: SchemaMetadata,
+): Record<string, unknown> {
+  if (!isPlainObject(input))
+    throw new OGMError(
+      `The root "${kind}" of ${nodeDef.typeName}.update() must be an object keyed by relationship field.`,
+    );
+  const update: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(input)) {
+    if (value === undefined || value === null) continue;
+    const relDef = nodeDef.relationships.get(field);
+    if (!relDef)
+      throw new OGMError(
+        `Unknown relationship "${field}" in the root "${kind}" of ${nodeDef.typeName}.update(): ` +
+          `it is not a relationship field of the type.`,
+      );
+    const abstract = abstractTarget(relDef.target, schema);
+    const members = abstract ? perMemberEntries(value, abstract, field) : null;
+    update[field] = members
+      ? Object.fromEntries(members.map(([m, v]) => [m, [{ [kind]: v }]]))
+      : [{ [kind]: value }];
+  }
+  return update;
+}
+
 export function abstractTarget(
   target: string,
   schema: SchemaMetadata,
