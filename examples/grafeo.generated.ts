@@ -2250,19 +2250,58 @@ export type SelectFields = Record<
   boolean | { select: SelectFields } | { where?: unknown; select: unknown }
 >;
 
+/** vNEXT — the result of a point field's `{ select: { longitude: true } }`. */
+type PointValueShape = { x: number; y: number; z?: number; srid: number };
+
+type IsPointValue<V> = [V] extends [PointValueShape]
+  ? [Exclude<keyof V, keyof PointValueShape>] extends [never]
+    ? true
+    : false
+  : false;
+
+type IsPointField<V> =
+  NonNullable<V> extends Array<infer E>
+    ? IsPointValue<E>
+    : IsPointValue<NonNullable<V>>;
+
+type PointSelectValues = {
+  longitude: number;
+  latitude: number;
+  height: number | null;
+  x: number;
+  y: number;
+  z: number | null;
+  crs: string;
+  srid: number;
+  __typename: string;
+};
+
+type PointSelectMap<S> = {
+  [P in keyof S & keyof PointSelectValues as S[P] extends true
+    ? P
+    : never]: PointSelectValues[P];
+};
+
+type PointSelectResult<V, S> =
+  NonNullable<V> extends Array<unknown>
+    ? Array<PointSelectMap<S>> | Extract<V, null | undefined>
+    : PointSelectMap<S> | Extract<V, null | undefined>;
+
 export type SelectResult<T, S extends SelectFields> = {
   [K in keyof S & keyof T]: S[K] extends true
     ? T[K]
     : S[K] extends { select: infer NestedS }
-      ? T[K] extends Array<infer U>
-        ? NestedS extends SelectFields
-          ? Array<SelectResult<U, NestedS>>
-          : T[K]
-        : T[K] extends infer U | null | undefined
+      ? IsPointField<T[K]> extends true
+        ? PointSelectResult<T[K], NestedS>
+        : T[K] extends Array<infer U>
           ? NestedS extends SelectFields
-            ? SelectResult<NonNullable<U>, NestedS> | null
+            ? Array<SelectResult<U, NestedS>>
             : T[K]
-          : T[K]
+          : T[K] extends infer U | null | undefined
+            ? NestedS extends SelectFields
+              ? SelectResult<NonNullable<U>, NestedS> | null
+              : T[K]
+            : T[K]
       : never;
 };
 

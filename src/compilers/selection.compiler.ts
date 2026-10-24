@@ -1646,8 +1646,24 @@ export class SelectionCompiler {
       ])
         for (const child of children) {
           const edgeProp = props?.properties.get(child.fieldName);
+          // vNEXT — a `Point` / `CartesianPoint` edge property takes its
+          // object type's fields, as on a node (v2.20.0).
+          if (edgeProp && !child.isScalar && isPointProperty(edgeProp)) {
+            const bad = unknownPointFields(edgeProp, child.children ?? []);
+            if (bad.length > 0)
+              pushUnknown(out, {
+                owner: edgeOwner,
+                field: child.fieldName,
+                subSelection: true,
+                edge: true,
+                shape: {
+                  expected: `is a ${edgeProp.type} field, whose sub-selection takes only ${pointFieldList(edgeProp)} (not ${bad.map((f) => `"${f}"`).join(', ')})`,
+                  outcome: LEFT_OUT,
+                },
+              });
+          }
           // v2.8.0 — an edge property given a sub-selection is left out.
-          if (edgeProp && !child.isScalar)
+          else if (edgeProp && !child.isScalar)
             pushUnknown(out, {
               owner: edgeOwner,
               field: child.fieldName,
@@ -3771,15 +3787,11 @@ export class SelectionCompiler {
 
     // Compile edge properties projection
     if (node.edgeChildren && node.edgeChildren.length > 0) {
-      const edgeFields = node.edgeChildren
-        .filter((c) => c.isScalar)
-        .map((c) => {
-          if (c.alias === undefined || c.alias === c.fieldName)
-            return `.${escapeIdentifier(c.fieldName)}`;
-          assertSafeIdentifier(c.alias, 'selection alias');
-          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
-        })
-        .join(', ');
+      const edgeFields = this.edgeFieldEntries(
+        node.edgeChildren,
+        edgeVar,
+        relDef,
+      ).join(', ');
       mapParts.push(`${propertiesKey}: ${edgeVar} { ${edgeFields} }`);
       projectionKeys.push(propertiesKey);
     }
@@ -3789,6 +3801,7 @@ export class SelectionCompiler {
       node,
       childVar,
       edgeVar,
+      relDef,
       targetDef,
       maxDepth,
       currentDepth,
@@ -4030,6 +4043,7 @@ export class SelectionCompiler {
           extra,
           childVar,
           edgeVar,
+          relDef,
           targetDef,
           maxDepth,
           currentDepth,
@@ -4158,6 +4172,7 @@ export class SelectionCompiler {
     set: SelectionNode,
     childVar: string,
     edgeVar: string,
+    relDef: RelationshipDefinition,
     targetDef: NodeDefinition,
     maxDepth: number,
     currentDepth: number,
@@ -4191,21 +4206,18 @@ export class SelectionCompiler {
         )}`,
       );
     if (set.edgeChildren && set.edgeChildren.length > 0) {
-      const edgeFields = set.edgeChildren
-        .filter((c) => c.isScalar)
-        .map((c) => {
-          if (c.alias === undefined || c.alias === c.fieldName)
-            return `.${escapeIdentifier(c.fieldName)}`;
-          assertSafeIdentifier(c.alias, 'selection alias');
-          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
-        })
-        .join(', ');
+      const edgeFields = this.edgeFieldEntries(
+        set.edgeChildren,
+        edgeVar,
+        relDef,
+      ).join(', ');
       parts.push(`${propertiesKey}: ${edgeVar} { ${edgeFields} }`);
     }
     for (const [k, expr] of this.extraEdgeKeyParts(
       set,
       childVar,
       edgeVar,
+      relDef,
       targetDef,
       maxDepth,
       currentDepth,
@@ -4220,6 +4232,53 @@ export class SelectionCompiler {
   }
 
   /**
+   * The map entries of an edge `properties { … }` selection over `edgeVar`:
+   * `.note` / `alias: e0.note` for a scalar, and (vNEXT) a `Point` /
+   * `CartesianPoint` edge property with a sub-selection
+   * (`at { longitude latitude }`) as the map `compilePointSelection` builds
+   * for node properties since v2.20.0. Pre-vNEXT such a sub-selection was
+   * left out of the result (strict: `OGMError`). Any other non-scalar
+   * entry is still left out, so selections without a point sub-selection
+   * compile byte for byte as before.
+   */
+  private edgeFieldEntries(
+    children: readonly SelectionNode[],
+    edgeVar: string,
+    relDef: RelationshipDefinition,
+  ): string[] {
+    const props = relDef.properties
+      ? this.schema.relationshipProperties.get(relDef.properties)
+      : undefined;
+    const out: string[] = [];
+    for (const c of children) {
+      if (c.isScalar) {
+        if (c.alias === undefined || c.alias === c.fieldName)
+          out.push(`.${escapeIdentifier(c.fieldName)}`);
+        else {
+          assertSafeIdentifier(c.alias, 'selection alias');
+          out.push(
+            `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`,
+          );
+        }
+        continue;
+      }
+      const prop = props?.properties.get(c.fieldName);
+      const point = prop
+        ? compilePointSelection(
+            `${edgeVar}.${escapeIdentifier(c.fieldName)}`,
+            prop,
+            c.children ?? [],
+          )
+        : null;
+      if (point === null) continue;
+      const key = c.alias ?? c.fieldName;
+      assertSafeIdentifier(key, 'selection alias');
+      out.push(`${escapeIdentifier(key)}: ${point}`);
+    }
+    return out;
+  }
+
+  /**
    * v2.6.0 — strict: the projections of an edge set's further `node` /
    * `properties` keys (`SelectionNode.extraNodes` / `extraProperties`),
    * as `[escapedKey, expression]` pairs. Empty in 2.x default mode.
@@ -4228,6 +4287,7 @@ export class SelectionCompiler {
     set: SelectionNode,
     childVar: string,
     edgeVar: string,
+    relDef: RelationshipDefinition,
     targetDef: NodeDefinition,
     maxDepth: number,
     currentDepth: number,
@@ -4253,14 +4313,7 @@ export class SelectionCompiler {
           ),
         ]);
     for (const extra of set.extraProperties ?? []) {
-      const fields = extra.children
-        .filter((c) => c.isScalar)
-        .map((c) => {
-          if (c.alias === undefined || c.alias === c.fieldName)
-            return `.${escapeIdentifier(c.fieldName)}`;
-          assertSafeIdentifier(c.alias, 'selection alias');
-          return `${escapeIdentifier(c.alias)}: ${edgeVar}.${escapeIdentifier(c.fieldName)}`;
-        });
+      const fields = this.edgeFieldEntries(extra.children, edgeVar, relDef);
       if (fields.length > 0)
         out.push([
           escapeIdentifier(extra.key),

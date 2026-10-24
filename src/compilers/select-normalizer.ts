@@ -22,15 +22,77 @@ import { normalizeConnectionOrderBy } from './connection-order-by';
 import {
   aggregateFieldHint,
   connectionKeyIssues,
+  isPointProperty,
   isScalarProperty,
   LEFT_OUT,
   PAGE_INFO_FIELDS,
+  pointFieldList,
   propertyTypeName,
   reportUnknownSelectedField,
+  unknownPointFields,
   type ConnectionKeySelection,
   type PageInfoSelection,
   type SelectionNode,
 } from './selection.compiler';
+
+/**
+ * vNEXT — `loc: { select: { longitude: true, latitude: true } }` on a stored
+ * `Point` / `CartesianPoint` field of a node or of relationship properties:
+ * the typed-select form of the `loc { longitude latitude }` sub-selection
+ * (v2.20.0 for node properties in a selectionSet). Pre-vNEXT it was left
+ * out of the result (strict: `OGMError`).
+ *
+ * Returns `undefined` when `value` is not that shape (the caller reports
+ * it as before), `null` when it is but selects nothing or a field the
+ * point type does not declare (reported, left out), else the node.
+ */
+function pointSelectNode(
+  prop: PropertyDefinition,
+  fieldName: string,
+  value: unknown,
+  owner: string,
+  strictMode: StrictMode,
+  edge: boolean,
+): SelectionNode | null | undefined {
+  if (!isPointProperty(prop) || !isPlainObject(value)) return undefined;
+  const keys = Object.keys(value).filter((k) => value[k] !== undefined);
+  if (keys.length !== 1 || keys[0] !== 'select') return undefined;
+  const select = value.select;
+  if (!isPlainObject(select)) return undefined;
+  const children: SelectionNode[] = [];
+  for (const [key, v] of Object.entries(select)) {
+    assertSafeKey(key, 'point select input');
+    if (v === undefined || v === null || v === false) continue;
+    children.push({
+      fieldName: key,
+      isScalar: v === true,
+      isRelationship: false,
+      isConnection: false,
+    });
+  }
+  const bad = unknownPointFields(prop, children);
+  if (bad.length > 0) {
+    reportUnknownSelectedField(strictMode, 'select', {
+      owner,
+      field: fieldName,
+      subSelection: true,
+      edge,
+      shape: {
+        expected: `is a ${prop.type} field, whose select takes only ${pointFieldList(prop)} set to \`true\` (not ${bad.map((f) => `"${f}"`).join(', ')})`,
+        outcome: LEFT_OUT,
+      },
+    });
+    return null;
+  }
+  if (children.length === 0) return null;
+  return {
+    fieldName,
+    isScalar: false,
+    isRelationship: false,
+    isConnection: false,
+    children,
+  };
+}
 
 /** v2.8.0 — the keys of a relationship's object select. */
 const RELATIONSHIP_SELECT_KEYS: ReadonlySet<string> = new Set([
@@ -148,7 +210,20 @@ export class SelectNormalizer {
           hint: aggregateFieldHint(fieldName, nodeDef.relationships),
         });
       // v2.8.0 — a scalar given anything but `true` is left out.
-      else if (prop && value !== true && isScalarProperty(prop, this.schema))
+      else if (prop && value !== true && isScalarProperty(prop, this.schema)) {
+        // vNEXT — except a point field's `{ select: { longitude: true } }`.
+        const point = pointSelectNode(
+          prop,
+          fieldName,
+          value,
+          `type "${nodeDef.typeName}"`,
+          this.strictMode,
+          false,
+        );
+        if (point !== undefined) {
+          if (point) nodes.push(point);
+          continue;
+        }
         reportUnknownSelectedField(this.strictMode, 'select', {
           owner: `type "${nodeDef.typeName}"`,
           field: fieldName,
@@ -158,6 +233,7 @@ export class SelectNormalizer {
             outcome: LEFT_OUT,
           },
         });
+      }
 
       // It's a scalar field (property)
       if (value === true)
@@ -762,7 +838,20 @@ export class SelectNormalizer {
         });
       // v2.8.0 — an edge property given anything but `true` is left out.
       const edgeProp = props?.properties.get(fieldName);
-      if (edgeProp && value != null && value !== false && value !== true)
+      if (edgeProp && value != null && value !== false && value !== true) {
+        // vNEXT — except a point field's `{ select: { longitude: true } }`.
+        const point = pointSelectNode(
+          edgeProp,
+          fieldName,
+          value,
+          `relationship properties type "${props!.typeName}"`,
+          this.strictMode,
+          true,
+        );
+        if (point !== undefined) {
+          if (point) nodes.push(point);
+          continue;
+        }
         reportUnknownSelectedField(this.strictMode, 'select', {
           owner: `relationship properties type "${props!.typeName}"`,
           field: fieldName,
@@ -773,6 +862,7 @@ export class SelectNormalizer {
             outcome: LEFT_OUT,
           },
         });
+      }
       if (value === true)
         nodes.push({
           fieldName,
