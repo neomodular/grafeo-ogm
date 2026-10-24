@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.22.0 (2026-10-23) — upstream connectOrCreate and update ops
+
+> **Minor release.** It adds strict item 43: the `@neo4j/graphql` 5.x `connectOrCreate` and the root `create` / `connectOrCreate` / `delete` of `update()`. Without `strict`, every call that worked in 2.21.0 compiles to byte-identical Cypher, and these inputs are still ignored with the same warnings. Generated types gain the inputs (additions only).
+
+### Strict mode
+
+- **Item 43 — `connectOrCreate`, and root `create` / `connectOrCreate` / `delete` in `update()`.** The `@neo4j/graphql` 5.x shapes now work under `strict: true`:
+  - **`connectOrCreate` in a nested update item.** It does a `MERGE` on a `@unique` / `@id` key. The `onCreate` node and edge values are applied only when the node is created.
+    - An existing node is linked only if the target's `read` policy admits it.
+    - A created node is checked against the target's `create` policies and WITH CHECK.
+  - **Root `create`, `connectOrCreate` and `delete`**, next to `connect` / `disconnect`. They run in upstream order: delete, disconnect, update, connect, connectOrCreate, create.
+  - **`updateMany`** accepts `connectOrCreate` inside `data`.
+
+  Default mode still ignores them with a warning (`unknown-param`, `nested-write-unknown-key`), and its Cypher is unchanged; strict used to throw. Generated types add:
+  - `<Type>UniqueWhere`, `<Type>ConnectOrCreateWhere`, `<Type>OnCreateInput` and `<Type><Field>ConnectOrCreateFieldInput`;
+  - `connectOrCreate` on update field inputs;
+  - `create` / `connectOrCreate` / `delete` on `update()` (`UpdateRootOpInput`).
+
+### Docs
+
+- The README lists the Neo4j 5.9+ requirement of type predicates (`x IS :: INTEGER`). They are used by relationship `Aggregate` sums, `BigInt` aggregates, and the read-policy guard on a list-typed node `@cypher` field in default mode (2.20.1).
+- Two strict-item links in the 2.21.0 README (items 39 and 41) pointed to a missing anchor.
+
+### Chores
+
+- Archived the OpenSpec changes `add-policy-explain` (2.2.0) and `fix-nls-enforcement-gaps` (2.3.0) into `openspec/specs`.
+
 ## 2.21.0 (2026-10-23) — deletes, filters and edge points
 
 > **Minor release.** It adds strict items 39–42, for input that 2.x silently answers wrongly. It also projects Point sub-selections on relationship properties and in the typed `select`. Without `strict`, every call that worked in 2.20.1 compiles to byte-identical Cypher; the only addition is one warning per OGM instance and shape. Generated types gain `PointSelectFields` / `CartesianPointSelectFields` for schemas with Point fields.
