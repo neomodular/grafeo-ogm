@@ -1,6 +1,7 @@
 import { int, isInt, isPoint } from 'neo4j-driver';
 import { OGMError } from '../errors';
 import type { PropertyDefinition } from '../schema/types';
+import type { StrictMode } from './strict-mode';
 
 /**
  * GraphQL scalar types whose Neo4j storage type is INTEGER (Long).
@@ -410,6 +411,55 @@ export function coerceWhereValue(
       ? value.map((element) => coerceWhereElement(element, propDef))
       : value;
   return coerceWhereElement(value, propDef);
+}
+
+/**
+ * vNEXT — strict item 42: a JS `Date` in a where filter on a temporal field
+ * other than `DateTime` (`Date`, `LocalDateTime`, `Time`, `LocalTime`,
+ * `Duration`), scalar or list, for a comparison-shaped operator.
+ *
+ * The driver packs a JS `Date` as an empty map, so the comparison is
+ * `n.d = {}`: equality, ranges and `_IN` never match a row, and `_NOT` /
+ * `_NOT_IN` match every row whose field is set, whatever the date. Writes
+ * have rejected a `Date` for these types since v2.18.0, because an instant
+ * has no timezone-free `Date` / `LocalDateTime` / `Time` reading, so the
+ * where side takes the same rule rather than guessing a zone: default mode
+ * keeps the old Cypher and warns once per OGM, type and field
+ * (`where-js-date-temporal`); strict mode throws the write path's
+ * `OGMError`. `DateTime` keeps converting a `Date` to its ISO instant.
+ */
+export function checkWhereJsDate(
+  value: unknown,
+  propDef: PropertyDefinition | undefined,
+  suffix: string,
+  strictMode: StrictMode,
+  typeName: string | undefined,
+): void {
+  if (propDef === undefined || propDef.type === 'DateTime') return;
+  if (TEMPORAL_CONSTRUCTORS[propDef.type] === undefined) return;
+  if (!COMPARABLE_SUFFIXES.has(suffix)) return;
+  if (!containsDate(value, 2)) return;
+  const field = `${typeName ?? '?'}.${propDef.name}`;
+  if (strictMode.strict)
+    throw new OGMError(
+      `A JS Date cannot be compared with ${propDef.type} field "${field}" in a where filter: ` +
+        `it has no timezone-free ${propDef.type} reading. Pass an ISO-8601 string ` +
+        `or a neo4j-driver ${propDef.type} value instead.`,
+    );
+  strictMode.warn(
+    'where-js-date-temporal',
+    field,
+    `A JS Date in a where filter on ${propDef.type} field \`${field}\` is sent as an empty map: ` +
+      `in 2.x equality, ranges and _IN never match and _NOT / _NOT_IN match every row with the field set. ` +
+      `Pass an ISO-8601 string or a neo4j-driver ${propDef.type} value.`,
+    `throw an OGMError for a JS Date on a non-DateTime temporal field, as writes do`,
+  );
+}
+
+function containsDate(value: unknown, depth: number): boolean {
+  if (value instanceof Date) return true;
+  if (depth === 0 || !Array.isArray(value)) return false;
+  return value.some((el) => containsDate(el, depth - 1));
 }
 
 function coerceWhereElement(

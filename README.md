@@ -1659,6 +1659,16 @@ await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id
 
 A string, number, boolean or array where a disconnect item (or a relationship's disconnect value) belongs carries no `where`, so it compiled to the blanket form, which unlinks every related node the caller can read. Strict mode rejects it, as a non-object connect item has been rejected since 2.5.1. This extends [item 31](#31-a-null--undefined-item-in-a-disconnect-array-since-2180) (`null` / `undefined` items) to the other non-objects, at every depth: top-level disconnects, per union / interface member, a `disconnect` inside another disconnect item, and nested `update: { posts: [{ disconnect: [...] }] }`. `{ posts: [{}] }` and `{ posts: null }` stay the blanket disconnect in both modes. The warning code is `disconnect-non-object-item`, logged once per OGM instance and relationship field.
 
+#### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since vNEXT)
+
+```typescript
+await events.find({ where: { day: new Date('2024-01-15T10:30:00Z') } });
+// default: [] — the Date is sent as an empty map and never matches (and warns)
+// strict:  OGMError: A JS Date cannot be compared with Date field "Event.day" in a where filter: …
+```
+
+The driver sends a JS `Date` as an empty map. On a `Date`, `LocalDateTime`, `Time`, `LocalTime` or `Duration` field (scalar or list) equality, `_GT` / `_GTE` / `_LT` / `_LTE` and `_IN` therefore never match, and `_NOT` / `_NOT_IN` match every row whose field is set, whatever the date. A JS `Date` is an instant: it has no timezone-free `Date` / `LocalDateTime` / `Time` reading, which is why writes reject it for these types since 2.18.0. Strict mode applies the same rule to filters (root `where`, relationship and connection filters, connect `where`) and throws `OGMError`. Pass an ISO-8601 string (`'2024-01-15'`, `'2024-01-15T10:30:00'`, `'10:30:00Z'`) or a `neo4j-driver` temporal value instead. `DateTime` fields are not affected: a JS `Date` is compared as its UTC instant in both modes, so a `Date` written to a `DateTime` field matches the same `Date` in a filter. The warning code is `where-js-date-temporal`, logged once per OGM instance, type and field.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

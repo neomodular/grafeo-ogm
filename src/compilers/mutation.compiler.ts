@@ -23,6 +23,7 @@ import {
   mergeParams,
 } from '../utils/validation';
 import {
+  checkWhereJsDate,
   coerceWhereValue,
   coerceWriteValue,
   resolveDefaultWriteValue,
@@ -3737,6 +3738,14 @@ export class MutationCompiler {
     let coerced: Record<string, unknown> | undefined;
     for (const [key, val] of Object.entries(nodeWhere)) {
       const { baseProp } = this.parseOperatorSuffix(key);
+      // vNEXT — strict item 42, as in the WhereCompiler.
+      checkWhereJsDate(
+        val,
+        targetNodeDef.properties.get(baseProp),
+        key.slice(baseProp.length),
+        this.strictMode,
+        targetNodeDef.typeName,
+      );
       const next = coerceWhereValue(
         val,
         targetNodeDef.properties.get(baseProp),

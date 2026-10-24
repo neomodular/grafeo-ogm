@@ -32,7 +32,11 @@ import {
   isPlainObject,
   mergeParams,
 } from '../utils/validation';
-import { coerceWhereValue, wrapWhereParam } from '../utils/write-coercion';
+import {
+  checkWhereJsDate,
+  coerceWhereValue,
+  wrapWhereParam,
+} from '../utils/write-coercion';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 
 export interface WhereResult {
@@ -2459,6 +2463,14 @@ export class WhereCompiler {
     // BigInt filter given a string (its generated input type) and a
     // DateTime filter given a JS `Date` silently matched nothing.
     const propDef = propsHolder?.properties.get(fieldName);
+    // vNEXT — strict item 42 (JS Date on a non-DateTime temporal field).
+    checkWhereJsDate(
+      value,
+      propDef,
+      operator ?? '',
+      this.strictMode,
+      typeNameOf(propsHolder),
+    );
     const bound = coerceWhereValue(value, propDef, operator ?? '');
     const rawParamRef = wrapWhereParam(
       `$${paramName}`,
