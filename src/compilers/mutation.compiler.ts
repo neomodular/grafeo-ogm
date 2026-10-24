@@ -2677,6 +2677,36 @@ export class MutationCompiler {
     );
   }
 
+  /**
+   * vNEXT — strict item 41: a disconnect item that is not an object — a
+   * string, number, boolean or array (`disconnect: { posts: ['p1'] }`,
+   * `posts: true`, a nested `disconnect: [5]`). It carries no `where`, so
+   * it compiled to the blanket form and unlinked EVERY related node (the
+   * target's read policy still applied). Like item 31 (null items), which
+   * it extends: default warns once per OGM and relationship field and keeps
+   * the blanket disconnect; strict throws `OGMError`, as a non-object
+   * connect item has since v2.5.1.
+   */
+  private checkNonObjectDisconnectItem(
+    item: unknown,
+    relDef: RelationshipDefinition,
+  ): void {
+    const got = Array.isArray(item) ? 'an array' : `a ${typeof item}`;
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `A disconnect item on "${relDef.fieldName}" is ${got}. A disconnect item must be ` +
+          `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
+          `{ ${relDef.fieldName}: [{}] } or { ${relDef.fieldName}: null }.`,
+      );
+    this.strictMode.warn(
+      'disconnect-non-object-item',
+      relDef.fieldName,
+      `A disconnect item on "${relDef.fieldName}" is ${got}, not an object: it unlinks EVERY ` +
+        `related node (it compiles to the blanket disconnect).`,
+      'throw an OGMError for a disconnect item that is not an object',
+    );
+  }
+
   /** One relationship's disconnect items; `tag` as in buildRelConnects. */
   private buildRelDisconnects(
     spec: unknown,
@@ -2699,6 +2729,8 @@ export class MutationCompiler {
       const item = specItems[si];
       if (item == null && Array.isArray(spec))
         this.checkNullDisconnectItem(item, relDef);
+      else if (item != null && !isPlainObject(item))
+        this.checkNonObjectDisconnectItem(item, relDef);
       const relVar = `${varPrefix}r_${tag}_${si}`;
 
       // Wrap in a CALL subquery: the OPTIONAL MATCH yields one row per
@@ -3108,6 +3140,8 @@ export class MutationCompiler {
             // TypeError reading `.where`.
             if (disconnectSpec == null)
               throw nullNestedItemError('disconnect', relDef, disconnectSpec);
+            if (!isPlainObject(disconnectSpec))
+              this.checkNonObjectDisconnectItem(disconnectSpec, relDef);
             if (isPlainObject(disconnectSpec))
               this.checkLinkItemKeys(disconnectSpec, 'disconnect', relDef);
             const whereSpec = disconnectSpec.where as

@@ -68,6 +68,13 @@ const V253: Record<string, string> = {
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(target_posts_0:`Post`)\nWHERE target_posts_0.`id` = $param1\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_1:`WROTE`]->()\nDELETE r_posts_1\nRETURN count(*) AS _r_posts_1\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'disconnect: undefined item in an array':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->()\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  // vNEXT — strict item 41 (captured from a962f44, v2.20.1).
+  'disconnect: string item in an array':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(target_posts_0:`Post`)\nWHERE target_posts_0.`id` = $param1\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_1:`WROTE`]->(target_posts_1:`Post`)\nDELETE r_posts_1\nRETURN count(*) AS _r_posts_1\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'disconnect: boolean spec':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(target_posts_0:`Post`)\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'disconnect: array item (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_disc_posts_0_0:`WROTE`]->()\nDELETE r_disc_posts_0_0\nRETURN count(*) AS _r_disc_posts_0_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create with labels':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nSET n:`Vip`\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
 };

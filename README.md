@@ -1530,7 +1530,7 @@ await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { t
 // strict:  OGMError — nothing is unlinked
 ```
 
-A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field.
+A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field. Other non-object items are [item 41](#41-a-disconnect-item-that-is-not-an-object-since-vnext).
 
 #### 32. An unknown relationship in a connect / disconnect map (since 2.19.0)
 
@@ -1648,6 +1648,16 @@ new OGM({ typeDefs, driver, logger });
 ```
 
 An index needs a `name` (or `indexName`) and at least one field name. 2.x silently dropped an index without one, an `indexes` entry that is not an object, and a `@fulltext` without an `indexes` list: `db push` / `assertIndexesAndConstraints` never created it, and a `fulltext` search naming it threw `Unknown fulltext index`. Strict mode rejects the schema when the OGM is built, and `db push` / `grafeo generate` with `strict` in `grafeo.config.*` fail the same way (default mode prints a `warning:` line). `@fulltext(indexes: [])` declares nothing and is fine in both modes. The warning code is `fulltext-incomplete-index`, logged once per OGM instance, type and index.
+
+#### 41. A disconnect item that is not an object (since vNEXT)
+
+```typescript
+await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id instead of { where: { node: { id: 'p1' } } }
+// default: every post of the author is unlinked, not only p1 (and warns)
+// strict:  OGMError: A disconnect item on "posts" is a string. … — nothing is unlinked
+```
+
+A string, number, boolean or array where a disconnect item (or a relationship's disconnect value) belongs carries no `where`, so it compiled to the blanket form, which unlinks every related node the caller can read. Strict mode rejects it, as a non-object connect item has been rejected since 2.5.1. This extends [item 31](#31-a-null--undefined-item-in-a-disconnect-array-since-2180) (`null` / `undefined` items) to the other non-objects, at every depth: top-level disconnects, per union / interface member, a `disconnect` inside another disconnect item, and nested `update: { posts: [{ disconnect: [...] }] }`. `{ posts: [{}] }` and `{ posts: null }` stay the blanket disconnect in both modes. The warning code is `disconnect-non-object-item`, logged once per OGM instance and relationship field.
 
 #### Not behind the switch: `aggregate` on list fields
 

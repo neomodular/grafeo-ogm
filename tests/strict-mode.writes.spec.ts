@@ -327,6 +327,31 @@ describe('item 31 — a null / undefined item inside a disconnect array (v2.18.0
   });
 });
 
+describe('item 41 — a disconnect item that is not an object (vNEXT)', () => {
+  const cases: [string, string][] = [
+    ['disconnect: string item in an array', 'a string'],
+    ['disconnect: boolean spec', 'a boolean'],
+    ['disconnect: array item (nested in update)', 'an array'],
+  ];
+  it.each(cases)('default warns once: %s', (name, got) =>
+    warnsOnce(
+      badWriteShapes[name],
+      `A disconnect item on "posts" is ${got}, not an object: it unlinks EVERY related node`,
+    ),
+  );
+  it.each(cases)('strict throws and runs nothing: %s', async (name, got) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+      new OGMError(
+        `A disconnect item on "posts" is ${got}. A disconnect item must be ` +
+          `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
+          `{ posts: [{}] } or { posts: null }.`,
+      ),
+    );
+    expect(records).toEqual([]);
+  });
+});
+
 describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {
   const shapes: [string, Run, RegExp][] = [
     [

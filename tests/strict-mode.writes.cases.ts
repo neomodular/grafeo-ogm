@@ -179,6 +179,20 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       disconnect: { posts: [undefined] },
     }),
+  // vNEXT — strict item 41: a disconnect item that is not an object. The
+  // value-level casts are the point: the generated types reject them.
+  'disconnect: string item in an array': (ogm) =>
+    user(ogm).update({
+      where,
+      disconnect: { posts: [{ where: { node: { id: 'p1' } } }, 'p2' as never] },
+    }),
+  'disconnect: boolean spec': (ogm) =>
+    user(ogm).update({ where, disconnect: { posts: true as never } }),
+  'disconnect: array item (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { posts: [{ disconnect: [['p1'] as never] }] },
+    }),
 };
 
 /** Legitimate shapes: never warn, compile the same in both modes. */
