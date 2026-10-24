@@ -111,4 +111,46 @@ describeLive('schema strict SDL — live Neo4j', () => {
     });
     expect(rows).toEqual([{ title: `${word} two` }]);
   });
+
+  // vNEXT — strict item 40: an index with no fields (or no name) never
+  // worked: no index is created and a search naming it throws.
+  const incompleteDefs = /* GraphQL */ `
+    type ItSsdlNote @node @fulltext(indexes: [{ name: "ItSsdlNoFields" }]) {
+      id: ID! @id
+      body: String
+      runId: String
+    }
+  `;
+
+  it('default: an index without fields is not created, a search on it throws, one warning', async () => {
+    const warn = jest.fn();
+    const ogm = new OGM({
+      typeDefs: incompleteDefs,
+      driver,
+      logger: { debug: () => {}, warn },
+    });
+    expect(
+      warn.mock.calls.filter((c) =>
+        String(c[0]).includes('index "ItSsdlNoFields" has no fields'),
+      ),
+    ).toHaveLength(1);
+    await ogm.assertIndexesAndConstraints({ options: { create: true } });
+    const indexes = await run(
+      'SHOW FULLTEXT INDEXES YIELD name WHERE name = $name RETURN name',
+      { name: 'ItSsdlNoFields' },
+    );
+    expect(indexes).toEqual([]);
+    await expect(
+      ogm.model('ItSsdlNote').find({
+        fulltext: { ItSsdlNoFields: { phrase: 'x' } } as never,
+        selectionSet: '{ id }',
+      }),
+    ).rejects.toThrow('Unknown fulltext index "ItSsdlNoFields"');
+  });
+
+  it('strict: an index without fields throws when the OGM is built', () => {
+    expect(
+      () => new OGM({ typeDefs: incompleteDefs, driver, strict: true }),
+    ).toThrow('@fulltext on ItSsdlNote: index "ItSsdlNoFields" has no fields.');
+  });
 });

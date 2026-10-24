@@ -52,7 +52,7 @@ export interface SchemaWarning {
 }
 
 export interface ParseSchemaOptions {
-  /** v2.17.0 — apply the strict-mode schema rules (items 27–30). */
+  /** v2.17.0 — apply the strict-mode schema rules (items 27–30, 40). */
   strict?: boolean;
   /** Called once per occurrence in default mode; never in strict mode. */
   onWarning?: (warning: SchemaWarning) => void;
@@ -407,12 +407,40 @@ function parseFulltextIndexes(
   const ftDirective = getDirective(node, 'fulltext');
   if (!ftDirective) return [];
 
+  const t = node.name.value;
+  // vNEXT — strict item 40: an index the parser cannot use (no `indexes`
+  // list, an entry that is not an object, no name, no string field) was
+  // dropped silently, so `db push` never created it and a `fulltext`
+  // query naming it threw "Unknown fulltext index". Default: still
+  // dropped, with a warning; strict: OGMError when the schema is parsed.
+  const incomplete = (detail: string, what: string) =>
+    ctx.flag(
+      {
+        code: 'fulltext-incomplete-index',
+        detail: `${t}#${detail}`,
+        problem:
+          `@fulltext on ${t}: ${what}, so the index is left out of the schema ` +
+          `(no index is created and no fulltext query can use it).`,
+        fix: 'reject the incomplete index',
+      },
+      `@fulltext on ${t}: ${what}. Each index needs a name (or indexName) and a non-empty ` +
+        `list of field names, e.g. @fulltext(indexes: [{ name: "${t}Search", fields: ["title"] }]).`,
+    );
+
   const indexesArg = getDirectiveArgValue(ftDirective, 'indexes');
-  if (!indexesArg || indexesArg.kind !== Kind.LIST) return [];
+  if (!indexesArg || indexesArg.kind !== Kind.LIST) {
+    incomplete('indexes', 'the directive has no "indexes" list');
+    return [];
+  }
 
   const results: FulltextIndex[] = [];
-  for (const item of (indexesArg as ListValueNode).values) {
-    if (item.kind !== Kind.OBJECT) continue;
+  const items = (indexesArg as ListValueNode).values;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind !== Kind.OBJECT) {
+      incomplete(String(i), `index #${i + 1} is not an object`);
+      continue;
+    }
     const obj = item as ObjectValueNode;
 
     let name = '';
@@ -433,10 +461,9 @@ function parseFulltextIndexes(
           if (f.kind === Kind.STRING) fields.push((f as StringValueNode).value);
     }
 
-    if (indexName && name && indexName !== name) {
+    if (indexName && name && indexName !== name)
       // v2.17.0 — strict item 27: two different names for one index. 2.x
       // used `name`; upstream prefers `indexName`. Neither is clearly meant.
-      const t = node.name.value;
       ctx.flag(
         {
           code: 'fulltext-name-conflict',
@@ -449,9 +476,14 @@ function parseFulltextIndexes(
         `@fulltext on ${t}: index has both name "${name}" and indexName "${indexName}". ` +
           `Use one of them (indexName is the @neo4j/graphql 4+ spelling).`,
       );
-    } else if (!name) name = indexName;
+    else if (!name) name = indexName;
 
     if (name && fields.length > 0) results.push({ name, fields });
+    else
+      incomplete(
+        String(i),
+        name ? `index "${name}" has no fields` : `index #${i + 1} has no name`,
+      );
   }
 
   return results;

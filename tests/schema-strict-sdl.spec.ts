@@ -103,6 +103,91 @@ describe('@fulltext indexName (alias of name)', () => {
   });
 });
 
+describe('strict item 40 — incomplete @fulltext index (vNEXT)', () => {
+  const cases: [string, string, string][] = [
+    [
+      'no name',
+      '@fulltext(indexes: [{ fields: ["t"] }])',
+      'index #1 has no name',
+    ],
+    [
+      'no fields',
+      '@fulltext(indexes: [{ name: "PSearch" }])',
+      'index "PSearch" has no fields',
+    ],
+    [
+      'an empty fields list',
+      '@fulltext(indexes: [{ indexName: "PSearch", fields: [] }])',
+      'index "PSearch" has no fields',
+    ],
+    [
+      'no string field',
+      '@fulltext(indexes: [{ name: "PSearch", fields: [1] }])',
+      'index "PSearch" has no fields',
+    ],
+    [
+      'an entry that is not an object',
+      '@fulltext(indexes: [{ name: "Ok", fields: ["t"] }, "PSearch"])',
+      'index #2 is not an object',
+    ],
+    ['no indexes list', '@fulltext', 'the directive has no "indexes" list'],
+  ];
+
+  it.each(cases)(
+    'default: %s is still dropped (same schema) and warns once',
+    (_n, directive, what) => {
+      const sdl = `type P @node ${directive} { t: String }`;
+      const { schema, warnings } = collect(sdl);
+      const kept = directive.includes('"Ok"')
+        ? [{ name: 'Ok', fields: ['t'] }]
+        : [];
+      expect(schema.nodes.get('P')!.fulltextIndexes).toEqual(kept);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].code).toBe('fulltext-incomplete-index');
+      expect(warnings[0].problem).toBe(
+        `@fulltext on P: ${what}, so the index is left out of the schema ` +
+          `(no index is created and no fulltext query can use it).`,
+      );
+      const { warn } = build(sdl);
+      expect(warned(warn, `@fulltext on P: ${what}`)).toHaveLength(1);
+      expect(warned(warn, 'reject the incomplete index')).toHaveLength(1);
+    },
+  );
+
+  it.each(cases)('strict: %s throws OGMError', (_n, directive, what) => {
+    const sdl = `type P @node ${directive} { t: String }`;
+    expect(() => parseSchema(sdl, { strict: true })).toThrow(
+      new OGMError(
+        `@fulltext on P: ${what}. Each index needs a name (or indexName) and a non-empty ` +
+          `list of field names, e.g. @fulltext(indexes: [{ name: "PSearch", fields: ["title"] }]).`,
+      ),
+    );
+    expect(() => build(sdl, true)).toThrow(OGMError);
+  });
+
+  it('applies to @relationshipProperties types too', () => {
+    const sdl = `type A @node { id: ID! bs: [B!]! @relationship(type: "R", direction: OUT, properties: "RP") }
+      type B @node { id: ID! }
+      type RP @relationshipProperties @fulltext(indexes: [{ name: "RPNote" }]) { note: String }`;
+    expect(collect(sdl).warnings.map((w) => w.code)).toEqual([
+      'fulltext-incomplete-index',
+    ]);
+    expect(() => parseSchema(sdl, { strict: true })).toThrow(OGMError);
+  });
+
+  it('complete indexes and an empty list never warn', () => {
+    for (const d of [
+      '@fulltext(indexes: [])',
+      '@fulltext(indexes: [{ name: "PSearch", fields: ["t"] }])',
+      '@fulltext(indexes: [{ indexName: "PSearch", fields: ["t"] }])',
+    ]) {
+      const sdl = `type P @node ${d} { t: String }`;
+      expect(collect(sdl).warnings).toEqual([]);
+      expect(() => parseSchema(sdl, { strict: true })).not.toThrow();
+    }
+  });
+});
+
 describe('strict item 28: @relationship without type / direction', () => {
   const sdl = `type Product @node {
     id: ID!

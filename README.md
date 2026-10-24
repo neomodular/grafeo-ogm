@@ -1635,6 +1635,20 @@ await users.delete({ where: { id_IN: ids }, labels: ['Archived'] });
 
 `find()`, `count()`, `update()` and `updateMany()` add runtime `labels` to their `MATCH`; `delete()` and `deleteMany()` never did, so a label-scoped delete removed nodes without those labels (since 2.19.0 with an `unknown-param` warning, an `OGMError` under strict). Strict mode applies them to the root `MATCH`; a cascade `delete` then only reaches the related nodes of the matched roots. The labels are not in the method signatures in 2.x, so this affects untyped callers and objects built outside the call. The warning code is `delete-labels-ignored`, logged once per OGM instance, type and method.
 
+#### 40. An incomplete `@fulltext` index (since vNEXT)
+
+```graphql
+type Book @node @fulltext(indexes: [{ name: "BookSearch" }]) { title: String }
+```
+
+```typescript
+new OGM({ typeDefs, driver, logger });
+// default: the index is left out of the schema (and warns once)
+// strict:  OGMError: @fulltext on Book: index "BookSearch" has no fields. Each index needs a name (or indexName) and a non-empty list of field names, …
+```
+
+An index needs a `name` (or `indexName`) and at least one field name. 2.x silently dropped an index without one, an `indexes` entry that is not an object, and a `@fulltext` without an `indexes` list: `db push` / `assertIndexesAndConstraints` never created it, and a `fulltext` search naming it threw `Unknown fulltext index`. Strict mode rejects the schema when the OGM is built, and `db push` / `grafeo generate` with `strict` in `grafeo.config.*` fail the same way (default mode prints a `warning:` line). `@fulltext(indexes: [])` declares nothing and is fine in both modes. The warning code is `fulltext-incomplete-index`, logged once per OGM instance, type and index.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
