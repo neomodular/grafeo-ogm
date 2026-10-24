@@ -1568,7 +1568,7 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 // strict:  OGMError: Unknown parameter "delete" of User.update(). Allowed: "where", "update", … update() has no root "delete": …
 ```
 
-Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), `deleteMany({ where, delete })` did not cascade (use `delete()`), and `delete({ where, labels })` / `deleteMany({ where, labels })` deleted without the label filter. This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
+Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`), and `deleteMany({ where, delete })` did not cascade (use `delete()`). (`labels` on `delete()` / `deleteMany()` has its own item, [39](#39-labels-on-delete--deletemany-since-vnext).) This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
 #### 35. A node-typed `@cypher` field with a sub-selection (since 2.20.0)
 
@@ -1624,6 +1624,16 @@ await users.find({ selectionSet: '{ items { ... on Post { label } ... on Doc { l
 ```
 
 A union has no fields of its own, so 2.x projected a `@cypher` field selected on a union (through member fragments or bare, in a relationship or a connection `node`) with the first member's statement for every member. Strict mode runs each member's own statement (a member that declares the field as a stored property reads it). The warning is logged only when the selected members' statements actually differ; unions whose members share one statement compile as before in both modes. The warning code is `union-member-cypher-field`, logged once per OGM instance, union and field.
+
+#### 39. `labels` on `delete()` / `deleteMany()` (since vNEXT)
+
+```typescript
+await users.delete({ where: { id_IN: ids }, labels: ['Archived'] });
+// default: MATCH (n:User) — every node in ids is deleted, archived or not (and warns)
+// strict:  MATCH (n:User:Archived) — only the archived ones, as find() / update() match them
+```
+
+`find()`, `count()`, `update()` and `updateMany()` add runtime `labels` to their `MATCH`; `delete()` and `deleteMany()` never did, so a label-scoped delete removed nodes without those labels (since 2.19.0 with an `unknown-param` warning, an `OGMError` under strict). Strict mode applies them to the root `MATCH`; a cascade `delete` then only reaches the related nodes of the matched roots. The labels are not in the method signatures in 2.x, so this affects untyped callers and objects built outside the call. The warning code is `delete-labels-ignored`, logged once per OGM instance, type and method.
 
 #### Not behind the switch: `aggregate` on list fields
 

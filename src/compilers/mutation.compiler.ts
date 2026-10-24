@@ -1081,6 +1081,11 @@ export class MutationCompiler {
     policyContext?: PolicyContextBundle,
     /** Shared `param<N>` counter, continued from the root WHERE. */
     paramCounter?: { count: number },
+    /**
+     * vNEXT — strict item 39: runtime labels added to the root MATCH, as in
+     * compileUpdate. `Model` passes them only in strict mode.
+     */
+    labels?: string[],
   ): MutationResult {
     const labelStr = this.getCachedLabelString(nodeDef);
 
@@ -1088,7 +1093,10 @@ export class MutationCompiler {
     const params: Record<string, unknown> = { ...whereResult.params };
     const counter = paramCounter ?? counterAfter(whereResult.params);
 
-    lines.push(`MATCH (n:${labelStr})`);
+    if (labels && labels.length > 0) {
+      const extraLabels = labels.map((l) => assertSafeLabel(l)).join(':');
+      lines.push(`MATCH (n:${labelStr}:${extraLabels})`);
+    } else lines.push(`MATCH (n:${labelStr})`);
     if (whereResult.preludes && whereResult.preludes.length > 0)
       lines.push(...whereResult.preludes);
     if (whereResult.cypher) lines.push(`WHERE ${whereResult.cypher}`);

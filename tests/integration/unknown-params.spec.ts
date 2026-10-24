@@ -9,7 +9,8 @@
  * warning is logged, so an upstream-style `update({ where, delete })`
  * deletes nothing, `deleteMany({ where, delete })` does not cascade and
  * `delete({ where, labels })` deletes without the label filter.
- * `strict: true` throws `OGMError` and writes nothing.
+ * `strict: true` throws `OGMError` and writes nothing, except that since
+ * vNEXT (strict item 39) it applies the `labels` of delete / deleteMany.
  */
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver } from 'neo4j-driver';
@@ -132,9 +133,44 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
 
   it('default: delete() with "labels" deletes a node without the label', async () => {
     const { u } = await seed(false);
-    const { authors } = makeOgm();
+    const { authors, warnings } = makeOgm();
     await authors.delete(extra({ where: { id: u }, labels: ['ItUpArchived'] }));
     expect(await exists(u)).toBe(false);
+    // vNEXT — strict item 39 warns instead of item 34.
+    expect(paramWarnings(warnings)).toEqual([]);
+    expect(
+      warnings.filter((m) => m.includes('ignores the runtime "labels"')),
+    ).toHaveLength(1);
+  });
+
+  it.each(['delete', 'deleteMany'] as const)(
+    'strict (vNEXT, item 39): %s() with "labels" deletes only nodes with the label',
+    async (method) => {
+      const plain = await seed(false);
+      const archived = await seed(true);
+      const { authors, warnings } = makeOgm(true);
+      const ids = [plain.u, archived.u];
+      await authors[method](
+        extra({ where: { id_IN: ids }, labels: ['ItUpArchived'] }),
+      );
+      expect(await exists(plain.u)).toBe(true);
+      expect(await exists(archived.u)).toBe(false);
+      expect(warnings).toEqual([]);
+    },
+  );
+
+  it('strict (vNEXT, item 39): a cascade delete() with "labels" skips an unlabelled root and its posts', async () => {
+    const { u, a } = await seed(false);
+    const { authors } = makeOgm(true);
+    await authors.delete(
+      extra({
+        where: { id: u },
+        delete: { posts: {} },
+        labels: ['ItUpArchived'],
+      }),
+    );
+    expect(await exists(u)).toBe(true);
+    expect(await exists(a)).toBe(true);
   });
 
   it.each([
@@ -152,11 +188,6 @@ describeLive('Unknown params of Model methods — live Neo4j', () => {
       'deleteMany() with "delete"',
       (m: ReturnType<typeof makeOgm>['authors'], u: string) =>
         m.deleteMany(extra({ where: { id: u }, delete: { posts: {} } })),
-    ],
-    [
-      'delete() with "labels"',
-      (m: ReturnType<typeof makeOgm>['authors'], u: string) =>
-        m.delete(extra({ where: { id: u }, labels: ['ItUpArchived'] })),
     ],
   ])('strict: %s throws and writes nothing', async (_n, fn) => {
     const { u, a } = await seed();

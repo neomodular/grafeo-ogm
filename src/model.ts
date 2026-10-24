@@ -110,7 +110,9 @@ const PARAMS = {
     'context',
     'unsafe',
   ],
-  delete: ['where', 'delete', 'context', 'unsafe'],
+  // vNEXT — `labels` on delete / deleteMany is strict item 39
+  // (`Model.deleteLabels`), not an unknown param.
+  delete: ['where', 'delete', 'labels', 'context', 'unsafe'],
   aggregate: ['where', 'aggregate', 'labels', 'fulltext', 'context', 'unsafe'],
   count: ['where', 'labels', 'fulltext', 'context', 'unsafe'],
   setLabels: ['where', 'addLabels', 'removeLabels', 'context', 'unsafe'],
@@ -126,7 +128,7 @@ const PARAMS = {
   ],
   createMany: ['data', 'skipDuplicates', 'labels', 'context', 'unsafe'],
   updateMany: ['where', 'data', 'labels', 'context', 'unsafe'],
-  deleteMany: ['where', 'context', 'unsafe'],
+  deleteMany: ['where', 'labels', 'context', 'unsafe'],
   searchByVector: [
     'indexName',
     'vector',
@@ -163,14 +165,8 @@ const PARAM_HINTS = {
     connectOrCreate: 'connectOrCreate is not supported.',
     data: 'update() takes "update", not "data" (that is updateMany()).',
   },
-  delete: {
-    labels:
-      'delete() takes no runtime "labels": the label filter is not applied.',
-  },
   deleteMany: {
     delete: 'deleteMany() does not cascade: use delete({ where, delete }).',
-    labels:
-      'deleteMany() takes no runtime "labels": the label filter is not applied.',
   },
 };
 
@@ -580,6 +576,39 @@ export class Model<
    * For default-deny `'throw'` mode, callers must throw BEFORE compile
    * — checked here and propagated by `assertNotDeniedAtCompile`.
    */
+  /**
+   * vNEXT — strict item 39: the runtime `labels` of `delete()` /
+   * `deleteMany()`. They are not in the method signatures, and 2.x never
+   * applied them: `delete({ where, labels })` deleted every node `where`
+   * matched, with or without the labels (since v2.19.0 with an
+   * `unknown-param` warning). Default: the labels are still ignored, with
+   * one `delete-labels-ignored` warning per OGM, type and method. Strict:
+   * they narrow the delete `MATCH`, as in `find()` / `update()`.
+   */
+  private deleteLabels(
+    method: 'delete' | 'deleteMany',
+    params: object,
+  ): string[] | undefined {
+    const labels = (params as { labels?: unknown }).labels;
+    if (labels === undefined) return undefined;
+    const t = this.nodeDef.typeName;
+    if (!this.strictMode.strict) {
+      this.strictMode.warn(
+        'delete-labels-ignored',
+        `${t}\u0000${method}`,
+        `${t}.${method}() ignores the runtime "labels": it deletes every node "where" matches, ` +
+          `with or without those labels.`,
+        `apply "labels" to the ${method}() MATCH, as find() and update() do`,
+      );
+      return undefined;
+    }
+    if (!Array.isArray(labels) || labels.some((l) => typeof l !== 'string'))
+      throw new OGMError(
+        `The "labels" of ${t}.${method}() must be an array of label names.`,
+      );
+    return labels as string[];
+  }
+
   private resolvePolicyContext(
     op: Operation,
     unsafe?: UnsafeOptions,
@@ -1339,8 +1368,8 @@ export class Model<
       'delete',
       params,
       PARAMS.delete,
-      PARAM_HINTS.delete,
     );
+    const labels = this.deleteLabels('delete', params);
     const policyContext = this.resolvePolicyContext('delete', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'delete');
     // Note: WriteRestrictives do not target 'delete' (deletes have no
@@ -1363,6 +1392,7 @@ export class Model<
       // v2.3.0 — each cascade target is gated by its own `delete` policy.
       policyContext ?? undefined,
       paramCounter,
+      labels,
     );
 
     const result = await this.executor.execute(
@@ -2132,6 +2162,7 @@ export class Model<
       PARAMS.deleteMany,
       PARAM_HINTS.deleteMany,
     );
+    const labels = this.deleteLabels('deleteMany', params);
     const policyContext = this.resolvePolicyContext('delete', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'delete');
     // Note: WriteRestrictives do not target 'delete'. ReadRestrictives
@@ -2150,6 +2181,9 @@ export class Model<
       this.nodeDef,
       whereResult,
       undefined, // no cascade
+      undefined,
+      undefined,
+      labels,
     );
 
     const result = await this.executor.execute(

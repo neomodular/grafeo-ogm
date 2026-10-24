@@ -3,7 +3,7 @@
  * does not read. Pre-v2.19.0 they were ignored: an upstream-style
  * `update({ where, delete })` deleted nothing, `deleteMany({ where,
  * delete })` did not cascade, and `delete({ where, labels })` deleted
- * without the label filter.
+ * without the label filter (vNEXT: strict item 39, its own spec).
  *
  * - Default mode: byte-identical to v2.15.0 (hard-coded below, captured
  *   from main @ 6572bdc); warns once per OGM, owner and key set
@@ -27,10 +27,6 @@ const V2150: Record<string, string> = {
   'update() with "data"':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nRETURN n { __typename: 'User', .`id`, .`name` }",
   'deleteMany() with a cascade "delete"':
-    'MATCH (n:`User`)\nWHERE n.`id` = $param0\nDETACH DELETE n',
-  'deleteMany() with "labels"':
-    'MATCH (n:`User`)\nWHERE n.`id` = $param0\nDETACH DELETE n',
-  'delete() with "labels"':
     'MATCH (n:`User`)\nWHERE n.`id` = $param0\nDETACH DELETE n',
   'find() with a Prisma-style "orderBy" and "take"':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nRETURN n { __typename: 'User', .`id`, .`name` }",
