@@ -2846,6 +2846,7 @@ Optional server features:
 | `cloneSubgraph` / `deleteSubgraph` | APOC |
 | `searchByVector` | Neo4j 5.11+ (vector indexes) |
 | `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
+| Relationship `<rel>Aggregate` `sum` and `BigInt` aggregates, and a list-typed node `@cypher` field under a `read` policy (default mode) | Neo4j 5.9+ (type predicates, `x IS :: INTEGER`) |
 
 ### Do I need to know Cypher?
 
