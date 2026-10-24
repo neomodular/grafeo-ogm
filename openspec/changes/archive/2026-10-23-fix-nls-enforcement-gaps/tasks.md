@@ -72,4 +72,4 @@
 - [x] 9.1 README: nested-write enforcement principle + table, cascade-delete semantics (where honored, target delete policy, multi-level rejected), null semantics table, update the NLS "Limitations" list (remove fixed items, add `edge` in mutation where), security note for unprotected types
 - [x] 9.2 CHANGELOG v2.3.0: **Security** section per hole (H1, H4, nested writes, H3, H2) + **Behavior changes** with migration notes
 - [x] 9.3 Decide on a GitHub Security Advisory (check v1.14.0 precedent) — user decision. **Decided 2026-09-23:** publish a GHSA once v2.3.0 is live on npm (v1.14.0 had none)
-- [ ] 9.4 Release per runbook: granular signed `fix:` commits (one per hole), `chore: release v2.3.0 — …`, annotated tag, push as `neomodular`, watch Release/CI and npm
+- [x] 9.4 Release per runbook: granular signed `fix:` commits (one per hole), `chore: release v2.3.0 — …`, annotated tag, push as `neomodular`, watch Release/CI and npm
