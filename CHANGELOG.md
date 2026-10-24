@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.21.0 (2026-10-23) — deletes, filters and edge points
+
+> **Minor release.** It adds strict items 39–42, for input that 2.x silently answers wrongly. It also projects Point sub-selections on relationship properties and in the typed `select`. Without `strict`, every call that worked in 2.20.1 compiles to byte-identical Cypher; the only addition is one warning per OGM instance and shape. Generated types gain `PointSelectFields` / `CartesianPointSelectFields` for schemas with Point fields.
+
+### Fixed
+
+- **A `Point` / `CartesianPoint` relationship property with a sub-selection is now projected in both modes** (`edges { properties { at { longitude latitude } } }`), as node properties have been since 2.20.0. Before, it was left out with a warning, and threw `OGMError` in strict mode.
+- **The typed `select` takes the object form on Point node and relationship properties:** `loc: { select: { longitude: true } }`. The generated types offer it, and `SelectResult` types the selected keys.
+
+### Strict mode
+
+- **Item 39 — `labels` on `delete()` / `deleteMany()`.** 2.x ignored them, so a label-scoped delete also removed nodes without those labels. Default mode is unchanged and now warns once with `delete-labels-ignored` instead of `unknown-param`. `strict: true` applies the labels to the root `MATCH`, as `find()` / `update()` do; strict used to throw.
+- **Item 40 — incomplete `@fulltext` index.** These were dropped silently: an index with no name / `indexName`, an index with no field names, an `indexes` entry that is not an object, and a `@fulltext` with no `indexes` list. No index was created, and a search on it threw `Unknown fulltext index`. Default mode is unchanged and now warns once with `fulltext-incomplete-index`. `strict: true` rejects the schema with an `OGMError`.
+- **Item 41 — a disconnect item that is not an object.** A string, number, boolean or array item compiled to the blanket disconnect and unlinked every related node. Examples: `disconnect: { posts: ['p1'] }`, `posts: true`, a nested `disconnect: [5]`. Default mode is unchanged and now warns once with `disconnect-non-object-item`. `strict: true` throws an `OGMError` and unlinks nothing. This extends item 31.
+- **Item 42 — a JS `Date` in a where filter on a `Date`, `LocalDateTime`, `Time`, `LocalTime` or `Duration` field.** It was sent as an empty map. So equality, ranges and `_IN` never matched, and `_NOT` / `_NOT_IN` matched every row with the field set. Default mode keeps that and warns once with `where-js-date-temporal`. Strict mode throws `OGMError`, as writes have since 2.18.0. Pass an ISO-8601 string or a driver temporal instead. `DateTime` is unchanged.
+
 ## 2.20.1 (2026-10-23) — security: @cypher node fields and read policies
 
 > **Security patch.** A `@cypher` field returning a node type ignored that type's `read` policies. OGMs without `policies` emit byte-identical Cypher.
