@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.22.1 (2026-10-29) — security: @cypher node fields in where and sort
+
+> **Security patch.** Filtering or sorting by a `@cypher` field that returns a node ignored that type's `read` policies. OGMs without `policies` emit byte-identical Cypher.
+
+### Security
+
+- **Filtering or sorting by a node-typed `@cypher` field ignored the target type's read policy.** These all evaluated the statement's raw value:
+  - filters such as `where: { topPost_NOT: null }`, `topPost: null`, `posts: []` and other operators;
+  - those filters at the root, inside `_SOME` / `_NONE` / `_ALL` / `_SINGLE`, and in connection filters;
+  - `count`, `aggregate`, `updateMany` and `deleteMany`;
+  - `options.sort` at the root, and a nested `sort` key.
+
+  So a caller could tell that a hidden node exists, in default and strict mode, through `Model` and `InterfaceModel`. They now read the same policy-filtered value the selection has returned since 2.20.1: a hidden node is `null`, and hidden list elements are removed. A target policy that depends on a `@cypher` field now throws there (fail closed). OGMs without `policies`, `bypassPolicies` and overrides are unchanged. Affects 1.7.0-beta.0 through 2.22.0 ([GHSA-7w9h-gjxc-gv5f](https://github.com/neomodular/grafeo-ogm/security/advisories/GHSA-7w9h-gjxc-gv5f)).
+
 ## 2.22.0 (2026-10-23) — upstream connectOrCreate and update ops
 
 > **Minor release.** It adds strict item 43: the `@neo4j/graphql` 5.x `connectOrCreate` and the root `create` / `connectOrCreate` / `delete` of `update()`. Without `strict`, every call that worked in 2.21.0 compiles to byte-identical Cypher, and these inputs are still ignored with the same warnings. Generated types gain the inputs (additions only).
