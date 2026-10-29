@@ -2939,6 +2939,12 @@ export class MutationCompiler {
   private checkNonObjectDisconnectItem(
     item: unknown,
     relDef: RelationshipDefinition,
+    /**
+     * vNEXT — the value is a falsy `disconnect` of a nested update item
+     * (`posts: [{ disconnect: false }]`), which 2.x skips: nothing is
+     * unlinked, so the warning says so instead of "EVERY related node".
+     */
+    skipped = false,
   ): void {
     const got = Array.isArray(item) ? 'an array' : `a ${typeof item}`;
     if (this.strictMode.strict)
@@ -2947,6 +2953,16 @@ export class MutationCompiler {
           `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
           `{ ${relDef.fieldName}: [{}] } or { ${relDef.fieldName}: null }.`,
       );
+    if (skipped) {
+      this.strictMode.warn(
+        'disconnect-non-object-item',
+        `${relDef.fieldName}\u0000skipped`,
+        `A nested update's disconnect on "${relDef.fieldName}" is ${got} (${typeof item === 'string' ? JSON.stringify(item) : String(item)}), ` +
+          `not an object or an array of objects: it is ignored (nothing is unlinked).`,
+        'throw an OGMError for a disconnect item that is not an object',
+      );
+      return;
+    }
     this.strictMode.warn(
       'disconnect-non-object-item',
       relDef.fieldName,
@@ -3381,6 +3397,10 @@ export class MutationCompiler {
         }
 
         // --- disconnect (runs before connect so "disconnect all + connect new" works) ---
+        // vNEXT — strict item 41 also covers a falsy disconnect (`0`, `''`,
+        // `false`): 2.x skips it (warned), strict throws like `true` / `5`.
+        if (item.disconnect != null && !item.disconnect)
+          this.checkNonObjectDisconnectItem(item.disconnect, relDef, true);
         if (item.disconnect) {
           const disconnectItems = Array.isArray(item.disconnect)
             ? (item.disconnect as Record<string, unknown>[])

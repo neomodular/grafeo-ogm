@@ -350,6 +350,38 @@ describe('item 41 — a disconnect item that is not an object (2.21.0)', () => {
     );
     expect(records).toEqual([]);
   });
+
+  // vNEXT — a falsy disconnect of a nested update item was skipped silently.
+  const falsy: [string, string, string][] = [
+    ['disconnect: false (nested in update)', 'a boolean', 'false'],
+    ['disconnect: 0 (nested in update)', 'a number', '0'],
+    ["disconnect: '' (nested in update)", 'a string', '""'],
+  ];
+  it.each(falsy)(
+    'default warns once and unlinks nothing: %s',
+    (name, got, shown) =>
+      warnsOnce(
+        badWriteShapes[name],
+        `A nested update's disconnect on "posts" is ${got} (${shown}), not an object or an array of objects: it is ignored (nothing is unlinked).`,
+      ),
+  );
+  it.each(falsy)('strict throws and runs nothing: %s', async (name, got) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+      new OGMError(
+        `A disconnect item on "posts" is ${got}. A disconnect item must be ` +
+          `an object such as { where: { node: { … } } }; to unlink every related node pass ` +
+          `{ posts: [{}] } or { posts: null }.`,
+      ),
+    );
+    expect(records).toEqual([]);
+  });
+  it('a falsy and a truthy non-object disconnect on one field warn separately', async () => {
+    const { ogm, warnings } = setup(false);
+    await badWriteShapes['disconnect: false (nested in update)'](ogm);
+    await badWriteShapes['disconnect: boolean spec'](ogm);
+    expect(warnings()).toHaveLength(2);
+  });
 });
 
 describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {

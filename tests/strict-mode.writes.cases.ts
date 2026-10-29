@@ -193,6 +193,22 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       update: { posts: [{ disconnect: [['p1'] as never] }] },
     }),
+  // vNEXT — strict item 41, falsy nested disconnect (captured from ad90081, v2.22.0).
+  'disconnect: false (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ disconnect: false as never }] },
+    }),
+  'disconnect: 0 (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ disconnect: 0 as never }] },
+    }),
+  "disconnect: '' (nested in update)": (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ disconnect: '' as never }] },
+    }),
 };
 
 /** Legitimate shapes: never warn, compile the same in both modes. */

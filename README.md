@@ -1672,6 +1672,8 @@ await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id
 
 A string, number, boolean or array where a disconnect item (or a relationship's disconnect value) belongs carries no `where`, so it compiled to the blanket form, which unlinks every related node the caller can read. Strict mode rejects it, as a non-object connect item has been rejected since 2.5.1. This extends [item 31](#31-a-null--undefined-item-in-a-disconnect-array-since-2180) (`null` / `undefined` items) to the other non-objects, at every depth: top-level disconnects, per union / interface member, a `disconnect` inside another disconnect item, and nested `update: { posts: [{ disconnect: [...] }] }`. `{ posts: [{}] }` and `{ posts: null }` stay the blanket disconnect in both modes. The warning code is `disconnect-non-object-item`, logged once per OGM instance and relationship field.
 
+Since vNEXT this also covers a falsy `disconnect` in a nested update item (`update: { posts: [{ disconnect: false }] }`, or `0` / `''`). 2.x skips it, so nothing is unlinked, and warns (same code, its own message); strict mode throws the same `OGMError` as for `true`, before anything runs. `disconnect: null` / `undefined` in an item is still no disconnect, without a warning.
+
 #### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since 2.21.0)
 
 ```typescript

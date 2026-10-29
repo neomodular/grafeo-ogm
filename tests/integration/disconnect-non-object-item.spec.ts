@@ -212,6 +212,73 @@ describeLive('non-object disconnect items (2.21.0) — live Neo4j', () => {
     },
   );
 
+  // vNEXT — a falsy disconnect in a nested update item was skipped in both
+  // modes with no warning, while `true` / `5` hit item 41.
+  it.each([
+    ['false', false],
+    ['0', 0],
+    ["''", ''],
+  ] as const)(
+    'default: a nested update `disconnect: %s` unlinks nothing, and warns once',
+    async (_n, v) => {
+      const { ogm, warnings } = make(false);
+      const id = await seed();
+      const A = ogm.model('ItDnoAuthor');
+      for (let i = 0; i < 2; i++)
+        await A.update({
+          where: { id },
+          update: { posts: [{ disconnect: garbage(v) }] },
+        });
+      expect(await titles(id)).toEqual(['p1', 'p2', 'p3']);
+      const w = warnings(`A nested update's disconnect on "posts" is`);
+      expect(w).toHaveLength(1);
+      expect(String(w[0][0])).toContain('it is ignored (nothing is unlinked)');
+    },
+  );
+
+  it.each([
+    ['false', false],
+    ['0', 0],
+    ["''", ''],
+  ] as const)(
+    'strict: a nested update `disconnect: %s` throws an OGMError and writes nothing',
+    async (_n, v) => {
+      const { ogm } = make(true);
+      const id = await seed();
+      await expect(
+        ogm.model('ItDnoAuthor').update({
+          where: { id },
+          update: {
+            posts: [
+              {
+                where: { node: { title: 'p1' } },
+                update: { node: { title: 'changed' } },
+                disconnect: garbage(v),
+              },
+            ],
+          },
+        }),
+      ).rejects.toThrow(
+        `A disconnect item on "posts" is a ${typeof v}. A disconnect item must be an object`,
+      );
+      expect(await titles(id)).toEqual(['p1', 'p2', 'p3']);
+    },
+  );
+
+  it.each([false, true])(
+    'strict=%s: a nested update `disconnect: null` is no op and no warning',
+    async (strict) => {
+      const { ogm, warnings } = make(strict);
+      const id = await seed();
+      await ogm.model('ItDnoAuthor').update({
+        where: { id },
+        update: { posts: [{ disconnect: null }] },
+      });
+      expect(await titles(id)).toEqual(['p1', 'p2', 'p3']);
+      expect(warnings('disconnect')).toEqual([]);
+    },
+  );
+
   it('default with a read policy: the blanket form only unlinks posts the caller can read', async () => {
     const { ogm } = make(false, {
       ItDnoPost: [
