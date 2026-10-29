@@ -205,3 +205,113 @@ describe('policy: node-typed @cypher field projected bare (v2.20.1)', () => {
     ).rejects.toThrow(/requires @cypher field projection/);
   });
 });
+
+/**
+ * vNEXT — security: the same guard applies where the value is filtered or
+ * sorted on. Live coverage: tests/integration/nls-cypher-node-filter-sort.spec.ts.
+ */
+describe('policy: node-typed @cypher field in where / sort (vNEXT)', () => {
+  type UserModel = ReturnType<ReturnType<OGM['withContext']>['model']>;
+  const run = async (
+    call: (m: UserModel) => Promise<unknown>,
+    opts: {
+      strict?: boolean;
+      typeDefs?: string;
+      policies?: ConstructorParameters<typeof OGM>[0]['policies'];
+    } = {},
+  ): Promise<Recorded> => {
+    const records: Recorded[] = [];
+    const ogm = new OGM({
+      typeDefs: opts.typeDefs ?? typeDefs,
+      driver: mockDriver(records),
+      strict: opts.strict,
+      logger: { warn: () => undefined, debug: () => undefined },
+      policies: opts.policies ?? policies,
+    });
+    await call(ogm.withContext({ userId: 'u1' }).model('User'));
+    return records[0];
+  };
+
+  it('where: null checks read the guarded value', async () => {
+    const { cypher, params } = await run((m) =>
+      m.find({ where: { topPost_NOT: null }, selectionSet: '{ id }' }),
+    );
+    expect(cypher).toMatch(
+      /WHERE head\(\[n__cfn IN \[__where_n_topPost\] WHERE \(n__cfn\.`ownerId` = \$(\w+)\)\]\) IS NOT NULL/,
+    );
+    expect(Object.values(params)).toContain('u1');
+  });
+
+  it('where: a valued operator reads the guarded value, user params keep their numbers', async () => {
+    const { cypher, params } = await run(
+      (m) => m.find({ where: { posts: [] }, selectionSet: '{ id }' }),
+      { strict: true },
+    );
+    expect(cypher).toContain(
+      'WHERE [n__cfn IN __where_n_posts WHERE (n__cfn.`ownerId` = $param1)] = $param0',
+    );
+    expect(params.param0).toEqual([]);
+  });
+
+  it('where: an interface / union target is guarded per member', async () => {
+    const { cypher } = await run((m) =>
+      m.find({ where: { first_NOT: null }, selectionSet: '{ id }' }),
+    );
+    expect(cypher).toContain('n__cfn:`Post`');
+    expect(cypher).toContain('n__cfn:`Doc`');
+  });
+
+  it('where: a scalar @cypher field is not wrapped', async () => {
+    const { cypher } = await run((m) =>
+      m.find({ where: { label: 'x' }, selectionSet: '{ id }' }),
+    );
+    expect(cypher).not.toContain('__cfn');
+  });
+
+  it('sort: the ORDER BY key is the guarded value', async () => {
+    const { cypher } = await run((m) =>
+      m.find({
+        selectionSet: '{ id }',
+        options: { sort: [{ topPost: 'ASC' }] },
+      }),
+    );
+    expect(cypher).toMatch(
+      /ORDER BY head\(\[n__cfn IN \[__sort_topPost\] WHERE \(n__cfn\.`ownerId` = \$\w+\)\]\) ASC/,
+    );
+  });
+
+  it('a target policy that needs a @cypher field throws (fail closed)', async () => {
+    const opts = {
+      typeDefs: typeDefs.replace(
+        'type Post implements Content @node { id: ID! @unique ownerId: String }',
+        'type Post implements Content @node { id: ID! @unique ownerId: String owner: String @cypher(statement: "RETURN this.ownerId AS o", columnName: "o") }',
+      ),
+      policies: {
+        ...policies,
+        Post: [
+          permissive({
+            operations: ['read'],
+            when: (c) => ({ owner: c.userId as string }),
+          }),
+        ],
+      },
+    };
+    const message = /filtering or sorting by the @cypher field "User\.topPost"/;
+    await expect(
+      run(
+        (m) => m.find({ where: { topPost: null }, selectionSet: '{ id }' }),
+        opts,
+      ),
+    ).rejects.toThrow(message);
+    await expect(
+      run(
+        (m) =>
+          m.find({
+            selectionSet: '{ id }',
+            options: { sort: [{ topPost: 'ASC' }] },
+          }),
+        opts,
+      ),
+    ).rejects.toThrow(message);
+  });
+});

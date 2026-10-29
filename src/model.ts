@@ -15,7 +15,10 @@ import {
 } from './compilers/selection.compiler';
 import { VectorCompiler } from './compilers/vector.compiler';
 import { WhereCompiler } from './compilers/where.compiler';
-import type { CompiledPolicyFragments } from './compilers/where.compiler';
+import type {
+  CompiledPolicyFragments,
+  CypherNodeGuardArgs,
+} from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
 import { ResultMapper } from './execution/result-mapper';
@@ -984,7 +987,11 @@ export class Model<
     // projections for any `@cypher` sorts and must be inserted BEFORE the
     // RETURN; `post` is the trailing ORDER BY / SKIP / LIMIT.
     const opts = params?.options
-      ? this.compileOptions(params.options, allParams, selectScope.carried())
+      ? this.compileOptions(params.options, allParams, selectScope.carried(), {
+          policyContext: policyContext ?? undefined,
+          counter: paramCounter,
+          params: allParams,
+        })
       : { pre: '', post: '' };
 
     if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
@@ -1137,10 +1144,12 @@ export class Model<
       selectScope,
       policyContext,
     );
-    const opts = this.compileOptions({ ...params?.options, limit }, allParams, [
-      ...explainVars,
-      ...selectScope.carried(),
-    ]);
+    const opts = this.compileOptions(
+      { ...params?.options, limit },
+      allParams,
+      [...explainVars, ...selectScope.carried()],
+      { policyContext, counter: paramCounter, params: allParams },
+    );
 
     if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
     if (opts.pre) cypherParts.push(opts.pre);
@@ -3086,6 +3095,8 @@ export class Model<
      * RETURN can still reference them.
      */
     preserveVars: ReadonlyArray<string> = [],
+    /** vNEXT — see `compileSortClause`'s `guardCypherSort`. */
+    guard?: CypherNodeGuardArgs,
   ): { pre: string; post: string } {
     const postParts: string[] = [];
     let pre = '';
@@ -3096,6 +3107,16 @@ export class Model<
         nodeVar: 'n',
         propertyLookup: (field) => this.nodeDef.properties.get(field),
         preserveVars,
+        guardCypherSort: guard?.policyContext
+          ? (alias, propDef, field) =>
+              this.whereCompiler.guardCypherSortRef(
+                alias,
+                propDef,
+                'n',
+                `${this.nodeDef.typeName}.${field}`,
+                guard,
+              )
+          : undefined,
       });
       pre = compiled.pre;
       if (compiled.orderBy) postParts.push(compiled.orderBy);

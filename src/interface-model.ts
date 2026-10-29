@@ -482,6 +482,18 @@ export class InterfaceModel<
         nodeVar: 'n',
         propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
         preserveVars: ['__typename', ...selectScope.carried()],
+        // vNEXT — security: a node-typed `@cypher` sort key is read through
+        // the target's read policy (`WhereCompiler.guardCypherSortRef`).
+        guardCypherSort: policyContext
+          ? (alias, propDef, field) =>
+              this.whereCompiler.guardCypherSortRef(
+                alias,
+                propDef,
+                'n',
+                `${this.interfaceDef.name}.${field}`,
+                { policyContext, counter: paramCounter, params: allParams },
+              )
+          : undefined,
       });
       sortPre = compiled.pre;
       sortOrderBy = compiled.orderBy;

@@ -23,6 +23,7 @@ import { typeLabelExpr } from '../schema/labels';
 import {
   CypherFieldScope,
   cypherFieldAsList,
+  guardCypherNodeExpr,
 } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
@@ -38,6 +39,20 @@ import {
   wrapWhereParam,
 } from '../utils/write-coercion';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
+
+/**
+ * vNEXT — what `WhereCompiler.guardCypherNodeRef` needs to filter a
+ * node-typed `@cypher` value by its target's read policy: the policy
+ * context (none → no guard), the statement's param counter and the params
+ * the policy clause binds into.
+ *
+ * @internal
+ */
+export interface CypherNodeGuardArgs {
+  policyContext?: PolicyContextBundle;
+  counter: { count: number };
+  params: Record<string, unknown>;
+}
 
 export interface WhereResult {
   cypher: string;
@@ -1252,7 +1267,11 @@ export class WhereCompiler {
       // `compileNullCondition`.
       if (value === null) {
         clauses.push(
-          this.compileNullCondition(key, nodeVar, nodeDef, counter, scope),
+          this.compileNullCondition(key, nodeVar, nodeDef, counter, scope, {
+            policyContext,
+            counter,
+            params,
+          }),
         );
         continue;
       }
@@ -1313,6 +1332,7 @@ export class WhereCompiler {
         scope,
         counter,
         caseInsensitive,
+        policyContext,
       );
       clauses.push(scalarResult.cypher);
       mergeParams(params, scalarResult.params);
@@ -1348,27 +1368,113 @@ export class WhereCompiler {
     nodeVar: string,
     propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
     scope: CypherFieldScope | null,
+    /** vNEXT — see `guardCypherNodeRef`. */
+    guard?: CypherNodeGuardArgs,
   ): string {
     const propDef = propsHolder?.properties.get(fieldName);
-    if (scope && propDef?.isCypher && propDef.cypherStatement)
+    if (scope && propDef?.isCypher && propDef.cypherStatement) {
+      const typeName =
+        (propsHolder as { typeName?: string; name?: string }).typeName ??
+        (propsHolder as { name?: string }).name ??
+        '?';
       // v2.14.0 — strict item 24: a list field is filtered as the whole
       // list (as `@neo4j/graphql`'s `CypherFilter` does), so `tags: [...]`
       // and `tags_IN` compare what the selection returns.
-      return scope.register(
+      const asList = cypherFieldAsList(
+        this.strictMode,
+        typeName,
         fieldName,
         propDef,
-        undefined,
-        cypherFieldAsList(
-          this.strictMode,
-          (propsHolder as { typeName?: string; name?: string }).typeName ??
-            (propsHolder as { name?: string }).name ??
-            '?',
-          fieldName,
-          propDef,
-        ),
       );
+      return this.guardCypherNodeRef(
+        scope.register(fieldName, propDef, undefined, asList),
+        propDef,
+        asList,
+        nodeVar,
+        `${typeName}.${fieldName}`,
+        guard,
+      );
+    }
 
     return `${nodeVar}.${escapeIdentifier(fieldName)}`;
+  }
+
+  /**
+   * vNEXT — security: a node-typed `@cypher` field (its type a node,
+   * interface or union type) referenced by a where filter is evaluated on
+   * its value filtered by the target type's `read` policy, the same value
+   * the selection returns (v2.20.1, `guardCypherNodeExpr`): a hidden node
+   * reads as `null`, a list without its hidden elements. Pre-vNEXT the
+   * filter saw the statement's raw value, so `topPost_NOT: null` (and
+   * `_NOT_IN`, `_NOT` with any value, `posts: []` …) told a caller whether
+   * a node the target's policy hides exists — at the root, through
+   * `_SOME` / `_NONE` / `_ALL` / `_SINGLE` and connection filters, and in
+   * `count` / `aggregate`.
+   *
+   * Returns `ref` unchanged without a policy context (OGMs without
+   * `policies`, `bypassPolicies`, `unsafe`), for a scalar field, or when
+   * the target has no read clause. A target policy that needs `@cypher`
+   * fields cannot be evaluated per element and throws (fail closed).
+   */
+  private guardCypherNodeRef(
+    ref: string,
+    propDef: PropertyDefinition,
+    asList: boolean,
+    nodeVar: string,
+    field: string,
+    guard: CypherNodeGuardArgs | undefined,
+  ): string {
+    if (!guard?.policyContext) return ref;
+    const type = propDef.type;
+    if (
+      !this.schema.nodes.has(type) &&
+      !this.schema.interfaces?.has(type) &&
+      !this.schema.unions?.has(type)
+    )
+      return ref;
+    const targetDef = resolveTargetDef(type, this.schema);
+    if (!targetDef)
+      throw new OGMError(
+        `The @cypher field "${field}" returns unknown type "${type}".`,
+      );
+    const el = `${nodeVar}__cfn`;
+    assertSafeIdentifier(el, '@cypher policy variable');
+    const parts = this.compileTargetBody(
+      undefined,
+      el,
+      targetDef,
+      guard.counter,
+      guard.policyContext,
+    );
+    if (parts.preludes.length > 0)
+      throw new OGMError(
+        `Policy on "${targetDef.typeName}" requires @cypher field projection, ` +
+          `which is not supported when filtering or sorting by the @cypher field "${field}". ` +
+          `Refactor the policy to use stored properties or a relationship traversal.`,
+      );
+    if (!parts.policy) return ref;
+    mergeParams(guard.params, parts.params);
+    return guardCypherNodeExpr(ref, propDef, asList, nodeVar, parts.policy);
+  }
+
+  /**
+   * vNEXT — the guarded value of a node-typed `@cypher` sort key (`ref`, the
+   * projected `__sort_<field>` alias) for `Model` / `InterfaceModel`
+   * `options.sort`: rows sort as if a hidden node were absent. See
+   * `guardCypherNodeRef`.
+   *
+   * @internal
+   */
+  guardCypherSortRef(
+    ref: string,
+    propDef: PropertyDefinition,
+    nodeVar: string,
+    field: string,
+    guard: CypherNodeGuardArgs,
+  ): string {
+    // A sort reads the projected column as `buildCypherFieldCall` returns
+    // it: the first row (`head(collect(...))`), never the whole list.
+    return this.guardCypherNodeRef(ref, propDef, false, nodeVar, field, guard);
   }
 
   private tryCompileConnection(
@@ -2253,6 +2359,8 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     scope: CypherFieldScope,
+    /** vNEXT — see `guardCypherNodeRef`. */
+    guard?: CypherNodeGuardArgs,
   ): string {
     if (nodeDef.relationships.has(key))
       return this.compileRelationshipExistence(
@@ -2280,7 +2388,7 @@ export class WhereCompiler {
             `(no related node) or "${field}_NOT: null" (at least one related node).`,
         );
       }
-    return this.compileNullScalar(key, nodeVar, nodeDef, scope);
+    return this.compileNullScalar(key, nodeVar, nodeDef, scope, guard);
   }
 
   /**
@@ -2293,11 +2401,12 @@ export class WhereCompiler {
     varName: string,
     propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
     scope: CypherFieldScope | null,
+    guard?: CypherNodeGuardArgs,
   ): string {
     if (propsHolder?.properties.has(key)) {
       assertSafeIdentifier(key, 'where clause');
       // `@cypher` scalars project through the scope (NULL check on the alias).
-      return `${this.resolveFieldRef(key, varName, propsHolder, scope)} IS NULL`;
+      return `${this.resolveFieldRef(key, varName, propsHolder, scope, guard)} IS NULL`;
     }
 
     for (const suffix of OPERATOR_SUFFIXES) {
@@ -2310,7 +2419,7 @@ export class WhereCompiler {
             `"${field}: null" (IS NULL) or "${field}_NOT: null" (IS NOT NULL) to test for null.`,
         );
       assertSafeIdentifier(field, 'where clause');
-      return `${this.resolveFieldRef(field, varName, propsHolder, scope)} IS NOT NULL`;
+      return `${this.resolveFieldRef(field, varName, propsHolder, scope, guard)} IS NOT NULL`;
     }
 
     throw new OGMError(
@@ -2408,6 +2517,43 @@ export class WhereCompiler {
     scope: CypherFieldScope | null,
     counter: { count: number },
     caseInsensitive = false,
+    /** vNEXT — see `guardCypherNodeRef`. */
+    policyContext?: PolicyContextBundle,
+  ): WhereResult {
+    if (!policyContext)
+      return this.compileScalarConditionBody(
+        key,
+        value,
+        nodeVar,
+        propsHolder,
+        scope,
+        counter,
+        caseInsensitive,
+      );
+    const guardParams: Record<string, unknown> = {};
+    const result = this.compileScalarConditionBody(
+      key,
+      value,
+      nodeVar,
+      propsHolder,
+      scope,
+      counter,
+      caseInsensitive,
+      { policyContext, counter, params: guardParams },
+    );
+    mergeParams(result.params, guardParams);
+    return result;
+  }
+
+  private compileScalarConditionBody(
+    key: string,
+    value: unknown,
+    nodeVar: string,
+    propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
+    scope: CypherFieldScope | null,
+    counter: { count: number },
+    caseInsensitive: boolean,
+    guard?: CypherNodeGuardArgs,
   ): WhereResult {
     // Detect operator suffix
     let operator: OperatorSuffix | null = null;
@@ -2451,6 +2597,7 @@ export class WhereCompiler {
       nodeVar,
       propsHolder,
       scope,
+      guard,
     );
     // Temporal fields: with properties stored as native temporals (the
     // mutation compiler wraps ISO-string writes in datetime()/date()/...),

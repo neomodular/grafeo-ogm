@@ -336,3 +336,42 @@ export class CypherFieldScope {
     return this.nodeVar;
   }
 }
+
+/**
+ * v2.20.1 — the value of a node-typed `@cypher` field (its type a node,
+ * interface or union type) filtered by `predicate`, the target type's
+ * `read` clause over `<nodeVar>__cfn`: a single node becomes `null` when
+ * hidden, a list loses its hidden elements. `asList` — the value is the
+ * whole list (strict item 24). A list field in default mode holds the
+ * statement's first row, which is a node or a list, so both shapes are
+ * filtered.
+ *
+ * vNEXT — shared by the projection (`SelectionCompiler`), the where
+ * reference (`WhereCompiler`) and the sort keys, so a hidden node reads as
+ * absent wherever the value is evaluated.
+ */
+export function guardCypherNodeExpr(
+  value: string,
+  prop: PropertyDefinition,
+  asList: boolean,
+  nodeVar: string,
+  predicate: string,
+): string {
+  const el = `${nodeVar}__cfn`;
+  assertSafeIdentifier(el, '@cypher policy variable');
+  const where = ` WHERE ${predicate}`;
+  if (asList) return `[${el} IN ${value}${where}]`;
+  if (!prop.isArray) return `head([${el} IN [${value}]${where}])`;
+  // Default-mode list field: the first row is a node or a list. The
+  // `CASE … END` source joins both types (Neo4j rejects `x IN v` when it
+  // infers `v` as a node); `l` holds the filtered list once.
+  const v = `${nodeVar}__cfv`;
+  const l = `${nodeVar}__cfl`;
+  assertSafeIdentifier(v, '@cypher policy variable');
+  assertSafeIdentifier(l, '@cypher policy variable');
+  const isList = `${v} IS :: LIST<ANY>`;
+  return (
+    `head([${v} IN [${value}] | head([${l} IN [[${el} IN CASE WHEN ${isList} THEN ${v} ELSE [${v}] END${where}]] | ` +
+    `CASE WHEN ${isList} THEN ${l} ELSE head(${l}) END])])`
+  );
+}

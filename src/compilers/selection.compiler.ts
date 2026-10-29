@@ -36,6 +36,7 @@ import {
   CypherFieldScope,
   buildInlineCypherFieldExpr,
   cypherFieldAsList,
+  guardCypherNodeExpr,
 } from '../utils/cypher-field-projection';
 import {
   assertSafeIdentifier,
@@ -2289,19 +2290,12 @@ export class SelectionCompiler {
       userWhere: undefined,
     });
     if (!where) return value;
-    if (asList) return `[${el} IN ${value}${where}]`;
-    if (!prop.isArray) return `head([${el} IN [${value}]${where}])`;
-    // Default-mode list field: the first row is a node or a list. The
-    // `CASE … END` source joins both types (Neo4j rejects `x IN v` when it
-    // infers `v` as a node); `l` holds the filtered list once.
-    const v = `${nodeVar}__cfv`;
-    const l = `${nodeVar}__cfl`;
-    assertSafeIdentifier(v, '@cypher policy variable');
-    assertSafeIdentifier(l, '@cypher policy variable');
-    const isList = `${v} IS :: LIST<ANY>`;
-    return (
-      `head([${v} IN [${value}] | head([${l} IN [[${el} IN CASE WHEN ${isList} THEN ${v} ELSE [${v}] END${where}]] | ` +
-      `CASE WHEN ${isList} THEN ${l} ELSE head(${l}) END])])`
+    return guardCypherNodeExpr(
+      value,
+      prop,
+      asList,
+      nodeVar,
+      where.slice(' WHERE '.length),
     );
   }
 
@@ -3026,6 +3020,9 @@ export class SelectionCompiler {
             childVar,
             targetDef,
             node.orderBy,
+            params,
+            paramCounter,
+            policyContext,
           )
         : comprehension;
 
@@ -3462,6 +3459,9 @@ export class SelectionCompiler {
     childVar: string,
     targetDef: NodeDefinition,
     orderBy: ReadonlyArray<{ field: string; direction: 'ASC' | 'DESC' }>,
+    params?: Record<string, unknown>,
+    paramCounter?: { count: number },
+    policyContext: PolicyContextBundle | null = null,
   ): string {
     const sortParts: string[] = [];
     const sortKeys: string[] = [];
@@ -3472,12 +3472,25 @@ export class SelectionCompiler {
         throw new OGMError(
           `Invalid sort field "${field}": not a scalar property of ${targetDef.typeName}.`,
         );
+      // vNEXT — security: a node-typed `@cypher` sort key is read through
+      // the target's read policy, as its projection is (v2.20.1). Pre-vNEXT
+      // the list was ordered by nodes the caller cannot read. The inline
+      // expression is the statement's first row, never the whole list.
       const value =
         propDef?.isCypher && propDef.cypherStatement
-          ? buildInlineCypherFieldExpr(
-              propDef.cypherStatement,
+          ? this.guardCypherNodeValue(
+              buildInlineCypherFieldExpr(
+                propDef.cypherStatement,
+                childVar,
+                `${targetDef.typeName}.${field}`,
+              ),
+              propDef,
+              false,
               childVar,
               `${targetDef.typeName}.${field}`,
+              params,
+              paramCounter,
+              policyContext,
             )
           : `${childVar}.${escapeIdentifier(field)}`;
       sortParts.push(`__sk${i}: ${value}`);
@@ -3613,6 +3626,9 @@ export class SelectionCompiler {
             childVar,
             targetDef,
             node.orderBy!,
+            params,
+            paramCounter,
+            policyContext,
           )}`,
         );
         continue;

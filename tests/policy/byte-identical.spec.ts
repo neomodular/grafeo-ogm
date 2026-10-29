@@ -367,3 +367,135 @@ type Tag @node { id: ID! @unique }
     });
   });
 });
+
+/**
+ * vNEXT — security: a node-typed `@cypher` field used in a where filter
+ * (root, relationship quantifier, `count`) or as a sort key (root
+ * `options.sort`, nested `sort`) is read through the target's read policy.
+ * Without `policies`, with a bypass, an override, or no read clause on the
+ * target, the Cypher stays byte for byte what v2.22.0 emitted (goldens
+ * captured on ad90081).
+ */
+describe('byte-identical: node-typed @cypher field in where / sort', () => {
+  const cypherSchema = `
+type User @node {
+  id: ID! @unique
+  topPost: Post @cypher(statement: "MATCH (p:Post) RETURN p LIMIT 1", columnName: "p")
+  posts: [Post!]! @cypher(statement: "MATCH (p:Post) RETURN p", columnName: "p")
+  friends: [User!]! @relationship(type: "FRIEND", direction: OUT)
+}
+type Post @node { id: ID! @unique ownerId: String }
+type Tag @node { id: ID! @unique }
+`;
+  const where = {
+    topPost_NOT: null,
+    posts_NOT: [],
+    friends_SOME: { topPost: null },
+  };
+  const options: { sort: Record<string, 'ASC' | 'DESC'>[] } = {
+    sort: [{ topPost: 'DESC' }, { id: 'ASC' }],
+  };
+  const selectionSet =
+    '{ id friends(options: { sort: [{ topPost: DESC }] }) { id } }';
+  // [find, count]
+  const GOLDEN: Record<'default' | 'strict', string[]> = {
+    default: [
+      "MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  RETURN head(collect(`p`)) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __sort_topPost\n}\nWITH n, __sort_topPost\nWITH *\nORDER BY __sort_topPost DESC, n.`id` ASC\nRETURN n { .`id`, friends: [__sk IN apoc.coll.sortMulti([(n)-[:`FRIEND`]->(n0:`User`) | { __node: n0 { .`id` }, __sk0: head(COLLECT { WITH n0 AS this\n  MATCH (p:Post) RETURN p LIMIT 1\n}) }], ['__sk0']) | __sk.__node] }",
+      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  RETURN head(collect(`p`)) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nRETURN count(n) AS count',
+    ],
+    strict: [
+      "MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__where_n_posts__cf_el`\n  RETURN collect(`__where_n_posts__cf_el`) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __sort_topPost\n}\nWITH n, __sort_topPost\nWITH *\nORDER BY __sort_topPost DESC, n.`id` ASC\nRETURN n { .`id`, friends: [__sk IN apoc.coll.sortMulti([(n)-[:`FRIEND`]->(n0:`User`) | { __node: n0 { .`id` }, __sk0: head(COLLECT { WITH n0 AS this\n  MATCH (p:Post) RETURN p LIMIT 1\n}) }], ['__sk0']) | __sk.__node] }",
+      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__where_n_posts__cf_el`\n  RETURN collect(`__where_n_posts__cf_el`) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nRETURN count(n) AS count',
+    ],
+  };
+  const quiet = { warn: () => undefined, debug: () => undefined };
+  const postPolicy = [
+    permissive({ operations: ['read'], when: () => ({ ownerId: 'u' }) }),
+  ];
+  type Bound = Pick<OGM, 'model'>;
+  const emit = async (
+    bind: (driver: Driver) => Bound,
+    unsafe?: { bypassPolicies: true },
+  ): Promise<string[]> => {
+    const r: Recorded[] = [];
+    const model = bind(createMockDriver(r)).model('User');
+    await model.find({ where, options, selectionSet, unsafe });
+    await model.count({ where, unsafe });
+    return r.map((x) => x.cypher);
+  };
+
+  describe.each([
+    ['default', undefined],
+    ['strict', true],
+  ] as const)('%s mode', (mode, strict) => {
+    const golden = GOLDEN[mode];
+    const make = (
+      driver: Driver,
+      policies?: ConstructorParameters<typeof OGM>[0]['policies'],
+    ) =>
+      new OGM({
+        typeDefs: cypherSchema,
+        driver,
+        strict,
+        logger: quiet,
+        policies,
+      });
+
+    it('no policies', async () => {
+      expect(await emit((d) => make(d))).toEqual(golden);
+    });
+
+    it('policies on another type only (no read clause on the target)', async () => {
+      expect(
+        await emit((d) =>
+          make(d, {
+            Tag: [permissive({ operations: ['read'], when: () => ({}) })],
+          }).withContext({}),
+        ),
+      ).toEqual(golden);
+    });
+
+    it('ogm.unsafe.bypassPolicies() and per-call unsafe', async () => {
+      expect(
+        await emit((d) =>
+          make(d, { Post: postPolicy }).unsafe.bypassPolicies(),
+        ),
+      ).toEqual(golden);
+      expect(
+        await emit((d) => make(d, { Post: postPolicy }).withContext({}), {
+          bypassPolicies: true,
+        }),
+      ).toEqual(golden);
+    });
+
+    it('an override that short-circuits the target policy', async () => {
+      expect(
+        await emit((d) =>
+          make(d, {
+            Post: [
+              override({ operations: ['*'], when: () => true }),
+              ...postPolicy,
+            ],
+          }).withContext({}),
+        ),
+      ).toEqual(golden);
+    });
+
+    it('a read clause on the target guards every reference', async () => {
+      const [find, count] = await emit((d) =>
+        make(d, { Post: postPolicy }).withContext({}),
+      );
+      expect(find).toContain(
+        'head([n__cfn IN [__where_n_topPost] WHERE (n__cfn.`ownerId` = ',
+      );
+      expect(find).toMatch(
+        /WHERE head\(\[(r\d+)__cfn IN \[__where_\1_topPost\] WHERE \(\1__cfn\.`ownerId` = /,
+      );
+      expect(find).toContain(
+        'ORDER BY head([n__cfn IN [__sort_topPost] WHERE (n__cfn.`ownerId` = ',
+      );
+      expect(find).toContain('__sk0: head([n0__cfn IN [head(COLLECT {');
+      expect(count).toContain('head([n__cfn IN [__where_n_topPost] WHERE');
+    });
+  });
+});

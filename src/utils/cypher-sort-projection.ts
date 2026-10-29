@@ -57,8 +57,25 @@ export function compileSortClause(args: {
   nodeVar: string;
   propertyLookup: (field: string) => PropertyDefinition | undefined;
   preserveVars?: ReadonlyArray<string>;
+  /**
+   * vNEXT — security: the ORDER BY expression for a `@cypher` sort key's
+   * projected alias. `Model` / `InterfaceModel` filter a node-typed field's
+   * value by the target's read policy here (`guardCypherSortRef`), so rows
+   * don't sort by a node the caller cannot read. Absent → the bare alias.
+   */
+  guardCypherSort?: (
+    alias: string,
+    propDef: PropertyDefinition,
+    field: string,
+  ) => string;
 }): { pre: string; orderBy: string } {
-  const { sort, nodeVar, propertyLookup, preserveVars = [] } = args;
+  const {
+    sort,
+    nodeVar,
+    propertyLookup,
+    preserveVars = [],
+    guardCypherSort,
+  } = args;
   const preLines: string[] = [];
   const sortItems: string[] = [];
   const carriedAliases: string[] = [];
@@ -99,7 +116,10 @@ export function compileSortClause(args: {
       const carryStr = carry.length ? `, ${carry.join(', ')}` : '';
       preLines.push(`WITH ${nodeVar}${carryStr}, ${alias}`);
       carriedAliases.push(alias);
-      sortItems.push(`${alias} ${validDirection}`);
+      const key = guardCypherSort
+        ? guardCypherSort(alias, propDef, field)
+        : alias;
+      sortItems.push(`${key} ${validDirection}`);
     } else
       sortItems.push(`${nodeVar}.${escapeIdentifier(field)} ${validDirection}`);
   }
