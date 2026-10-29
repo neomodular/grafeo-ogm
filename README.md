@@ -1740,6 +1740,16 @@ await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: '
 
 `delete: true` is an undocumented shorthand from before 2.3.0 for "delete every related node" (the target's `delete` policy still applies). A nested update item's `where` scopes its `update`, never its `delete`, so `true` next to a `where` deletes every related node. Strict mode rejects it in nested update items, per union / interface member, in the root `delete` of `update()` (strict mode applies those, [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)) and in a `Model.delete()` cascade (`delete: { posts: true }`). A falsy `delete` (`false`, `0`, `''`) in a nested update item is skipped (nothing is deleted) and warns; strict mode throws the same `OGMError`. Pass `[{}]` (or `{}`) to delete every related node on purpose: it stays that in both modes, and `delete: null` / `undefined` is still no delete. Other non-object values (`5`, `[true]`, `'x'` in a cascade) have thrown since 2.3.0. The warning code is `delete-non-object`, logged once per OGM instance, relationship field and shape.
 
+#### 45. A nested create that is not an object (since vNEXT)
+
+```typescript
+await authors.update({ where: { id }, update: { posts: [{ create: true }] } });
+// default: creates a Post with no fields set — only its @id and @default values (and warns)
+// strict:  OGMError: A nested create on "posts" is a boolean. … — nothing is written
+```
+
+A nested create item that is `true`, a number, `''`, `[]` or `{ node: true }` carries no node input, so it created a target node with only its `@id` and `@default` values (a node a required field may then be missing from), and a falsy `create` (`false`, `0`, `''`) was skipped. Strict mode rejects both, in nested update items, in the relationship fields of `create()` and of every nested create, and in the root `create` of `update()`. A string or non-empty array item (`create: 'x'`, `[['t']]`) crashed with `Invalid identifier "0" in create property` and throws a clear `OGMError` in both modes since vNEXT. The target's `create` policies apply to these items as to `{}` (a security fix in vNEXT: before, they skipped them). The warning code is `create-non-object`, logged once per OGM instance, relationship field and shape.
+
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript

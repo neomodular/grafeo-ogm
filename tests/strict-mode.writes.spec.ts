@@ -444,6 +444,71 @@ describe('item 44 — a nested delete that is `true` or falsy (vNEXT)', () => {
   });
 });
 
+describe('item 45 — a nested create that is not an object (vNEXT)', () => {
+  const strictError = (got: string) =>
+    new OGMError(
+      `A nested create on "posts" is ${got}. A nested create item must be an object ` +
+        `such as { node: { … } } (or an array of them).`,
+    );
+  const empty: [string, string][] = [
+    ['create: true (nested in update)', 'a boolean'],
+    ['create: [5] (nested in update)', 'a number'],
+    ['create: { node: true } (nested in update)', '{ node: a boolean }'],
+    ['create: true (nested in create)', 'a boolean'],
+    ['create: [[]] (nested in create)', 'an array'],
+  ];
+  it.each(empty)(
+    'default warns once and creates an empty node: %s',
+    (name, got) =>
+      warnsOnce(
+        badWriteShapes[name],
+        `A nested create item on "posts" is ${got}, not an object: it creates a "Post" node with no input fields (only @id / @default values are set).`,
+      ),
+  );
+  it.each(empty)('strict throws and runs nothing: %s', async (name, got) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(strictError(got));
+    expect(records).toEqual([]);
+  });
+  const falsy: [string, string, string][] = [
+    ['create: false (nested in update)', 'a boolean', 'false'],
+    ['create: 0 (nested in create)', 'a number', '0'],
+  ];
+  it.each(falsy)(
+    'default warns once and creates nothing: %s',
+    (name, got, shown) =>
+      warnsOnce(
+        badWriteShapes[name],
+        `A nested create on "posts" is ${got} (${shown}), not an object or an array of objects: it is ignored (nothing is created).`,
+      ),
+  );
+  it.each(falsy)('strict throws and runs nothing: %s', async (name, got) => {
+    const { ogm, records } = setup(true);
+    await expect(badWriteShapes[name](ogm)).rejects.toThrow(strictError(got));
+    expect(records).toEqual([]);
+  });
+  // Pre-vNEXT: `Invalid identifier "0" in create property`.
+  it.each([false, true])(
+    'strict=%s: a string or non-empty array item throws a clear OGMError',
+    async (strict) => {
+      const { ogm, records } = setup(strict);
+      for (const create of ['x', ['x'], [['t']], [{ node: 'x' }]])
+        await expect(
+          ogm.model('User').update({
+            where: { id: 'u1' },
+            update: { posts: [{ create: create as never }] },
+          }),
+        ).rejects.toThrow('A nested create on "posts" is ');
+      await expect(
+        ogm.model('User').create({
+          input: [{ email: 'a@x', posts: { create: 'x' as never } }],
+        }),
+      ).rejects.toThrow(strictError('a string'));
+      expect(records).toEqual([]);
+    },
+  );
+});
+
 describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {
   const shapes: [string, Run, RegExp][] = [
     [

@@ -2001,6 +2001,8 @@ export class MutationCompiler {
     const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
 
     // --- create ---
+    // vNEXT — strict item 45: non-object create values / items.
+    this.checkCreateValue(relInput.create, relDef);
     if (relInput.create) {
       const createItems = Array.isArray(relInput.create)
         ? (relInput.create as Record<string, unknown>[])
@@ -3088,6 +3090,67 @@ export class MutationCompiler {
     );
   }
 
+  /**
+   * vNEXT — strict item 45: a nested `create` value (update item or create
+   * field input) that is not an object or an array of objects.
+   *
+   * - A falsy value (`false`, `0`, `''`) is skipped: nothing is created.
+   * - An item that is `true`, a number, `''`, `[]` (or `{ node: true }`)
+   *   creates a target node with no input fields: only `@id` and
+   *   `@default` values are set.
+   * - A non-empty string or array item crashed with `Invalid identifier
+   *   "0" in create property` (its indexes were read as field names): an
+   *   `OGMError` in both modes now.
+   *
+   * Default: the first two warn once per OGM, field and shape and keep that
+   * behaviour; strict: `OGMError` before anything runs. `null` items keep
+   * their v2.18.0 error (thrown where the item is compiled).
+   */
+  private checkCreateValue(
+    create: unknown,
+    relDef: RelationshipDefinition,
+  ): void {
+    if (create == null) return;
+    const describe = (v: unknown) =>
+      Array.isArray(v) ? 'an array' : `a ${typeof v}`;
+    const strictError = (got: string) =>
+      new OGMError(
+        `A nested create on "${relDef.fieldName}" is ${got}. A nested create item must be an object ` +
+          `such as { node: { … } } (or an array of them).`,
+      );
+    if (!create) {
+      const shown =
+        typeof create === 'string' ? JSON.stringify(create) : String(create);
+      if (this.strictMode.strict) throw strictError(describe(create));
+      this.strictMode.warn(
+        'create-non-object',
+        `${relDef.fieldName}\u0000skipped`,
+        `A nested create on "${relDef.fieldName}" is ${describe(create)} (${shown}), not an object or an ` +
+          `array of objects: it is ignored (nothing is created).`,
+        'throw an OGMError for a nested create that is not an object',
+      );
+      return;
+    }
+    for (const item of Array.isArray(create) ? create : [create]) {
+      if (item == null) continue;
+      // The node input the compiler reads: `item.node ?? item`.
+      const node = isPlainObject(item) ? (item.node ?? item) : item;
+      if (isPlainObject(node)) continue;
+      const got =
+        node === item ? describe(item) : `{ node: ${describe(node)} }`;
+      // Indexes of a non-empty string / array were compiled as field names.
+      if (this.strictMode.strict || Object.keys(node as object).length > 0)
+        throw strictError(got);
+      this.strictMode.warn(
+        'create-non-object',
+        relDef.fieldName,
+        `A nested create item on "${relDef.fieldName}" is ${got}, not an object: it creates a ` +
+          `"${relDef.target}" node with no input fields (only @id / @default values are set).`,
+        'throw an OGMError for a nested create that is not an object',
+      );
+    }
+  }
+
   /** One relationship's disconnect items; `tag` as in buildRelConnects. */
   private buildRelDisconnects(
     spec: unknown,
@@ -3731,6 +3794,8 @@ export class MutationCompiler {
           // Runs after disconnect and connect (as in @neo4j/graphql), so a
           // same-item `disconnect: [{}]` + `create` keeps the new node linked.
           // Pre-2.4.2 create ran first and the disconnect-all removed it.
+          // vNEXT — strict item 45: non-object create values / items.
+          this.checkCreateValue(item.create, relDef);
           if (item.create) {
             const createItems = Array.isArray(item.create)
               ? (item.create as Record<string, unknown>[])
