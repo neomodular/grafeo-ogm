@@ -1730,6 +1730,16 @@ await posts.create({
 
 It runs after the field input's `create` and `connect`, with the same `MERGE`, `onCreate`, read guard and `create` policies as in an update item (above). `createMany()` and `upsert()` take no relationship fields, so they are unaffected. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field; the warning code is `nested-write-unknown-key`, as before.
 
+#### 44. A nested delete that is `true`, `false`, `0` or `''` (since vNEXT)
+
+```typescript
+await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, delete: true }] } });
+// default: EVERY post of the author is deleted, not only p1 (and warns)
+// strict:  OGMError: A nested delete on "posts" is true. … — nothing is deleted
+```
+
+`delete: true` is an undocumented shorthand from before 2.3.0 for "delete every related node" (the target's `delete` policy still applies). A nested update item's `where` scopes its `update`, never its `delete`, so `true` next to a `where` deletes every related node. Strict mode rejects it in nested update items, per union / interface member, in the root `delete` of `update()` (strict mode applies those, [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)) and in a `Model.delete()` cascade (`delete: { posts: true }`). A falsy `delete` (`false`, `0`, `''`) in a nested update item is skipped (nothing is deleted) and warns; strict mode throws the same `OGMError`. Pass `[{}]` (or `{}`) to delete every related node on purpose: it stays that in both modes, and `delete: null` / `undefined` is still no delete. Other non-object values (`5`, `[true]`, `'x'` in a cascade) have thrown since 2.3.0. The warning code is `delete-non-object`, logged once per OGM instance, relationship field and shape.
+
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript

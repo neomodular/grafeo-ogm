@@ -384,6 +384,66 @@ describe('item 41 — a disconnect item that is not an object (2.21.0)', () => {
   });
 });
 
+describe('item 44 — a nested delete that is `true` or falsy (vNEXT)', () => {
+  const strictError = (shown: string) =>
+    new OGMError(
+      `A nested delete on "posts" is ${shown}. A nested delete must be an object or an array ` +
+        `of objects such as [{ where: { node: { … } } }]; to delete every related node pass [{}].`,
+    );
+  it.each(['delete: true (nested in update)', 'delete: true (cascade)'])(
+    'default warns once and deletes every related node: %s',
+    (name) =>
+      warnsOnce(
+        badWriteShapes[name],
+        'A nested delete on "posts" is `true`: it deletes EVERY related node the target\'s delete policy allows',
+      ),
+  );
+  it.each(['delete: true (nested in update)', 'delete: true (cascade)'])(
+    'strict throws and runs nothing: %s',
+    async (name) => {
+      const { ogm, records } = setup(true);
+      await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+        strictError('true'),
+      );
+      expect(records).toEqual([]);
+    },
+  );
+  const falsy: [string, string, string][] = [
+    ['delete: false (nested in update)', 'a boolean', 'false'],
+    ['delete: 0 (nested in update)', 'a number', '0'],
+    ["delete: '' (nested in update)", 'a string', '""'],
+  ];
+  it.each(falsy)(
+    'default warns once and deletes nothing: %s',
+    (name, got, shown) =>
+      warnsOnce(
+        badWriteShapes[name],
+        `A nested update's delete on "posts" is ${got} (${shown}), not an object or an array of objects: it is ignored (nothing is deleted).`,
+      ),
+  );
+  it.each(falsy)(
+    'strict throws and runs nothing: %s',
+    async (name, _got, shown) => {
+      const { ogm, records } = setup(true);
+      await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+        strictError(shown),
+      );
+      expect(records).toEqual([]);
+    },
+  );
+  it('`[{}]`, `{}` and `null` never warn', async () => {
+    const { ogm, warnings } = setup(false);
+    for (const del of [[{}], {}, null])
+      await ogm
+        .model('User')
+        .update({ where: { id: 'u1' }, update: { posts: [{ delete: del }] } });
+    await ogm
+      .model('User')
+      .delete({ where: { id: 'u1' }, delete: { posts: [{}] } });
+    expect(warnings()).toEqual([]);
+  });
+});
+
 describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {
   const shapes: [string, Run, RegExp][] = [
     [

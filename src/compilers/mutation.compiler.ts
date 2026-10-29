@@ -1283,6 +1283,8 @@ export class MutationCompiler {
     // pre-2.3.0 cascade ignored values, so callers relied on it). Any other
     // non-object value — `false` included, which used to delete everything
     // too — is rejected below rather than silently reinterpreted.
+    // vNEXT — strict item 44: the shorthand warns (default) / throws (strict).
+    if (spec === true) this.checkNonObjectDelete(spec, relDef);
     const items = spec === true ? [{}] : Array.isArray(spec) ? spec : [spec];
     const lines: string[] = [];
 
@@ -3041,6 +3043,51 @@ export class MutationCompiler {
     );
   }
 
+  /**
+   * vNEXT — strict item 44: a nested delete value that is `true` or falsy.
+   * `true` is the undocumented pre-2.3.0 shorthand for "delete every
+   * related node" (the target's `delete` policy still applies): in a nested
+   * update item it ignores the item's `where`, so
+   * `posts: [{ where: { node: { id } }, delete: true }]` DETACH DELETEs
+   * every post, not the one named. A falsy value in a nested update item is
+   * skipped (nothing is deleted), while the same value in a `Model.delete`
+   * cascade throws. Default: warns once per OGM, field and shape, and keeps
+   * that behaviour; strict: `OGMError` before anything runs. Other
+   * non-object values have thrown since v2.3.0; `[{}]` / `{}` stay the
+   * documented "delete every related node" in both modes.
+   */
+  private checkNonObjectDelete(
+    value: unknown,
+    relDef: RelationshipDefinition,
+    skipped = false,
+  ): void {
+    const shown =
+      typeof value === 'string' ? JSON.stringify(value) : String(value);
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `A nested delete on "${relDef.fieldName}" is ${shown}. A nested delete must be an object or an array ` +
+          `of objects such as [{ where: { node: { … } } }]; to delete every related node pass [{}].`,
+      );
+    if (skipped) {
+      this.strictMode.warn(
+        'delete-non-object',
+        `${relDef.fieldName}\u0000skipped`,
+        `A nested update's delete on "${relDef.fieldName}" is a ${typeof value} (${shown}), not an object or ` +
+          `an array of objects: it is ignored (nothing is deleted).`,
+        'throw an OGMError for a nested delete that is not an object',
+      );
+      return;
+    }
+    this.strictMode.warn(
+      'delete-non-object',
+      relDef.fieldName,
+      `A nested delete on "${relDef.fieldName}" is \`true\`: it deletes EVERY related node the target's ` +
+        `delete policy allows (a nested update item's "where" does not scope its "delete"). ` +
+        `Pass [{}] to delete every related node, or [{ where: { node: { … } } }] for some.`,
+      'throw an OGMError for a nested delete that is not an object',
+    );
+  }
+
   /** One relationship's disconnect items; `tag` as in buildRelConnects. */
   private buildRelDisconnects(
     spec: unknown,
@@ -3447,6 +3494,10 @@ export class MutationCompiler {
         // --- delete (detach delete target nodes) ---
         // Shared with `compileDelete`'s cascade: where + target `delete`
         // policy, one CALL subquery per spec item (v2.3.0).
+        // vNEXT — strict item 44: a falsy delete (`false`, `0`, `''`) is
+        // skipped (warned); strict throws, as for `true`.
+        if (item.delete != null && !item.delete)
+          this.checkNonObjectDelete(item.delete, relDef, true);
         if (item.delete) {
           const deleteLines = this.buildNestedDelete({
             spec: item.delete,

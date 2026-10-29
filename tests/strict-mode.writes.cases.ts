@@ -209,6 +209,29 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       update: { name: 'n', posts: [{ disconnect: '' as never }] },
     }),
+  // vNEXT — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
+  'delete: true (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { posts: [{ delete: true as never }] },
+    }),
+  'delete: false (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ delete: false as never }] },
+    }),
+  'delete: 0 (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ delete: 0 as never }] },
+    }),
+  "delete: '' (nested in update)": (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ delete: '' as never }] },
+    }),
+  'delete: true (cascade)': (ogm) =>
+    user(ogm).delete({ where, delete: { posts: true } as never }),
 };
 
 /** Legitimate shapes: never warn, compile the same in both modes. */

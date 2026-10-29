@@ -82,6 +82,17 @@ const V253: Record<string, string> = {
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   "disconnect: '' (nested in update)":
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  // vNEXT — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
+  'delete: true (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`WROTE`]->(n_del0:`Post`)\nDETACH DELETE n_del0\nRETURN count(*) AS _del_posts_0_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'delete: false (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'delete: 0 (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  "delete: '' (nested in update)":
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'delete: true (cascade)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`WROTE`]->(cascade_0:`Post`)\nDETACH DELETE cascade_0\nRETURN count(*) AS _del_posts_0\n}\nDETACH DELETE n",
   'create with labels':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nSET n:`Vip`\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
 };
