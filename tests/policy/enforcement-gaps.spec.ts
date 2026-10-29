@@ -346,6 +346,46 @@ describe('Nested writes enforce the target type as a direct write would', () => 
     expect(recorded).toHaveLength(0);
   });
 
+  // vNEXT — a non-object nested create item writes an empty node; the
+  // policy walk used to skip it, so it bypassed default deny and WITH CHECK.
+  const nonObjectCreates: [string, unknown][] = [
+    ['true', true],
+    ['5', 5],
+    ['[true]', [true]],
+    ['[[]]', [[]]],
+    ["['']", ['']],
+    ['[{ node: true }]', [{ node: true }]],
+  ];
+  it.each(nonObjectCreates)(
+    "nested create %s in update needs the target's create permissive",
+    async (_n, create) => {
+      const { bound, recorded } = setup();
+      await expect(
+        bound()
+          .model('ItCategory')
+          .update({
+            where: { id: 'k1' },
+            update: { charts: [{ create: create as never }] },
+          }),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      expect(recorded).toHaveLength(0);
+    },
+  );
+  it.each(nonObjectCreates)(
+    "nested create %s in create is rejected by the target's WITH CHECK",
+    async (_n, create) => {
+      const { bound, recorded } = setup();
+      await expect(
+        bound({ ...CTX, canCreateChart: true })
+          .model('ItCategory')
+          .create({
+            input: [{ id: 'k2', charts: { create: create as never } }],
+          }),
+      ).rejects.toBeInstanceOf(PolicyDeniedError);
+      expect(recorded).toHaveLength(0);
+    },
+  );
+
   it('checks nested creates at any depth', async () => {
     // ItCategory → ItChart (allowed) → ItTag (no policies) → ItChart with
     // a foreign tenant: rejected three levels down.

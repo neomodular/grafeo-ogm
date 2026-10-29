@@ -284,9 +284,18 @@ function checkCreates(
 ): void {
   const abstract = abstractTarget(targetDef.typeName, schema);
   for (const item of asArray(creates)) {
-    if (!isPlainObject(item)) continue;
+    // vNEXT — the compiler creates a node for every non-null item, a
+    // non-object one too (`create: true`, `[5]`, `[[]]`, `{ node: true }`
+    // write an empty node: `@id` and `@default` values only). Pre-vNEXT this
+    // walk skipped those items, so they created a node of a type whose
+    // `create` policies (default deny, WITH CHECK) would reject `{}`. They
+    // are checked as the empty input they write. `null` items throw in the
+    // compiler; strings and non-empty arrays throw there too.
+    if (item == null) continue;
     // Same node-spec resolution as the compiler's nested create.
-    let nodeSpec = (item.node ?? item) as Record<string, unknown>;
+    let nodeSpec = emptyIfNotObject(
+      isPlainObject(item) ? (item.node ?? item) : item,
+    );
     let createDef = targetDef;
     if (abstract) {
       // A flat interface create names its implementer: check THAT type.
@@ -389,6 +398,11 @@ export function targetBundle(
     operation: op,
     resolved: bundle.resolveForType(typeName, op) ?? NO_ROOT_POLICY,
   };
+}
+
+/** vNEXT — the node input a non-object create spec writes: none. */
+function emptyIfNotObject(value: unknown): Record<string, unknown> {
+  return isPlainObject(value) ? value : {};
 }
 
 function asArray(value: unknown): unknown[] {
