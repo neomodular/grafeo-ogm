@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT, strict item 44): a nested delete that is `true` or
+ * Live suite (v2.25.0, strict item 44): a nested delete that is `true` or
  * falsy.
  *
  * `delete: true` is the undocumented pre-2.3.0 shorthand for "delete every
@@ -47,7 +47,7 @@ const typeDefs = /* GraphQL */ `
 
 const garbage = (v: unknown) => v as never;
 
-describeLive('`true` / falsy nested deletes (vNEXT) — live Neo4j', () => {
+describeLive('`true` / falsy nested deletes (2.25.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   let driver: Driver;
 

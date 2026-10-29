@@ -209,7 +209,7 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       update: { name: 'n', posts: [{ disconnect: '' as never }] },
     }),
-  // vNEXT — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
   'delete: true (nested in update)': (ogm) =>
     user(ogm).update({
       where,
@@ -232,7 +232,7 @@ export const badWriteShapes: Record<string, Run> = {
     }),
   'delete: true (cascade)': (ogm) =>
     user(ogm).delete({ where, delete: { posts: true } as never }),
-  // vNEXT — strict item 45 (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 45 (captured from 041511b, v2.23.0).
   'create: true (nested in update)': (ogm) =>
     user(ogm).update({ where, update: { posts: [{ create: true as never }] } }),
   'create: [5] (nested in update)': (ogm) =>
@@ -259,7 +259,7 @@ export const badWriteShapes: Record<string, Run> = {
     user(ogm).create({
       input: [{ email: 'a@x', posts: { create: 0 as never } }],
     }),
-  // vNEXT — strict item 46 (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 46 (captured from 041511b, v2.23.0).
   'update: true (nested in update)': (ogm) =>
     user(ogm).update({
       where,

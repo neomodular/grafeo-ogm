@@ -1543,7 +1543,7 @@ await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { t
 // strict:  OGMError — nothing is unlinked
 ```
 
-A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field. Other non-object items are [item 41](#41-a-disconnect-item-that-is-not-an-object-since-2220).
+A `null` or `undefined` item inside a disconnect array compiles to the blanket form, which unlinks every related node. Strict mode rejects it, as a `null` connect item has been rejected since 2.5.1. To unlink every related node on purpose, pass `{ posts: [{}] }` or `{ posts: null }`: both stay the blanket disconnect in both modes. This applies to top-level disconnects, per union / interface member, and to a `disconnect` inside another disconnect item. A `null` / `undefined` item in a **nested** write array (`update: { posts: [{ disconnect: [...] }] }`, a nested update item, a nested create item) threw a raw `TypeError` before v2.18.0 and throws an `OGMError` in both modes now. The warning code is `disconnect-null-item`, logged once per OGM instance and relationship field. Other non-object items are [item 41](#41-a-disconnect-item-that-is-not-an-object-since-2210).
 
 #### 32. An unknown relationship in a connect / disconnect map (since 2.19.0)
 
@@ -1730,7 +1730,7 @@ await posts.create({
 
 It runs after the field input's `create` and `connect`, with the same `MERGE`, `onCreate`, read guard and `create` policies as in an update item (above). `createMany()` and `upsert()` take no relationship fields, so they are unaffected. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field; the warning code is `nested-write-unknown-key`, as before.
 
-#### 44. A nested delete that is `true`, `false`, `0` or `''` (since vNEXT)
+#### 44. A nested delete that is `true`, `false`, `0` or `''` (since 2.25.0)
 
 ```typescript
 await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, delete: true }] } });
@@ -1740,7 +1740,7 @@ await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: '
 
 `delete: true` is an undocumented shorthand from before 2.3.0 for "delete every related node" (the target's `delete` policy still applies). A nested update item's `where` scopes its `update`, never its `delete`, so `true` next to a `where` deletes every related node. Strict mode rejects it in nested update items, per union / interface member, in the root `delete` of `update()` (strict mode applies those, [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)) and in a `Model.delete()` cascade (`delete: { posts: true }`). A falsy `delete` (`false`, `0`, `''`) in a nested update item is skipped (nothing is deleted) and warns; strict mode throws the same `OGMError`. Pass `[{}]` (or `{}`) to delete every related node on purpose: it stays that in both modes, and `delete: null` / `undefined` is still no delete. Other non-object values (`5`, `[true]`, `'x'` in a cascade) have thrown since 2.3.0. The warning code is `delete-non-object`, logged once per OGM instance, relationship field and shape.
 
-#### 45. A nested create that is not an object (since vNEXT)
+#### 45. A nested create that is not an object (since 2.25.0)
 
 ```typescript
 await authors.update({ where: { id }, update: { posts: [{ create: true }] } });
@@ -1748,9 +1748,9 @@ await authors.update({ where: { id }, update: { posts: [{ create: true }] } });
 // strict:  OGMError: A nested create on "posts" is a boolean. … — nothing is written
 ```
 
-A nested create item that is `true`, a number, `''`, `[]` or `{ node: true }` carries no node input, so it created a target node with only its `@id` and `@default` values (a node a required field may then be missing from), and a falsy `create` (`false`, `0`, `''`) was skipped. Strict mode rejects both, in nested update items, in the relationship fields of `create()` and of every nested create, and in the root `create` of `update()`. A string or non-empty array item (`create: 'x'`, `[['t']]`) crashed with `Invalid identifier "0" in create property` and throws a clear `OGMError` in both modes since vNEXT. The target's `create` policies apply to these items as to `{}` (a security fix in vNEXT: before, they skipped them). The warning code is `create-non-object`, logged once per OGM instance, relationship field and shape.
+A nested create item that is `true`, a number, `''`, `[]` or `{ node: true }` carries no node input, so it created a target node with only its `@id` and `@default` values (a node a required field may then be missing from), and a falsy `create` (`false`, `0`, `''`) was skipped. Strict mode rejects both, in nested update items, in the relationship fields of `create()` and of every nested create, and in the root `create` of `update()`. A string or non-empty array item (`create: 'x'`, `[['t']]`) crashed with `Invalid identifier "0" in create property` and throws a clear `OGMError` in both modes since 2.25.0. The target's `create` policies apply to these items as to `{}` (a security fix in v2.25.0: before, they skipped them). The warning code is `create-non-object`, logged once per OGM instance, relationship field and shape.
 
-#### 46. Other nested write values that are not objects (since vNEXT)
+#### 46. Other nested write values that are not objects (since 2.25.0)
 
 ```typescript
 await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, update: true }] } });
@@ -1764,9 +1764,9 @@ These values carry nothing to write, and 2.x skipped them without a word:
 - a falsy `connect` (`false`, `0`, `''`) in a nested update item or a create field input (other non-object connect items have thrown since 2.5.1);
 - a relationship field of an `update` input, or an item of its array, that is not an object (`posts: true`, `posts: ['p1']`), and a relationship field of a `create()` input (or of a nested create) that is not an object (`posts: true`, `posts: [{ create: … }]`; `posts: []` is fine).
 
-Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since vNEXT. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-vnext) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-vnext) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
+Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since 2.25.0. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-2250) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-2250) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
 
-#### 47. A connection sort on a node-typed or aggregating `@cypher` field (since vNEXT)
+#### 47. A connection sort on a node-typed or aggregating `@cypher` field (since 2.25.0)
 
 ```typescript
 await users.find({ selectionSet: '{ friendsConnection(sort: [{ node: { topPost: DESC } }]) { edges { node { name } } } }' });
@@ -1774,9 +1774,9 @@ await users.find({ selectionSet: '{ friendsConnection(sort: [{ node: { topPost: 
 // strict:  OGMError: Cannot sort connection "friendsConnection" by the @cypher field "User.topPost": it returns a node …
 ```
 
-A connection `sort` (selectionSet) or `orderBy` (typed `select`) on a `@cypher` field read a stored property of that name, which the field never has, so the sort was ignored. Since vNEXT a scalar `@cypher` field sorts by its statement's value in both modes, as a nested relationship sort does. Two kinds of field still cannot be sorted by: a node-typed field (a node has no sort order) and a statement that aggregates (it cannot be computed per edge; sort at the top level instead). Default mode keeps ignoring them and warns; strict mode throws. The warning code is `connection-sort-cypher-field`, logged once per OGM instance, field and connection.
+A connection `sort` (selectionSet) or `orderBy` (typed `select`) on a `@cypher` field read a stored property of that name, which the field never has, so the sort was ignored. Since v2.25.0 a scalar `@cypher` field sorts by its statement's value in both modes, as a nested relationship sort does. Two kinds of field still cannot be sorted by: a node-typed field (a node has no sort order) and a statement that aggregates (it cannot be computed per edge; sort at the top level instead). Default mode keeps ignoring them and warns; strict mode throws. The warning code is `connection-sort-cypher-field`, logged once per OGM instance, field and connection.
 
-The same applies to a nested relationship sort (`friends(options: { sort: [{ topPost: DESC }] })`, typed `orderBy`) by a node-typed `@cypher` field. Before vNEXT it failed in `apoc.coll.sortMulti` (`ClassCastException`) as soon as one value was a node; since vNEXT default mode sorts that key as `null` (no order, as when every value was `null`) and warns, and strict mode throws. The warning code is `relationship-sort-cypher-node-field`, logged once per OGM instance and field. A root `options.sort` by a node-typed `@cypher` field is unchanged: Neo4j orders nodes by an internal order that has no meaning, so do not rely on it.
+The same applies to a nested relationship sort (`friends(options: { sort: [{ topPost: DESC }] })`, typed `orderBy`) by a node-typed `@cypher` field. Before v2.25.0 it failed in `apoc.coll.sortMulti` (`ClassCastException`) as soon as one value was a node; since 2.25.0 default mode sorts that key as `null` (no order, as when every value was `null`) and warns, and strict mode throws. The warning code is `relationship-sort-cypher-node-field`, logged once per OGM instance and field. A root `options.sort` by a node-typed `@cypher` field is unchanged: Neo4j orders nodes by an internal order that has no meaning, so do not rely on it.
 
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
@@ -2052,14 +2052,14 @@ await Author.find({
 
 All standard operator suffixes are supported (`_EQ`, `_NOT`, `_IN`, `_NOT_IN`, `_LT`, `_LTE`, `_GT`, `_GTE`, `_CONTAINS`, `_NOT_CONTAINS`, `_STARTS_WITH`, `_ENDS_WITH`, `_MATCHES`).
 
-A `@cypher` field whose type is a node, interface or union type is filtered with its target's where input (since vNEXT, as in `@neo4j/graphql` 5.x): a singular field takes the where object itself, a list field takes `_SOME`, `_NONE`, `_ALL` and `_SINGLE`, with the same meaning as on a relationship.
+A `@cypher` field whose type is a node, interface or union type is filtered with its target's where input (since 2.25.0, as in `@neo4j/graphql` 5.x): a singular field takes the where object itself, a list field takes `_SOME`, `_NONE`, `_ALL` and `_SINGLE`, with the same meaning as on a relationship.
 
 ```typescript
 await User.find({ where: { topPost: { title_CONTAINS: 'graph' } } });   // topPost: Post @cypher(…)
 await User.find({ where: { posts_ALL: { rank_GT: 2 } } });               // posts: [Post!]! @cypher(…)
 ```
 
-Before vNEXT the object was compared with the node itself and never matched. The filter sees the value as a selection returns it: with [Node-Level Security](#node-level-security), a node the target's `read` policy hides counts as `null` (and is left out of a list), so a filter cannot tell whether it exists, and relationship filters inside the target where apply their own targets' policies. A target where that needs `@cypher` projections (it filters on the target's own `@cypher` fields, or the target's read policy does) throws `OGMError`. `topPost: null` / `topPost_NOT: null` still test whether the field has a value. The generated `<Type>Where` offers these keys.
+Before v2.25.0 the object was compared with the node itself and never matched. The filter sees the value as a selection returns it: with [Node-Level Security](#node-level-security), a node the target's `read` policy hides counts as `null` (and is left out of a list), so a filter cannot tell whether it exists, and relationship filters inside the target where apply their own targets' policies. A target where that needs `@cypher` projections (it filters on the target's own `@cypher` fields, or the target's read policy does) throws `OGMError`. `topPost: null` / `topPost_NOT: null` still test whether the field has a value. The generated `<Type>Where` offers these keys.
 
 #### Using @cypher in ORDER BY
 

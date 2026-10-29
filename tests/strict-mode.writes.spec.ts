@@ -384,7 +384,7 @@ describe('item 41 — a disconnect item that is not an object (2.21.0)', () => {
   });
 });
 
-describe('item 44 — a nested delete that is `true` or falsy (vNEXT)', () => {
+describe('item 44 — a nested delete that is `true` or falsy (2.25.0)', () => {
   const strictError = (shown: string) =>
     new OGMError(
       `A nested delete on "posts" is ${shown}. A nested delete must be an object or an array ` +
@@ -444,7 +444,7 @@ describe('item 44 — a nested delete that is `true` or falsy (vNEXT)', () => {
   });
 });
 
-describe('item 45 — a nested create that is not an object (vNEXT)', () => {
+describe('item 45 — a nested create that is not an object (2.25.0)', () => {
   const strictError = (got: string) =>
     new OGMError(
       `A nested create on "posts" is ${got}. A nested create item must be an object ` +
@@ -487,7 +487,7 @@ describe('item 45 — a nested create that is not an object (vNEXT)', () => {
     await expect(badWriteShapes[name](ogm)).rejects.toThrow(strictError(got));
     expect(records).toEqual([]);
   });
-  // Pre-vNEXT: `Invalid identifier "0" in create property`.
+  // Pre-2.25.0: `Invalid identifier "0" in create property`.
   it.each([false, true])(
     'strict=%s: a string or non-empty array item throws a clear OGMError',
     async (strict) => {
@@ -509,7 +509,7 @@ describe('item 45 — a nested create that is not an object (vNEXT)', () => {
   );
 });
 
-describe('item 46 — other nested write values that are not objects (vNEXT)', () => {
+describe('item 46 — other nested write values that are not objects (2.25.0)', () => {
   const cases: [string, string, string][] = [
     [
       'update: true (nested in update)',
@@ -563,7 +563,7 @@ describe('item 46 — other nested write values that are not objects (vNEXT)', (
       expect(records).toEqual([]);
     },
   );
-  // Pre-vNEXT: `Invalid identifier "0" in nested update property`.
+  // Pre-2.25.0: `Invalid identifier "0" in nested update property`.
   it.each([false, true])(
     'strict=%s: a string or non-empty array update throws a clear OGMError',
     async (strict) => {

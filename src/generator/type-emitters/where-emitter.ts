@@ -112,7 +112,7 @@ function emitWhereType(
       !isScalar(prop.type, schema.customScalars) &&
       !schema.enums.has(prop.type)
     ) {
-      // vNEXT — a node-typed @cypher field is filtered by its target's
+      // v2.25.0 — a node-typed @cypher field is filtered by its target's
       // where input (`null` = no node), a list one through the quantifiers,
       // as in @neo4j/graphql 5.x.
       if (

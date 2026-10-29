@@ -269,7 +269,7 @@ export class CypherFieldScope {
     /** v2.14.0 — strict item 24: project the whole list (see `cypherFieldAsList`). */
     asList: boolean = false,
     /**
-     * vNEXT — keys and aliases this projection apart from the field's
+     * v2.25.0 — keys and aliases this projection apart from the field's
      * default one (`_list`: the whole list of a list field that default
      * mode otherwise projects as its first row). Unset: unchanged.
      */

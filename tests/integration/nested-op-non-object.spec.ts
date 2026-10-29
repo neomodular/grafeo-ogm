@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT, strict item 46): nested write values that are not
+ * Live suite (v2.25.0, strict item 46): nested write values that are not
  * objects and write nothing.
  *
  * A nested update item's `update: true` / `5` / falsy, a falsy `connect`,
@@ -40,7 +40,7 @@ const typeDefs = /* GraphQL */ `
 const garbage = (v: unknown) => v as never;
 
 describeLive(
-  'non-object nested update / connect values (vNEXT) — live Neo4j',
+  'non-object nested update / connect values (2.25.0) — live Neo4j',
   () => {
     const runId = `it-${randomUUID()}`;
     let driver: Driver;

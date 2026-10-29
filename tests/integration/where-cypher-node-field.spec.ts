@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT): filtering by a node-typed `@cypher` field with its
+ * Live suite (2.25.0): filtering by a node-typed `@cypher` field with its
  * target's where input, as @neo4j/graphql 5.x does.
  *
  * `where: { topPost: { title: 'x' } }` compiled to `node = map`, which
@@ -72,7 +72,7 @@ const policies = {
   ],
 };
 
-describeLive('where on node-typed @cypher fields (vNEXT) — live Neo4j', () => {
+describeLive('where on node-typed @cypher fields (2.25.0) — live Neo4j', () => {
   let driver: Driver;
   const runId = `it-${randomUUID()}`;
   const id = (k: string) => `${runId}-${k}`;

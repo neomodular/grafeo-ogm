@@ -3445,8 +3445,8 @@ export class SelectionCompiler {
   }
 
   /**
-   * vNEXT — the sort value of a node-scope connection sort key that is a
-   * `@cypher` field, or `undefined` for a stored property. Pre-vNEXT every
+   * v2.25.0 — the sort value of a node-scope connection sort key that is a
+   * `@cypher` field, or `undefined` for a stored property. Pre-2.25.0 every
    * key compiled to `n0.<field>`, a stored property a `@cypher` field never
    * has, so the sort was silently ignored (the projected `score` came back
    * unsorted). A scalar field now sorts by its statement's first row, as a
@@ -3528,7 +3528,7 @@ export class SelectionCompiler {
       // the target's read policy, as its projection is (v2.20.1). Pre-2.22.1
       // the list was ordered by nodes the caller cannot read. The inline
       // expression is the statement's first row, never the whole list.
-      // vNEXT — strict item 47: a node-typed key made apoc.coll.sortMulti
+      // v2.25.0 — strict item 47: a node-typed key made apoc.coll.sortMulti
       // fail with a ClassCastException whenever a value was a node (and was
       // a no-op when every value was null). Default: the key sorts as
       // `null` (warned), which keeps every result that did not fail; strict
@@ -3548,7 +3548,7 @@ export class SelectionCompiler {
           'relationship-sort-cypher-node-field',
           label,
           `A relationship sort by the @cypher field "${label}" is ignored: ${problem}. ` +
-            'Before vNEXT the query failed in apoc.coll.sortMulti whenever a value was a node.',
+            'Before v2.25.0 the query failed in apoc.coll.sortMulti whenever a value was a node.',
           'throw an OGMError for a relationship sort key that cannot be sorted by',
         );
         sortParts.push(`__sk${i}: null`);

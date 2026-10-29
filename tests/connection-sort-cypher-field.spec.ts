@@ -1,9 +1,9 @@
 /**
- * vNEXT — a connection sort key that is a `@cypher` field.
+ * v2.25.0 — a connection sort key that is a `@cypher` field.
  *
- * A scalar field sorts by its statement (pre-vNEXT: `n0.<field>`, a stored
+ * A scalar field sorts by its statement (pre-v2.25.0: `n0.<field>`, a stored
  * property the field never has, so the sort was ignored). Strict item 47: a
- * node-typed or aggregating field keeps the pre-vNEXT Cypher by default and
+ * node-typed or aggregating field keeps the pre-v2.25.0 Cypher by default and
  * warns once; strict throws. The live counterpart is
  * `tests/integration/cypher-field-sort.spec.ts`.
  */
@@ -71,7 +71,7 @@ const V2_23_0 = (field: string) =>
   'MATCH (n:`User`)\nWHERE n.`id` = $param0\nRETURN n { friendsConnection: ' +
   `{ edges: [x IN apoc.coll.sortMulti([(n)-[e0:\`FRIEND\`]->(n0:\`User\`) | { node: n0 { .\`name\` }, __sk0: n0.\`${field}\` }], ['__sk0']) | { node: x.node }] } }`;
 
-describe('connection sort by a @cypher field (vNEXT)', () => {
+describe('connection sort by a @cypher field (2.25.0)', () => {
   it.each([undefined, false, true])(
     'strict=%s: a scalar field sorts by its statement',
     async (strict) => {

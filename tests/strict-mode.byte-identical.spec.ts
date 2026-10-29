@@ -82,7 +82,7 @@ const V253: Record<string, string> = {
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   "disconnect: '' (nested in update)":
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
-  // vNEXT — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 44, a `true` / falsy nested delete (captured from 041511b, v2.23.0).
   'delete: true (nested in update)':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`WROTE`]->(n_del0:`Post`)\nDETACH DELETE n_del0\nRETURN count(*) AS _del_posts_0_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'delete: false (nested in update)':
@@ -93,7 +93,7 @@ const V253: Record<string, string> = {
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'delete: true (cascade)':
     'MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nMATCH (n)-[:`WROTE`]->(cascade_0:`Post`)\nDETACH DELETE cascade_0\nRETURN count(*) AS _del_posts_0\n}\nDETACH DELETE n',
-  // vNEXT — strict item 45 (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 45 (captured from 041511b, v2.23.0).
   'create: true (nested in update)':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCREATE (n_cr0:`Post` { `id`: randomUUID() })\nCREATE (n)-[:`WROTE`]->(n_cr0)\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create: [5] (nested in update)':
@@ -108,7 +108,7 @@ const V253: Record<string, string> = {
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nWITH n\nCREATE (n_c0:`Post` { `id`: randomUUID() })\nCREATE (n)-[:`WROTE`]->(n_c0)\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create: 0 (nested in create)':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
-  // vNEXT — strict item 46 (captured from 041511b, v2.23.0).
+  // v2.25.0 — strict item 46 (captured from 041511b, v2.23.0).
   'update: true (nested in update)':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'update: false (nested in update)':

@@ -395,7 +395,7 @@ type Tag @node { id: ID! @unique }
   const options: { sort: Record<string, 'ASC' | 'DESC'>[] } = {
     sort: [{ topPost: 'DESC' }, { id: 'ASC' }],
   };
-  // vNEXT — strict item 47: a nested sort by a node-typed @cypher field
+  // v2.25.0 — strict item 47: a nested sort by a node-typed @cypher field
   // sorts as null by default (it failed in apoc.coll.sortMulti whenever a
   // value was a node) and throws in strict mode, so the strict golden
   // selects the relationship unsorted.
@@ -509,7 +509,7 @@ type Tag @node { id: ID! @unique }
       expect(find).toContain(
         'ORDER BY head([n__cfn IN [__sort_topPost] WHERE (n__cfn.`ownerId` = ',
       );
-      // vNEXT — the nested node-typed sort key reads no node at all.
+      // v2.25.0 — the nested node-typed sort key reads no node at all.
       if (!strict) expect(find).toContain('__sk0: null }');
       expect(count).toContain('head([n__cfn IN [__where_n_topPost] WHERE');
     });

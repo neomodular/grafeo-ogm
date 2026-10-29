@@ -1283,7 +1283,7 @@ export class MutationCompiler {
     // pre-2.3.0 cascade ignored values, so callers relied on it). Any other
     // non-object value — `false` included, which used to delete everything
     // too — is rejected below rather than silently reinterpreted.
-    // vNEXT — strict item 44: the shorthand warns (default) / throws (strict).
+    // v2.25.0 — strict item 44: the shorthand warns (default) / throws (strict).
     if (spec === true) this.checkNonObjectDelete(spec, relDef);
     const items = spec === true ? [{}] : Array.isArray(spec) ? spec : [spec];
     const lines: string[] = [];
@@ -1992,7 +1992,7 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
-    // vNEXT — strict item 46: a non-object field input writes nothing.
+    // v2.25.0 — strict item 46: a non-object field input writes nothing.
     this.checkNonObjectNestedValue('create field input', relInput, relDef);
     // v2.10.0 — strict item 22: only `create` / `connect` are read here
     // (and, v2.23.0 — strict item 43, `connectOrCreate` under strict mode).
@@ -2003,7 +2003,7 @@ export class MutationCompiler {
     const abstract = abstractTarget(targetNodeDef.typeName, this.schema);
 
     // --- create ---
-    // vNEXT — strict item 45: non-object create values / items.
+    // v2.25.0 — strict item 45: non-object create values / items.
     this.checkCreateValue(relInput.create, relDef);
     if (relInput.create) {
       const createItems = Array.isArray(relInput.create)
@@ -2135,7 +2135,7 @@ export class MutationCompiler {
     }
 
     // --- connect ---
-    // vNEXT — strict item 46: a falsy connect is skipped.
+    // v2.25.0 — strict item 46: a falsy connect is skipped.
     this.checkNonObjectNestedValue('connect', relInput.connect, relDef);
     if (relInput.connect) {
       const connectItems = Array.isArray(relInput.connect)
@@ -3050,7 +3050,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 44: a nested delete value that is `true` or falsy.
+   * v2.25.0 — strict item 44: a nested delete value that is `true` or falsy.
    * `true` is the undocumented pre-2.3.0 shorthand for "delete every
    * related node" (the target's `delete` policy still applies): in a nested
    * update item it ignores the item's `where`, so
@@ -3095,7 +3095,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 45: a nested `create` value (update item or create
+   * v2.25.0 — strict item 45: a nested `create` value (update item or create
    * field input) that is not an object or an array of objects.
    *
    * - A falsy value (`false`, `0`, `''`) is skipped: nothing is created.
@@ -3156,7 +3156,7 @@ export class MutationCompiler {
   }
 
   /**
-   * vNEXT — strict item 46: other nested write values that are not objects
+   * v2.25.0 — strict item 46: other nested write values that are not objects
    * and are skipped, writing nothing:
    *
    * - `'update'`: a nested update item's `update` (or its `node`) that is
@@ -3625,7 +3625,7 @@ export class MutationCompiler {
         const item = items[i];
         // v2.18.0 — pre-v2.18.0 a null / undefined item threw a raw TypeError.
         if (item == null) throw nullNestedItemError('update', relDef, item);
-        // vNEXT — strict item 46: a non-object item writes nothing.
+        // v2.25.0 — strict item 46: a non-object item writes nothing.
         this.checkNonObjectNestedValue('update item', item, relDef);
         const itemPrefix = `${relPrefix}_${i}`;
         // v2.10.0 — strict item 22: unknown keys in the item, its create
@@ -3635,7 +3635,7 @@ export class MutationCompiler {
         // --- delete (detach delete target nodes) ---
         // Shared with `compileDelete`'s cascade: where + target `delete`
         // policy, one CALL subquery per spec item (v2.3.0).
-        // vNEXT — strict item 44: a falsy delete (`false`, `0`, `''`) is
+        // v2.25.0 — strict item 44: a falsy delete (`false`, `0`, `''`) is
         // skipped (warned); strict throws, as for `true`.
         if (item.delete != null && !item.delete)
           this.checkNonObjectDelete(item.delete, relDef, true);
@@ -3803,7 +3803,7 @@ export class MutationCompiler {
         // (see the end of the item loop).
         const emitLinks = (): void => {
           // --- connect ---
-          // vNEXT — strict item 46: a falsy connect is skipped.
+          // v2.25.0 — strict item 46: a falsy connect is skipped.
           this.checkNonObjectNestedValue('connect', item.connect, relDef);
           if (item.connect) {
             const connectItems = Array.isArray(item.connect)
@@ -3874,7 +3874,7 @@ export class MutationCompiler {
           // Runs after disconnect and connect (as in @neo4j/graphql), so a
           // same-item `disconnect: [{}]` + `create` keeps the new node linked.
           // Pre-2.4.2 create ran first and the disconnect-all removed it.
-          // vNEXT — strict item 45: non-object create values / items.
+          // v2.25.0 — strict item 45: non-object create values / items.
           this.checkCreateValue(item.create, relDef);
           if (item.create) {
             const createItems = Array.isArray(item.create)
@@ -3999,7 +3999,7 @@ export class MutationCompiler {
 
         const emitUpdate = (): void => {
           // --- update (nested) ---
-          // vNEXT — strict item 46: a non-object update writes nothing (a
+          // v2.25.0 — strict item 46: a non-object update writes nothing (a
           // string / non-empty array crashed: OGMError in both modes).
           this.checkNonObjectNestedValue('update', item.update, relDef);
           if (item.update) {
@@ -4997,7 +4997,7 @@ function aliveGuard(nodeVar: string): string {
 
 /** A nested delete item's own `delete` asks for a deeper cascade. */
 /**
- * vNEXT — `a boolean (true)`, `an array`, or `{ node: a number (5) }` when
+ * v2.25.0 — `a boolean (true)`, `an array`, or `{ node: a number (5) }` when
  * `inner` (the `node` of `value`) is the non-object part, for messages.
  */
 function describeValue(value: unknown, inner: unknown = value): string {

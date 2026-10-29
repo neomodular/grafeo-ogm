@@ -281,7 +281,7 @@ describeApoc('NLS — node-typed @cypher nested sort key (live, APOC)', () => {
   it('default mode: a nested sort reads no node (a hidden one included)', async () => {
     // Pre-2.22.1 the sort key was y's friend a's hidden post: sortMulti
     // cannot compare nodes, so the query failed only when a hidden (or
-    // visible) node existed; 2.22.1 read a hidden node as null. vNEXT
+    // visible) node existed; 2.22.1 read a hidden node as null. v2.25.0
     // (strict item 47): the node-typed key always sorts as null.
     const rows = (await makeOgm(driver, undefined)
       .withContext({ userId: 'u1' })

@@ -1,5 +1,5 @@
 /**
- * vNEXT — the generated where input of a node-typed `@cypher` field: the
+ * v2.25.0 — the generated where input of a node-typed `@cypher` field: the
  * target's where (singular field) or `_SOME` / `_NONE` / `_ALL` / `_SINGLE`
  * (list field), as @neo4j/graphql 5.x offers and the runtime applies
  * (compiler invariant 5).
@@ -35,7 +35,7 @@ const typeDefs = /* GraphQL */ `
   }
 `;
 
-describe('generated where types for node-typed @cypher fields (vNEXT)', () => {
+describe('generated where types for node-typed @cypher fields (2.25.0)', () => {
   let generated = '';
   let errors: string[] = [];
 

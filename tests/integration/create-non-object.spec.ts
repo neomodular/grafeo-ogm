@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT, strict item 45): a nested create that is not an object.
+ * Live suite (v2.25.0, strict item 45): a nested create that is not an object.
  *
  * `create: true` / `[5]` / `[[]]` / `[{ node: true }]` (in a nested update
  * item or a create() field input) creates a target node with no input
@@ -37,7 +37,7 @@ const typeDefs = /* GraphQL */ `
 
 const garbage = (v: unknown) => v as never;
 
-describeLive('non-object nested creates (vNEXT) — live Neo4j', () => {
+describeLive('non-object nested creates (2.25.0) — live Neo4j', () => {
   const runId = `it-${randomUUID()}`;
   let driver: Driver;
 

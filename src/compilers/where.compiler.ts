@@ -1323,7 +1323,7 @@ export class WhereCompiler {
           );
       }
 
-      // vNEXT — a node-typed @cypher field filtered by its target's where.
+      // v2.25.0 — a node-typed @cypher field filtered by its target's where.
       if (isPlainObject(value)) {
         const cypherNode = this.tryCompileCypherNodeFilter(
           key,
@@ -1477,10 +1477,10 @@ export class WhereCompiler {
   }
 
   /**
-   * vNEXT — `where: { topPost: { title: 'x' } }` on a node-typed `@cypher`
+   * v2.25.0 — `where: { topPost: { title: 'x' } }` on a node-typed `@cypher`
    * field (its type a node, interface or union type), and
    * `posts_SOME` / `_NONE` / `_ALL` / `_SINGLE` on a list one, filter by the
-   * target type's where input, as `@neo4j/graphql` 5.x does. Pre-vNEXT the
+   * target type's where input, as `@neo4j/graphql` 5.x does. Pre-2.25.0 the
    * object was compared with the node (`node = map`), which never matches,
    * so the filter always returned nothing (and the quantifier keys compiled
    * as a stored property `posts_SOME`, never set).
@@ -3000,7 +3000,7 @@ function rewritePolicyFragment(
 }
 
 /**
- * vNEXT — `type` when it names a node, interface or union type (the type of
+ * v2.25.0 — `type` when it names a node, interface or union type (the type of
  * a node-typed `@cypher` field), `null` for a scalar or enum.
  */
 function resolveCypherNodeType(

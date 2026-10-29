@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT): sorting by `@cypher` fields below the root.
+ * Live suite (2.25.0): sorting by `@cypher` fields below the root.
  *
  * - A connection `sort` / typed `orderBy` on a scalar `@cypher` field
  *   compiled to `n0.<field>`, a stored property the field never has, so the
@@ -52,7 +52,7 @@ const typeDefs = /* GraphQL */ `
 `;
 
 describeLive(
-  'sorting by @cypher fields below the root (vNEXT) — live Neo4j with APOC',
+  'sorting by @cypher fields below the root (2.25.0) — live Neo4j with APOC',
   () => {
     let driver: Driver;
     const runId = `it-${randomUUID()}`;
@@ -179,7 +179,7 @@ describeLive(
       },
     );
 
-    // Pre-vNEXT apoc.coll.sortMulti failed with a ClassCastException as soon
+    // Pre-2.25.0 apoc.coll.sortMulti failed with a ClassCastException as soon
     // as a value was a node (a and b each have a top post).
     it.each([
       [
