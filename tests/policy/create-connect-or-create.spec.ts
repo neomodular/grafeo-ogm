@@ -239,7 +239,7 @@ describe('create() connectOrCreate — byte-identical without a bound policy', (
     expect(a[0].cypher).toContain('MERGE');
     expect(a[0].cypher).not.toContain('OPTIONAL MATCH');
 
-    // vNEXT — strict item 50: a bare model() on a policy-configured
+    // v2.24.0 — strict item 50: a bare model() on a policy-configured
     // strict OGM throws instead of silently applying no policy.
     expect(() => policyOgm([]).model('User')).toThrow(/applies no policy/);
     const c: Recorded[] = [];

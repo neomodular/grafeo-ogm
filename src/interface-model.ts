@@ -475,7 +475,7 @@ export class InterfaceModel<
     // WITH must preserve `__typename` (already in scope from the typename
     // resolution step above) AND any `__sel_*` aliases that the select
     // prelude has already projected.
-    // vNEXT — strict item 49: sorted + paged queries project the SELECT
+    // v2.24.0 — strict item 49: sorted + paged queries project the SELECT
     // `@cypher` fields after SKIP / LIMIT (see `Model.find`).
     const pageFirst = this.strictMode.strict && sortsAndPages(params?.options);
     let sortPre = '';

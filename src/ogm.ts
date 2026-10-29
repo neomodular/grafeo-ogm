@@ -446,7 +446,7 @@ export class OGM<
   }
 
   /**
-   * vNEXT — strict item 50: on an OGM configured with `policies`, a model
+   * v2.24.0 — strict item 50: on an OGM configured with `policies`, a model
    * from `ogm.model()` / `ogm.interfaceModel()` (no `withContext`) applies
    * NO policy — not the type's own, not its relationship targets'. 2.x
    * keeps that (byte-identical Cypher) and warns once per OGM and type;

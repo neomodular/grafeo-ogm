@@ -1,5 +1,5 @@
 /**
- * Live suite for multi-input `create` with nested ops (vNEXT perf).
+ * Live suite for multi-input `create` with nested ops (v2.24.0 perf).
  *
  * Before an item with nested ops, the variables of the items created
  * before it are folded into one `__created` list, so every WITH / CALL

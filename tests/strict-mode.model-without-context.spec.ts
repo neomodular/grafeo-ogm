@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 50: on an OGM configured with `policies`, a model
+ * v2.24.0 — strict item 50: on an OGM configured with `policies`, a model
  * from a bare `ogm.model()` / `ogm.interfaceModel()` (no `withContext`)
  * applies no policy. Default mode keeps that, byte-identical, and warns
  * once per OGM and type (`model-without-context`); strict mode throws

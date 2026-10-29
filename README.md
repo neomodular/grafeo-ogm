@@ -1730,7 +1730,7 @@ await posts.create({
 
 It runs after the field input's `create` and `connect`, with the same `MERGE`, `onCreate`, read guard and `create` policies as in an update item (above). `createMany()` and `upsert()` take no relationship fields, so they are unaffected. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field; the warning code is `nested-write-unknown-key`, as before.
 
-#### 49. Selected `@cypher` fields on a sorted, paged `find` (since vNEXT)
+#### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript
 await users.find({
@@ -1745,7 +1745,7 @@ A performance change, not a fix: both modes return the same rows with the same v
 
 **Tie order.** Rows that are equal on every sort key may come back in a different order, or a different one of them may land on a page boundary: Neo4j plans a bounded `Top` instead of a full `Sort`, and neither keeps ties in a defined order. Cypher never guaranteed their order, but if you page on a key that is not unique, add a unique field (`id`) as the last sort key, in either mode. Default mode emits exactly the previous Cypher and does not warn, as its result is correct.
 
-#### 50. A bare `ogm.model()` on an OGM configured with `policies` (since vNEXT)
+#### 50. A bare `ogm.model()` on an OGM configured with `policies` (since 2.24.0)
 
 ```typescript
 const ogm = new OGM({ typeDefs, driver, policies });
@@ -2098,7 +2098,7 @@ const Books = ogm.withContext({ userId, capabilities, tierIds }).model('Book');
 const visible = await Books.find({ where: { published_GT: '2024-01-01' } });
 ```
 
-> **Policies apply only through `withContext`.** A model from a bare `ogm.model('Book')` / `ogm.interfaceModel(...)` carries no context, so it applies **no** policy: not the type's own, and not those of the types it reaches through relationships, nested writes or connects. Use `ogm.withContext(ctx).model(...)` for every request, and `ogm.unsafe.bypassPolicies().model(...)` when you mean system access (migrations, seeds, admin jobs). Since vNEXT a bare lookup on an OGM with `policies` warns once per OGM and type in 2.x and throws `OGMError` under `strict: true` (see [strict item 50](#50-a-bare-ogmmodel-on-an-ogm-configured-with-policies-since-vnext)).
+> **Policies apply only through `withContext`.** A model from a bare `ogm.model('Book')` / `ogm.interfaceModel(...)` carries no context, so it applies **no** policy: not the type's own, and not those of the types it reaches through relationships, nested writes or connects. Use `ogm.withContext(ctx).model(...)` for every request, and `ogm.unsafe.bypassPolicies().model(...)` when you mean system access (migrations, seeds, admin jobs). Since v2.24.0 a bare lookup on an OGM with `policies` warns once per OGM and type in 2.x and throws `OGMError` under `strict: true` (see [strict item 50](#50-a-bare-ogmmodel-on-an-ogm-configured-with-policies-since-2240)).
 
 The Cypher emitted for the call above is roughly:
 

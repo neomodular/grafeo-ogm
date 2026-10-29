@@ -350,7 +350,7 @@ describe('MutationCompiler', () => {
       expect(result.cypher.endsWith('\nRETURN n')).toBe(true);
     });
 
-    // vNEXT (perf) — before an item with nested ops, the earlier items'
+    // v2.24.0 (perf) — before an item with nested ops, the earlier items'
     // vars fold into one `__created` list, so the carried scope stays
     // `__created, n_<i>` instead of growing with every item (quadratic
     // statement, ~3x slower Neo4j planning at 100 items).
@@ -371,7 +371,7 @@ describe('MutationCompiler', () => {
           bookNode,
         );
         const lines = result.cypher.split('\n');
-        // item 0 has nothing to fold: unchanged pre-vNEXT shape
+        // item 0 has nothing to fold: unchanged pre-v2.24.0 shape
         expect(lines.slice(0, 3)).toEqual([lines[0], 'WITH n', 'CALL {']);
         expect(lines).toContain('WITH [n, n_1] AS __created, n_2');
         expect(lines).toContain('WITH __created + [n_2] AS __created, n_3');

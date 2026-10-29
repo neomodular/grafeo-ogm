@@ -145,7 +145,7 @@ export function orderBeforeProjection(post: string): string[] {
 }
 
 /**
- * vNEXT — strict item 49: whether `options` both sort (a non-empty `sort`)
+ * v2.24.0 — strict item 49: whether `options` both sort (a non-empty `sort`)
  * and page (`offset` or `limit`). Only then does moving the SELECT
  * `@cypher` preludes after the paging save work: an unsorted LIMIT already
  * stops early, and an unpaged sort evaluates every row either way.

@@ -1,5 +1,5 @@
 /**
- * Live suite, strict item 49 (vNEXT): with `strict: true` a selected
+ * Live suite, strict item 49 (2.24.0): with `strict: true` a selected
  * `@cypher` field is projected after ORDER BY / SKIP / LIMIT when the query
  * sorts and pages. Every case runs on a default and a strict OGM and pins
  * that the page is the same rows in the same order with the same values,

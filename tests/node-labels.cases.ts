@@ -81,7 +81,7 @@ export const labelPolicies = {
 type Run = (ogm: OGM) => Promise<unknown>;
 /**
  * The OGM has `policies`: shapes without a context take the explicit
- * system-access path (vNEXT — strict item 50 throws on a bare
+ * system-access path (v2.24.0 — strict item 50 throws on a bare
  * `ogm.model()` of a policy-configured OGM). Same Cypher as a bare model.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

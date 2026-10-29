@@ -1,5 +1,5 @@
 /**
- * Live suite, strict item 50 (vNEXT): on an OGM configured with
+ * Live suite, strict item 50 (2.24.0): on an OGM configured with
  * `policies`, a bare `ogm.model()` applies no policy. Default mode keeps
  * that (it returns rows the read policy hides, and warns once); strict
  * mode refuses the lookup; `withContext` and `unsafe.bypassPolicies()`

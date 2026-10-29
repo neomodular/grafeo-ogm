@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 49: with `strict: true`, a sorted AND paged `find`
+ * v2.24.0 — strict item 49: with `strict: true`, a sorted AND paged `find`
  * projects the selected `@cypher` fields AFTER ORDER BY / SKIP / LIMIT, so
  * they run once per returned row. Default mode (strict unset / false) is
  * byte-identical to v2.23.0. Results:

@@ -988,11 +988,11 @@ export class Model<
     // projections for any `@cypher` sorts and must be inserted BEFORE the
     // RETURN; `post` is the trailing ORDER BY / SKIP / LIMIT.
     //
-    // vNEXT — strict item 49: when the query sorts AND pages, strict mode
+    // v2.24.0 — strict item 49: when the query sorts AND pages, strict mode
     // projects the SELECT `@cypher` fields AFTER ORDER BY / SKIP / LIMIT,
     // once per returned row instead of once per matched row (each prelude
     // yields exactly one row per node, so the page holds the same rows).
-    // Default mode keeps the pre-vNEXT order, byte-identical.
+    // Default mode keeps the pre-v2.24.0 order, byte-identical.
     const pageFirst = this.strictMode.strict && sortsAndPages(params?.options);
     const opts = params?.options
       ? this.compileOptions(

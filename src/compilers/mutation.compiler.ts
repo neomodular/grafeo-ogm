@@ -793,10 +793,10 @@ export class MutationCompiler {
     const lines: string[] = [];
     const params: Record<string, unknown> = {};
     const createdVars: string[] = [];
-    // vNEXT — created vars not yet folded into the `__created` list. Before
+    // v2.24.0 — created vars not yet folded into the `__created` list. Before
     // an item with nested ops, the earlier items' vars are folded into ONE
     // list variable, so its WITH / CALL imports carry `__created, n_<i>`
-    // instead of every earlier var. Pre-vNEXT each item carried all of them:
+    // instead of every earlier var. Pre-2.24.0 each item carried all of them:
     // the statement grew quadratically and Neo4j planned a 100-item create
     // with connects in ~0.5 s (~3x slower than folded) on every cache miss.
     let pending: string[] = [];

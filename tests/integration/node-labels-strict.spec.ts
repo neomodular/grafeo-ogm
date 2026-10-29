@@ -78,7 +78,7 @@ async function cypher(
 describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
   let driver: Driver;
   let strict: OGM;
-  /** System access to the policy-bound strict OGM (vNEXT — strict item 50). */
+  /** System access to the policy-bound strict OGM (v2.24.0 — strict item 50). */
   let system: OGM;
   let lenient: OGM;
   const runId = `lb${Date.now()}${Math.floor(Math.random() * 1e6)}`;
