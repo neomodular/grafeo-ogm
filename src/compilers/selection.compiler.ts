@@ -3528,6 +3528,33 @@ export class SelectionCompiler {
       // the target's read policy, as its projection is (v2.20.1). Pre-2.22.1
       // the list was ordered by nodes the caller cannot read. The inline
       // expression is the statement's first row, never the whole list.
+      // vNEXT — strict item 47: a node-typed key made apoc.coll.sortMulti
+      // fail with a ClassCastException whenever a value was a node (and was
+      // a no-op when every value was null). Default: the key sorts as
+      // `null` (warned), which keeps every result that did not fail; strict
+      // throws.
+      if (
+        propDef.isCypher &&
+        propDef.cypherStatement &&
+        !isScalarProperty(propDef, this.schema)
+      ) {
+        const label = `${targetDef.typeName}.${field}`;
+        const problem = `it returns ${propDef.isArray ? 'a list of nodes' : 'a node'} (type "${propDef.type}"), which has no sort order`;
+        if (this.strictMode.strict)
+          throw new OGMError(
+            `Cannot sort a relationship by the @cypher field "${label}": ${problem}.`,
+          );
+        this.strictMode.warn(
+          'relationship-sort-cypher-node-field',
+          label,
+          `A relationship sort by the @cypher field "${label}" is ignored: ${problem}. ` +
+            'Before vNEXT the query failed in apoc.coll.sortMulti whenever a value was a node.',
+          'throw an OGMError for a relationship sort key that cannot be sorted by',
+        );
+        sortParts.push(`__sk${i}: null`);
+        sortKeys.push(direction === 'ASC' ? `'^__sk${i}'` : `'__sk${i}'`);
+        return;
+      }
       const value =
         propDef?.isCypher && propDef.cypherStatement
           ? this.guardCypherNodeValue(

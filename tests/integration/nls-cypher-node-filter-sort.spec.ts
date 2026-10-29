@@ -272,26 +272,32 @@ describeApoc('NLS — node-typed @cypher nested sort key (live, APOC)', () => {
   });
   afterAll(() => cleanup(driver, runId));
 
-  it.each([
-    ['default', undefined],
-    ['strict', true],
-  ])(
-    '%s mode: a nested sort reads a hidden node as null',
-    async (_label, strict) => {
-      // Pre-2.22.1 the sort key was y's friend a's hidden post: sortMulti
-      // cannot compare nodes, so the query failed only when a hidden (or
-      // visible) node existed. With the hidden node read as null it runs.
-      const rows = (await makeOgm(driver, strict)
+  const query = {
+    where: { id: `${runId}-y` },
+    selectionSet:
+      '{ id friends(options: { sort: [{ topPost: DESC }] }) { id } }',
+  };
+
+  it('default mode: a nested sort reads no node (a hidden one included)', async () => {
+    // Pre-2.22.1 the sort key was y's friend a's hidden post: sortMulti
+    // cannot compare nodes, so the query failed only when a hidden (or
+    // visible) node existed; 2.22.1 read a hidden node as null. vNEXT
+    // (strict item 47): the node-typed key always sorts as null.
+    const rows = (await makeOgm(driver, undefined)
+      .withContext({ userId: 'u1' })
+      .model('ItNfUser')
+      .find(query)) as Row[];
+    expect(
+      (rows[0].friends as Row[]).map((f) => f.id as string).sort(),
+    ).toEqual([`${runId}-a`, `${runId}-b`]);
+  });
+
+  it('strict mode: a nested sort by a node-typed @cypher field throws', async () => {
+    await expect(
+      makeOgm(driver, true)
         .withContext({ userId: 'u1' })
         .model('ItNfUser')
-        .find({
-          where: { id: `${runId}-y` },
-          selectionSet:
-            '{ id friends(options: { sort: [{ topPost: DESC }] }) { id } }',
-        })) as Row[];
-      expect(
-        (rows[0].friends as Row[]).map((f) => f.id as string).sort(),
-      ).toEqual([`${runId}-a`, `${runId}-b`]);
-    },
-  );
+        .find(query),
+    ).rejects.toThrow('Cannot sort a relationship by the @cypher field');
+  });
 });

@@ -178,5 +178,62 @@ describeLive(
         );
       },
     );
+
+    // Pre-vNEXT apoc.coll.sortMulti failed with a ClassCastException as soon
+    // as a value was a node (a and b each have a top post).
+    it.each([
+      [
+        'selectionSet',
+        {
+          selectionSet:
+            '{ friends(options: { sort: [{ topPost: DESC }] }) { name } }',
+        },
+      ],
+      [
+        'typed select',
+        {
+          select: {
+            friends: { orderBy: { topPost: 'DESC' }, select: { name: true } },
+          },
+        },
+      ],
+    ] as const)(
+      'item 47: a nested relationship sort by a node-typed @cypher field (%s) sorts as null (default) / throws (strict)',
+      async (_n, sel) => {
+        const lenient = make(false);
+        const query = { where: { id: uid }, ...sel } as never;
+        const rows = (await lenient.ogm.model('ItCfsUser').find(query)) as {
+          friends: { name: string }[];
+        }[];
+        expect(rows[0].friends.map((f) => f.name).sort()).toEqual([
+          'a',
+          'b',
+          'c',
+        ]);
+        expect(
+          lenient.warnings(
+            'A relationship sort by the @cypher field "ItCfsUser.topPost" is ignored',
+          ),
+        ).toHaveLength(1);
+        await expect(
+          make(true).ogm.model('ItCfsUser').find(query),
+        ).rejects.toThrow(
+          new OGMError(
+            'Cannot sort a relationship by the @cypher field "ItCfsUser.topPost": it returns a node (type "ItCfsPost"), which has no sort order.',
+          ),
+        );
+      },
+    );
+
+    it('a nested relationship sort by a scalar @cypher field still sorts', async () => {
+      const rows = (await make(false)
+        .ogm.model('ItCfsUser')
+        .find({
+          where: { id: uid },
+          selectionSet:
+            '{ friends(options: { sort: [{ score: DESC }] }) { name } }',
+        })) as { friends: { name: string }[] }[];
+      expect(rows[0].friends.map((f) => f.name)).toEqual(['b', 'a', 'c']);
+    });
   },
 );

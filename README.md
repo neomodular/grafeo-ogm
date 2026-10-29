@@ -1776,6 +1776,8 @@ await users.find({ selectionSet: '{ friendsConnection(sort: [{ node: { topPost: 
 
 A connection `sort` (selectionSet) or `orderBy` (typed `select`) on a `@cypher` field read a stored property of that name, which the field never has, so the sort was ignored. Since vNEXT a scalar `@cypher` field sorts by its statement's value in both modes, as a nested relationship sort does. Two kinds of field still cannot be sorted by: a node-typed field (a node has no sort order) and a statement that aggregates (it cannot be computed per edge; sort at the top level instead). Default mode keeps ignoring them and warns; strict mode throws. The warning code is `connection-sort-cypher-field`, logged once per OGM instance, field and connection.
 
+The same applies to a nested relationship sort (`friends(options: { sort: [{ topPost: DESC }] })`, typed `orderBy`) by a node-typed `@cypher` field. Before vNEXT it failed in `apoc.coll.sortMulti` (`ClassCastException`) as soon as one value was a node; since vNEXT default mode sorts that key as `null` (no order, as when every value was `null`) and warns, and strict mode throws. The warning code is `relationship-sort-cypher-node-field`, logged once per OGM instance and field. A root `options.sort` by a node-typed `@cypher` field is unchanged: Neo4j orders nodes by an internal order that has no meaning, so do not rely on it.
+
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript
