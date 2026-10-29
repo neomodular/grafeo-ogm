@@ -407,7 +407,7 @@ function emitFieldInput(
     members.push(`  connect?: InputMaybe<${prefix}ConnectFieldInput>;`);
     members.push(`  create?: InputMaybe<${prefix}CreateFieldInput>;`);
   }
-  // vNEXT — strict item 43 also applies `connectOrCreate` in a create.
+  // v2.23.0 — strict item 43 also applies `connectOrCreate` in a create.
   members.push(
     ...connectOrCreateMember(prefix, rel, schema.nodes.get(rel.target)),
   );
@@ -846,7 +846,7 @@ function emitConnectOrCreateNodeTypes(
 
 /**
  * `connectOrCreate` of an update field input (v2.22.0) or a create field
- * input (vNEXT), when the target can take it.
+ * input (2.23.0), when the target can take it.
  */
 function connectOrCreateMember(
   prefix: string,

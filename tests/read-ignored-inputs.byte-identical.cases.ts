@@ -235,7 +235,7 @@ export const SHAPE_CASES: Case[] = [
       },
     }),
   ],
-  // vNEXT — connection select shapes, warned since vNEXT (captured from v2.22.0).
+  // v2.23.0 — connection select shapes, warned since 2.23.0 (captured from v2.22.0).
   [
     'typed: connection edges wrapped in select',
     {},

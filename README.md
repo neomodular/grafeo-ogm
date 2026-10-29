@@ -1286,7 +1286,7 @@ await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } 
 
 Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) is left out of the result in 2.x, with a one-time warning; under `strict: true` it selects all scalar fields of the target, as `true` does.
 
-Since vNEXT the same check covers a typed connection select, which was dropped silently in both modes before:
+Since v2.23.0 the same check covers a typed connection select, which was dropped silently in both modes before:
 
 ```typescript
 await users.find({
@@ -1672,7 +1672,7 @@ await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id
 
 A string, number, boolean or array where a disconnect item (or a relationship's disconnect value) belongs carries no `where`, so it compiled to the blanket form, which unlinks every related node the caller can read. Strict mode rejects it, as a non-object connect item has been rejected since 2.5.1. This extends [item 31](#31-a-null--undefined-item-in-a-disconnect-array-since-2180) (`null` / `undefined` items) to the other non-objects, at every depth: top-level disconnects, per union / interface member, a `disconnect` inside another disconnect item, and nested `update: { posts: [{ disconnect: [...] }] }`. `{ posts: [{}] }` and `{ posts: null }` stay the blanket disconnect in both modes. The warning code is `disconnect-non-object-item`, logged once per OGM instance and relationship field.
 
-Since vNEXT this also covers a falsy `disconnect` in a nested update item (`update: { posts: [{ disconnect: false }] }`, or `0` / `''`). 2.x skips it, so nothing is unlinked, and warns (same code, its own message); strict mode throws the same `OGMError` as for `true`, before anything runs. `disconnect: null` / `undefined` in an item is still no disconnect, without a warning.
+Since v2.23.0 this also covers a falsy `disconnect` in a nested update item (`update: { posts: [{ disconnect: false }] }`, or `0` / `''`). 2.x skips it, so nothing is unlinked, and warns (same code, its own message); strict mode throws the same `OGMError` as for `true`, before anything runs. `disconnect: null` / `undefined` in an item is still no disconnect, without a warning.
 
 #### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since 2.21.0)
 
@@ -1714,7 +1714,7 @@ await users.update({
 
 The generated types offer `connectOrCreate` on every update field input whose target has a `@unique` / `@id` field (`<Type>UniqueWhere`, `<Type>ConnectOrCreateWhere`, `<Type>OnCreateInput`, `<Type><Field>ConnectOrCreateFieldInput`, named as upstream) and `create` / `connectOrCreate` / `delete` on `update()`. The warning codes are `unknown-param` (root ops) and `nested-write-unknown-key` (`connectOrCreate` in an item), as before.
 
-Since vNEXT the same applies to `connectOrCreate` in a create field input, as `@neo4j/graphql` 5.x accepts it: in `create()` and in the relationship fields of every nested create (inside `create()` or inside an update item):
+Since v2.23.0 the same applies to `connectOrCreate` in a create field input, as `@neo4j/graphql` 5.x accepts it: in `create()` and in the relationship fields of every nested create (inside `create()` or inside an update item):
 
 ```typescript
 await posts.create({

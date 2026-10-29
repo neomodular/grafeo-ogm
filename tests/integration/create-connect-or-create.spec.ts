@@ -1,5 +1,5 @@
 /**
- * Live suite — vNEXT, strict item 43: `connectOrCreate` in a create field
+ * Live suite — v2.23.0, strict item 43: `connectOrCreate` in a create field
  * input (`create()`, and the relationship fields of every nested create),
  * as @neo4j/graphql 5.x accepts it.
  *

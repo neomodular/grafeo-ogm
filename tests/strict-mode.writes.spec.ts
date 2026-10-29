@@ -351,7 +351,7 @@ describe('item 41 — a disconnect item that is not an object (2.21.0)', () => {
     expect(records).toEqual([]);
   });
 
-  // vNEXT — a falsy disconnect of a nested update item was skipped silently.
+  // v2.23.0 — a falsy disconnect of a nested update item was skipped silently.
   const falsy: [string, string, string][] = [
     ['disconnect: false (nested in update)', 'a boolean', 'false'],
     ['disconnect: 0 (nested in update)', 'a number', '0'],

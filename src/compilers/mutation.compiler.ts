@@ -536,7 +536,7 @@ export class MutationCompiler {
     if (!isPlainObject(input)) return;
     const { what } = NESTED_WRITE_SHAPES[shape];
     // v2.22.0 — strict item 43: strict mode applies `connectOrCreate`
-    // (in a create field input since vNEXT).
+    // (in a create field input since 2.23.0).
     const allowed = !this.strictMode.strict
       ? NESTED_WRITE_SHAPES[shape].keys
       : shape === 'update item'
@@ -1959,7 +1959,7 @@ export class MutationCompiler {
     let counter = 0;
 
     // v2.10.0 — strict item 22: only `create` / `connect` are read here
-    // (and, vNEXT — strict item 43, `connectOrCreate` under strict mode).
+    // (and, v2.23.0 — strict item 43, `connectOrCreate` under strict mode).
     this.checkNestedWriteKeys(relInput, 'create field input', relDef);
     this.checkCreateItemKeys(relInput.create, relDef);
 
@@ -2133,7 +2133,7 @@ export class MutationCompiler {
     }
 
     // --- connectOrCreate ---
-    // vNEXT — strict item 43: in a create field input too (`create()` and
+    // v2.23.0 — strict item 43: in a create field input too (`create()` and
     // every nested create), after `create` and `connect`. Default mode
     // ignores it (and warns, see checkNestedWriteKeys). Same item compiler,
     // read guard and policies as in an update item.
@@ -2977,7 +2977,7 @@ export class MutationCompiler {
     item: unknown,
     relDef: RelationshipDefinition,
     /**
-     * vNEXT — the value is a falsy `disconnect` of a nested update item
+     * v2.23.0 — the value is a falsy `disconnect` of a nested update item
      * (`posts: [{ disconnect: false }]`), which 2.x skips: nothing is
      * unlinked, so the warning says so instead of "EVERY related node".
      */
@@ -3434,7 +3434,7 @@ export class MutationCompiler {
         }
 
         // --- disconnect (runs before connect so "disconnect all + connect new" works) ---
-        // vNEXT — strict item 41 also covers a falsy disconnect (`0`, `''`,
+        // v2.23.0 — strict item 41 also covers a falsy disconnect (`0`, `''`,
         // `false`): 2.x skips it (warned), strict throws like `true` / `5`.
         if (item.disconnect != null && !item.disconnect)
           this.checkNonObjectDisconnectItem(item.disconnect, relDef, true);
@@ -4280,7 +4280,7 @@ const UPDATE_ITEM_KEYS_STRICT: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * vNEXT — strict item 43: the keys of a create field input (`create()`, a
+ * v2.23.0 — strict item 43: the keys of a create field input (`create()`, a
  * nested create's relationship fields) under strict mode, which also
  * applies `connectOrCreate` there.
  */

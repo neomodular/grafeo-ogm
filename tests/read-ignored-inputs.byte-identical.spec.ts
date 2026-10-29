@@ -153,7 +153,7 @@ const V270: Record<string, { cypher: string; params: unknown }> = {
       'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { properties: e0 { .`note` } }] } }',
     params: {},
   },
-  // vNEXT — connection select shapes, captured from v2.22.0 (ad90081).
+  // v2.23.0 — connection select shapes, captured from v2.22.0 (ad90081).
   'typed: connection edges wrapped in select': {
     cypher:
       'MATCH (n:`LbUser`)\nRETURN n { .`id`, postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | {  }] } }',

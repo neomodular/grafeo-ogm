@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 43: `connectOrCreate` in a create field input
+ * v2.23.0 — strict item 43: `connectOrCreate` in a create field input
  * (`create()`, and the relationship fields of every nested create).
  *
  * - Default mode: ignored, as before (strict item 22 warns once); the

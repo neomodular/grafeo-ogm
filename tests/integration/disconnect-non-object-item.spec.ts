@@ -212,7 +212,7 @@ describeLive('non-object disconnect items (2.21.0) — live Neo4j', () => {
     },
   );
 
-  // vNEXT — a falsy disconnect in a nested update item was skipped in both
+  // v2.23.0 — a falsy disconnect in a nested update item was skipped in both
   // modes with no warning, while `true` / `5` hit item 41.
   it.each([
     ['false', false],

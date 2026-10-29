@@ -99,7 +99,7 @@ describeLive('selection shape mismatches — live Neo4j', () => {
     ).rejects.toThrow(OGMError);
   });
 
-  // vNEXT — a connection select in a shape the runtime cannot honour was
+  // v2.23.0 — a connection select in a shape the runtime cannot honour was
   // dropped silently in both modes (`edges: [{}]`).
   const wrappedEdges = {
     id: true,

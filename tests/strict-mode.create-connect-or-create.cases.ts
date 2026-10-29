@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 43: `connectOrCreate` in a create field input
+ * v2.23.0 — strict item 43: `connectOrCreate` in a create field input
  * (`create()` and the relationship fields of a nested create), shared by
  * the unit spec and its byte-identical guard. Schema: `rootOpsTypeDefs`.
  */

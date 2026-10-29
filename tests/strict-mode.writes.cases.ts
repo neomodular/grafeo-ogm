@@ -193,7 +193,7 @@ export const badWriteShapes: Record<string, Run> = {
       where,
       update: { posts: [{ disconnect: [['p1'] as never] }] },
     }),
-  // vNEXT — strict item 41, falsy nested disconnect (captured from ad90081, v2.22.0).
+  // v2.23.0 — strict item 41, falsy nested disconnect (captured from ad90081, v2.22.0).
   'disconnect: false (nested in update)': (ogm) =>
     user(ogm).update({
       where,

@@ -777,13 +777,13 @@ export class SelectNormalizer {
   }
 
   /**
-   * vNEXT — report a connection select value the runtime cannot honour,
+   * v2.23.0 — report a connection select value the runtime cannot honour,
    * as {@link SelectNormalizer.checkRelationshipShape} does for a
    * relationship (strict items 16 / 17): a value that is neither `true` nor
    * `{ select, where?, orderBy? }`, a key the connection, its `select`, its
    * `edges` or an edge's `node` / `properties` does not take, and
    * `totalCount` / `edges` / `node` / `properties` given a value of the
-   * wrong kind. Pre-vNEXT all of them were dropped silently in both modes —
+   * wrong kind. Pre-2.23.0 all of them were dropped silently in both modes —
    * `edges: { select: { node, properties } }` came back as `edges: [{}]`.
    * 2.x output is unchanged (warned); strict throws.
    */

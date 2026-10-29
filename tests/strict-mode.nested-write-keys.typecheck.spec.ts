@@ -28,7 +28,7 @@ const ITEM = ['connect', 'create', 'delete', 'disconnect', 'update', 'where'];
  */
 const ITEM_COC = [...ITEM, 'connectOrCreate'].sort();
 const FIELD_INPUT = ['connect', 'create'];
-/** vNEXT — strict item 43: `connectOrCreate` in a create field input too. */
+/** v2.23.0 — strict item 43: `connectOrCreate` in a create field input too. */
 const FIELD_INPUT_COC = [...FIELD_INPUT, 'connectOrCreate'].sort();
 const WRAPPER = ['edge', 'node'];
 
@@ -72,7 +72,7 @@ const crt: UserCreateInput = {
   // @ts-expect-error — "creat" is not a key of the relationship field input
   media: { Post: { creat: [] } },
 };
-// vNEXT — strict item 43: connectOrCreate in a create field input.
+// v2.23.0 — strict item 43: connectOrCreate in a create field input.
 const coc: UserCreateInput = {
   name: 'b',
   posts: {

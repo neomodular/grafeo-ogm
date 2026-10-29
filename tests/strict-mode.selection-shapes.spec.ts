@@ -142,7 +142,7 @@ const CASES: Array<{
       'Field "stars" in select on relationship properties type "LbWrote" is a scalar field (Int): select it with `stars: true`.',
     outcome: '2.x leaves it out of the result.',
   },
-  // vNEXT — connection select shapes (silently dropped before vNEXT).
+  // v2.23.0 — connection select shapes (silently dropped before v2.23.0).
   {
     label: 'typed: connection given a number',
     run: typed({ postsConnection: 1 }),
@@ -222,7 +222,7 @@ const CASES: Array<{
   },
 ];
 
-/** vNEXT — keys a connection's `select` / `edges` does not take. */
+/** v2.23.0 — keys a connection's `select` / `edges` does not take. */
 const UNKNOWN_CONNECTION_KEYS: Array<{
   label: string;
   run: (m: ModelOf) => Promise<unknown>;
@@ -263,7 +263,7 @@ const UNKNOWN_CONNECTION_KEYS: Array<{
   },
 ];
 
-describe('vNEXT — unknown keys in a typed connection select', () => {
+describe('v2.23.0 — unknown keys in a typed connection select', () => {
   it.each(UNKNOWN_CONNECTION_KEYS.map((c) => [c.label, c] as const))(
     'default: %s warns once, output unchanged',
     async (_label, c) => {

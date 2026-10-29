@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 43: node-level security on `connectOrCreate` in a
+ * v2.23.0 — strict item 43: node-level security on `connectOrCreate` in a
  * create field input (`create()` and every nested create), as for the
  * update item's (v2.22.0):
  *

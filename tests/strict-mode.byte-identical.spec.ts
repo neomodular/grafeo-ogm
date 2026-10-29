@@ -75,7 +75,7 @@ const V253: Record<string, string> = {
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_posts_0:`WROTE`]->(target_posts_0:`Post`)\nDELETE r_posts_0\nRETURN count(*) AS _r_posts_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'disconnect: array item (nested in update)':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nWITH n\nCALL {\nWITH n\nOPTIONAL MATCH (n)-[r_disc_posts_0_0:`WROTE`]->()\nDELETE r_disc_posts_0_0\nRETURN count(*) AS _r_disc_posts_0_0\n}\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
-  // vNEXT — strict item 41, falsy nested disconnect (captured from ad90081, v2.22.0).
+  // v2.23.0 — strict item 41, falsy nested disconnect (captured from ad90081, v2.22.0).
   'disconnect: false (nested in update)':
     "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'disconnect: 0 (nested in update)':

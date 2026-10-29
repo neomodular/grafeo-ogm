@@ -59,7 +59,7 @@ export interface BadNestedShape {
 const ITEM = '"where", "update", "connect", "disconnect", "create", "delete"';
 const ITEM_STRICT = `${ITEM}, "connectOrCreate"`;
 const FIELD_INPUT = '"create", "connect"';
-/** vNEXT — strict item 43: strict mode applies `connectOrCreate` in a create field input. */
+/** v2.23.0 — strict item 43: strict mode applies `connectOrCreate` in a create field input. */
 const FIELD_INPUT_STRICT = `${FIELD_INPUT}, "connectOrCreate"`;
 const WRAPPER = '"node", "edge"';
 const UPDATE_ITEM = 'a nested update item';

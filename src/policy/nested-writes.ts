@@ -125,7 +125,7 @@ export function assertNestedCreatesAllowed(
   inputs: ReadonlyArray<Record<string, unknown>>,
   bundle: PolicyContextBundle | null,
   /**
-   * vNEXT — strict item 43: check `connectOrCreate` in create field inputs
+   * v2.23.0 — strict item 43: check `connectOrCreate` in create field inputs
    * too (strict mode, the only mode that applies them).
    */
   options: UpdateWalkOptions = {},
@@ -186,7 +186,7 @@ function walkCreate(
           depth,
           options,
         );
-        // vNEXT — strict item 43: a create field input's connectOrCreate.
+        // v2.23.0 — strict item 43: a create field input's connectOrCreate.
         if (options.connectOrCreate && relInput.connectOrCreate != null)
           checkConnectOrCreates(
             schema,
