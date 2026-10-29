@@ -59,7 +59,9 @@ export function emitInputTypes(schema: SchemaMetadata): string {
         emittedTypeNames.add(`${prefix}DisconnectInput`);
         emittedTypeNames.add(`${prefix}DeleteInput`);
 
-        blocks.push(...emitUnionRelFieldInput(node.typeName, rel, members));
+        blocks.push(
+          ...emitUnionRelFieldInput(node.typeName, rel, members, schema),
+        );
         blocks.push(
           ...emitUnionRelCreateFieldInput(node.typeName, rel, members),
         );
@@ -93,7 +95,7 @@ export function emitInputTypes(schema: SchemaMetadata): string {
         );
       } else {
         // Normal target → flat types
-        blocks.push(emitFieldInput(node.typeName, rel));
+        blocks.push(emitFieldInput(node.typeName, rel, schema));
         blocks.push(emitCreateFieldInput(node.typeName, rel));
         blocks.push(emitConnectFieldInput(node.typeName, rel, schema));
         blocks.push(emitDisconnectFieldInput(node.typeName, rel, schema));
@@ -389,7 +391,11 @@ function emitDeleteInput(node: NodeDefinition, schema: SchemaMetadata): string {
 // Per-relationship field input types (normal, non-union targets)
 // ---------------------------------------------------------------------------
 
-function emitFieldInput(typeName: string, rel: RelationshipDefinition): string {
+function emitFieldInput(
+  typeName: string,
+  rel: RelationshipDefinition,
+  schema: SchemaMetadata,
+): string {
   const pascal = toPascalCase(rel.fieldName);
   const prefix = `${typeName}${pascal}`;
   const members: string[] = [];
@@ -401,6 +407,10 @@ function emitFieldInput(typeName: string, rel: RelationshipDefinition): string {
     members.push(`  connect?: InputMaybe<${prefix}ConnectFieldInput>;`);
     members.push(`  create?: InputMaybe<${prefix}CreateFieldInput>;`);
   }
+  // vNEXT — strict item 43 also applies `connectOrCreate` in a create.
+  members.push(
+    ...connectOrCreateMember(prefix, rel, schema.nodes.get(rel.target)),
+  );
 
   return `export type ${prefix}FieldInput = {\n${members.join('\n')}\n};`;
 }
@@ -549,6 +559,7 @@ function emitUnionRelFieldInput(
   typeName: string,
   rel: RelationshipDefinition,
   members: string[],
+  schema: SchemaMetadata,
 ): string[] {
   const pascal = toPascalCase(rel.fieldName);
   const prefix = `${typeName}${pascal}`;
@@ -572,6 +583,9 @@ function emitUnionRelFieldInput(
     );
     subMembers.push(
       `  create?: InputMaybe<${wrapArray(`${prefix}${m}CreateFieldInput`, rel.isArray)}>;`,
+    );
+    subMembers.push(
+      ...connectOrCreateMember(`${prefix}${m}`, rel, schema.nodes.get(m)),
     );
     blocks.push(
       `export type ${prefix}${m}FieldInput = {\n${subMembers.join('\n')}\n};`,
@@ -830,7 +844,10 @@ function emitConnectOrCreateNodeTypes(
   ];
 }
 
-/** `connectOrCreate` of an update field input, when the target can take it. */
+/**
+ * `connectOrCreate` of an update field input (v2.22.0) or a create field
+ * input (vNEXT), when the target can take it.
+ */
 function connectOrCreateMember(
   prefix: string,
   rel: RelationshipDefinition,

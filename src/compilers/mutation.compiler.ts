@@ -535,11 +535,15 @@ export class MutationCompiler {
   ): void {
     if (!isPlainObject(input)) return;
     const { what } = NESTED_WRITE_SHAPES[shape];
-    // v2.22.0 — strict item 43: strict mode applies `connectOrCreate`.
-    const allowed =
-      shape === 'update item' && this.strictMode.strict
+    // v2.22.0 — strict item 43: strict mode applies `connectOrCreate`
+    // (in a create field input since vNEXT).
+    const allowed = !this.strictMode.strict
+      ? NESTED_WRITE_SHAPES[shape].keys
+      : shape === 'update item'
         ? UPDATE_ITEM_KEYS_STRICT
-        : NESTED_WRITE_SHAPES[shape].keys;
+        : shape === 'create field input'
+          ? CREATE_FIELD_INPUT_KEYS_STRICT
+          : NESTED_WRITE_SHAPES[shape].keys;
     const unknown = unknownInputKeys(input, allowed);
     if (unknown.length === 0) return;
     const list = quoteKeys(unknown);
@@ -563,7 +567,8 @@ export class MutationCompiler {
         ': with "node" or "edge" given, node fields are read only from "node".';
     // v2.22.0 — strict item 43.
     const strictOnly =
-      shape === 'update item' && unknown.includes('connectOrCreate')
+      (shape === 'update item' || shape === 'create field input') &&
+      unknown.includes('connectOrCreate')
         ? ' "connectOrCreate" is applied only with `strict: true`.'
         : '';
     this.strictMode.warn(
@@ -1953,7 +1958,8 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
-    // v2.10.0 — strict item 22: only `create` / `connect` are read here.
+    // v2.10.0 — strict item 22: only `create` / `connect` are read here
+    // (and, vNEXT — strict item 43, `connectOrCreate` under strict mode).
     this.checkNestedWriteKeys(relInput, 'create field input', relDef);
     this.checkCreateItemKeys(relInput.create, relDef);
 
@@ -2121,6 +2127,37 @@ export class MutationCompiler {
               varPrefix: '',
               depth: 0,
             },
+          }),
+        );
+      }
+    }
+
+    // --- connectOrCreate ---
+    // vNEXT — strict item 43: in a create field input too (`create()` and
+    // every nested create), after `create` and `connect`. Default mode
+    // ignores it (and warns, see checkNestedWriteKeys). Same item compiler,
+    // read guard and policies as in an update item.
+    if (this.strictMode.strict && relInput.connectOrCreate != null) {
+      const cocItems = Array.isArray(relInput.connectOrCreate)
+        ? (relInput.connectOrCreate as unknown[])
+        : [relInput.connectOrCreate];
+      for (let ci = 0; ci < cocItems.length; ci++) {
+        const index = startCounter + counter;
+        counter++;
+        lines.push(
+          ...this.buildConnectOrCreateItem({
+            spec: cocItems[ci],
+            relDef,
+            targetNodeDef,
+            sourceVar: nodeVar,
+            withClause,
+            carryVars: allVars,
+            targetVar: `${nodeVar}_coc${index}`,
+            paramPrefix: `${prefix}_coc${ci}`,
+            returnAlias: `_ccoc_${prefix}_${ci}`,
+            params,
+            policyContext,
+            paramCounter,
           }),
         );
       }
@@ -4239,6 +4276,16 @@ const NESTED_WRITE_SHAPES: Record<
  */
 const UPDATE_ITEM_KEYS_STRICT: ReadonlySet<string> = new Set([
   ...NESTED_WRITE_SHAPES['update item'].keys,
+  'connectOrCreate',
+]);
+
+/**
+ * vNEXT — strict item 43: the keys of a create field input (`create()`, a
+ * nested create's relationship fields) under strict mode, which also
+ * applies `connectOrCreate` there.
+ */
+const CREATE_FIELD_INPUT_KEYS_STRICT: ReadonlySet<string> = new Set([
+  ...NESTED_WRITE_SHAPES['create field input'].keys,
   'connectOrCreate',
 ]);
 

@@ -1714,6 +1714,22 @@ await users.update({
 
 The generated types offer `connectOrCreate` on every update field input whose target has a `@unique` / `@id` field (`<Type>UniqueWhere`, `<Type>ConnectOrCreateWhere`, `<Type>OnCreateInput`, `<Type><Field>ConnectOrCreateFieldInput`, named as upstream) and `create` / `connectOrCreate` / `delete` on `update()`. The warning codes are `unknown-param` (root ops) and `nested-write-unknown-key` (`connectOrCreate` in an item), as before.
 
+Since vNEXT the same applies to `connectOrCreate` in a create field input, as `@neo4j/graphql` 5.x accepts it: in `create()` and in the relationship fields of every nested create (inside `create()` or inside an update item):
+
+```typescript
+await posts.create({
+  input: [{
+    title: 'Hello',
+    author: { connectOrCreate: { where: { node: { email: 'a@x.io' } }, onCreate: { node: { name: 'Ann' } } } },
+    tags: { create: [{ node: { name: 'new' } }], connectOrCreate: [{ where: { node: { name: 'go' } }, onCreate: { node: {} } }] },
+  }],
+});
+// default: the post and its created tag are written; connectOrCreate is ignored (and warns)
+// strict:  also MERGEs the author and the "go" tag on their key and links them
+```
+
+It runs after the field input's `create` and `connect`, with the same `MERGE`, `onCreate`, read guard and `create` policies as in an update item (above). `createMany()` and `upsert()` take no relationship fields, so they are unaffected. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field; the warning code is `nested-write-unknown-key`, as before.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.

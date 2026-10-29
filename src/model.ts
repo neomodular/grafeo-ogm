@@ -1224,6 +1224,7 @@ export class Model<
       this.nodeDef,
       params.input as unknown as Record<string, unknown>[],
       policyContext,
+      { connectOrCreate: this.strictMode.strict },
     );
 
     // ONE counter for the whole statement: nested connect filters and their

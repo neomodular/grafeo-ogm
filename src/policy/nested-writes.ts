@@ -124,10 +124,16 @@ export function assertNestedCreatesAllowed(
   nodeDef: NodeDefinition,
   inputs: ReadonlyArray<Record<string, unknown>>,
   bundle: PolicyContextBundle | null,
+  /**
+   * vNEXT — strict item 43: check `connectOrCreate` in create field inputs
+   * too (strict mode, the only mode that applies them).
+   */
+  options: UpdateWalkOptions = {},
 ): void {
   if (!bundle) return;
   for (const input of inputs)
-    if (isPlainObject(input)) walkCreate(schema, nodeDef, input, bundle, 0);
+    if (isPlainObject(input))
+      walkCreate(schema, nodeDef, input, bundle, 0, options);
 }
 
 /**
@@ -160,6 +166,7 @@ function walkCreate(
   nodeSpec: Record<string, unknown>,
   bundle: PolicyContextBundle,
   depth: number,
+  options: UpdateWalkOptions,
 ): void {
   assertDepth(depth);
   for (const [key, value] of Object.entries(nodeSpec)) {
@@ -170,8 +177,24 @@ function walkCreate(
       relDef,
       value,
     ))
-      if (isPlainObject(relInput))
-        checkCreates(schema, targetDef, relInput.create, bundle, depth);
+      if (isPlainObject(relInput)) {
+        checkCreates(
+          schema,
+          targetDef,
+          relInput.create,
+          bundle,
+          depth,
+          options,
+        );
+        // vNEXT — strict item 43: a create field input's connectOrCreate.
+        if (options.connectOrCreate && relInput.connectOrCreate != null)
+          checkConnectOrCreates(
+            schema,
+            targetDef,
+            relInput.connectOrCreate,
+            bundle,
+          );
+      }
   }
 }
 
@@ -192,7 +215,7 @@ function walkUpdate(
       for (const item of asArray(items)) {
         if (!isPlainObject(item)) continue;
         if (item.create)
-          checkCreates(schema, targetDef, item.create, bundle, depth);
+          checkCreates(schema, targetDef, item.create, bundle, depth, options);
         if (options.connectOrCreate && item.connectOrCreate != null)
           checkConnectOrCreates(
             schema,
@@ -257,6 +280,7 @@ function checkCreates(
   creates: unknown,
   bundle: PolicyContextBundle,
   depth: number,
+  options: UpdateWalkOptions,
 ): void {
   const abstract = abstractTarget(targetDef.typeName, schema);
   for (const item of asArray(creates)) {
@@ -280,7 +304,7 @@ function checkCreates(
       [nodeSpec],
     );
     if (isPlainObject(nodeSpec))
-      walkCreate(schema, createDef, nodeSpec, bundle, depth + 1);
+      walkCreate(schema, createDef, nodeSpec, bundle, depth + 1, options);
   }
 }
 

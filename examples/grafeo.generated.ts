@@ -623,6 +623,7 @@ export type AuthorDeleteInput = {
 export type AuthorBooksFieldInput = {
   connect?: InputMaybe<Array<AuthorBooksConnectFieldInput>>;
   create?: InputMaybe<Array<AuthorBooksCreateFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<AuthorBooksConnectOrCreateFieldInput>>;
 };
 
 export type AuthorBooksCreateFieldInput = {
@@ -736,6 +737,7 @@ export type BookDeleteInput = {
 export type BookAuthorFieldInput = {
   connect?: InputMaybe<BookAuthorConnectFieldInput>;
   create?: InputMaybe<BookAuthorCreateFieldInput>;
+  connectOrCreate?: InputMaybe<BookAuthorConnectOrCreateFieldInput>;
 };
 
 export type BookAuthorCreateFieldInput = {
@@ -793,6 +795,7 @@ export type AuthorConnectWhere = {
 export type BookCategoriesFieldInput = {
   connect?: InputMaybe<Array<BookCategoriesConnectFieldInput>>;
   create?: InputMaybe<Array<BookCategoriesCreateFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<BookCategoriesConnectOrCreateFieldInput>>;
 };
 
 export type BookCategoriesCreateFieldInput = {
@@ -850,6 +853,7 @@ export type CategoryConnectWhere = {
 export type BookReviewsFieldInput = {
   connect?: InputMaybe<Array<BookReviewsConnectFieldInput>>;
   create?: InputMaybe<Array<BookReviewsCreateFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<BookReviewsConnectOrCreateFieldInput>>;
 };
 
 export type BookReviewsCreateFieldInput = {
@@ -935,6 +939,7 @@ export type CategoryDeleteInput = {
 export type CategoryBooksFieldInput = {
   connect?: InputMaybe<Array<CategoryBooksConnectFieldInput>>;
   create?: InputMaybe<Array<CategoryBooksCreateFieldInput>>;
+  connectOrCreate?: InputMaybe<Array<CategoryBooksConnectOrCreateFieldInput>>;
 };
 
 export type CategoryBooksCreateFieldInput = {
@@ -1038,6 +1043,7 @@ export type ReviewDeleteInput = {
 export type ReviewBookFieldInput = {
   connect?: InputMaybe<ReviewBookConnectFieldInput>;
   create?: InputMaybe<ReviewBookCreateFieldInput>;
+  connectOrCreate?: InputMaybe<ReviewBookConnectOrCreateFieldInput>;
 };
 
 export type ReviewBookCreateFieldInput = {

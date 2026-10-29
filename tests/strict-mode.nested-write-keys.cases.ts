@@ -59,6 +59,8 @@ export interface BadNestedShape {
 const ITEM = '"where", "update", "connect", "disconnect", "create", "delete"';
 const ITEM_STRICT = `${ITEM}, "connectOrCreate"`;
 const FIELD_INPUT = '"create", "connect"';
+/** vNEXT — strict item 43: strict mode applies `connectOrCreate` in a create field input. */
+const FIELD_INPUT_STRICT = `${FIELD_INPUT}, "connectOrCreate"`;
 const WRAPPER = '"node", "edge"';
 const UPDATE_ITEM = 'a nested update item';
 const CREATE_INPUT = 'the nested create input';
@@ -274,6 +276,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'posts',
     what: CREATE_INPUT,
     allowed: FIELD_INPUT,
+    strictAllowed: FIELD_INPUT_STRICT,
   },
   'create field input: inside a nested create node': {
     run: (ogm) =>
@@ -298,6 +301,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'tags',
     what: CREATE_INPUT,
     allowed: FIELD_INPUT,
+    strictAllowed: FIELD_INPUT_STRICT,
   },
   'create field input: per union member': {
     run: (ogm) =>
@@ -313,6 +317,7 @@ export const badNestedShapes: Record<string, BadNestedShape> = {
     field: 'media',
     what: CREATE_INPUT,
     allowed: FIELD_INPUT,
+    strictAllowed: FIELD_INPUT_STRICT,
   },
 };
 

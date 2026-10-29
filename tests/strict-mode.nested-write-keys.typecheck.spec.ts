@@ -28,6 +28,8 @@ const ITEM = ['connect', 'create', 'delete', 'disconnect', 'update', 'where'];
  */
 const ITEM_COC = [...ITEM, 'connectOrCreate'].sort();
 const FIELD_INPUT = ['connect', 'create'];
+/** vNEXT — strict item 43: `connectOrCreate` in a create field input too. */
+const FIELD_INPUT_COC = [...FIELD_INPUT, 'connectOrCreate'].sort();
 const WRAPPER = ['edge', 'node'];
 
 describe('item 22 key sets match the generated input types', () => {
@@ -70,8 +72,33 @@ const crt: UserCreateInput = {
   // @ts-expect-error — "creat" is not a key of the relationship field input
   media: { Post: { creat: [] } },
 };
+// vNEXT — strict item 43: connectOrCreate in a create field input.
+const coc: UserCreateInput = {
+  name: 'b',
+  posts: {
+    connectOrCreate: [
+      {
+        where: { node: { id: 'p9' } },
+        onCreate: { node: { title: 't' }, edge: { role: 'r' } },
+      },
+    ],
+  },
+  media: {
+    Tag: {
+      connectOrCreate: [{ where: { node: { id: 't1' } }, onCreate: { node: {} } }],
+    },
+  },
+};
+const cocBad: UserCreateInput = {
+  posts: {
+    // @ts-expect-error — the key of a connectOrCreate is a @unique / @id field
+    connectOrCreate: [{ where: { node: { title: 't' } }, onCreate: { node: {} } }],
+  },
+};
 void upd;
 void crt;
+void coc;
+void cocBad;
 `,
     ));
   });
@@ -84,8 +111,8 @@ void crt;
     ['UserPostsUpdateFieldInput', ITEM_COC],
     ['UserMediaPostUpdateFieldInput', ITEM_COC],
     ['UserAnimalsUpdateFieldInput', ITEM],
-    ['UserPostsFieldInput', FIELD_INPUT],
-    ['UserMediaTagFieldInput', FIELD_INPUT],
+    ['UserPostsFieldInput', FIELD_INPUT_COC],
+    ['UserMediaTagFieldInput', FIELD_INPUT_COC],
     ['UserPostsCreateFieldInput', WRAPPER],
     ['UserMediaTagCreateFieldInput', ['node']],
     ['UserPostsUpdateConnectionInput', WRAPPER],

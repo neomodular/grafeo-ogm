@@ -183,7 +183,8 @@ describeLive('Unknown keys in nested write objects — live Neo4j', () => {
     const strict = makeOgm(true);
     const u2 = `${runId}-c-${seq}-strict`;
     await expect(strict.authors.create(input(u2))).rejects.toThrow(
-      'Unknown key(s) "creat" in the nested create input on "posts". Allowed: "create", "connect".',
+      // vNEXT — strict item 43: strict mode also reads connectOrCreate here.
+      'Unknown key(s) "creat" in the nested create input on "posts". Allowed: "create", "connect", "connectOrCreate".',
     );
     expect(
       await run('MATCH (n) WHERE n.id STARTS WITH $u2 RETURN count(n) AS c', {
