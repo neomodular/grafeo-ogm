@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.23.0 (2026-10-29) — select shapes, falsy disconnect, create connectOrCreate
+
+> **Minor release.** It extends strict items 17, 41 and 43. Without `strict`, every call that worked in 2.22.1 compiles to byte-identical Cypher and returns the same result; the only addition is one warning per OGM instance and shape. Generated types add `connectOrCreate` to create field inputs.
+
+### Strict mode
+
+- **Item 17 — typed connection selects in the wrong shape.** These were dropped silently in both modes, returning `edges: [{}]`:
+  - `edges: { select: { node, properties } }`;
+  - an unknown key in the connection `select` or in `edges`;
+  - `totalCount` given an object;
+  - `node` / `properties` without `select`;
+  - a connection without `select`.
+
+  Default mode keeps the same output and now warns (`select-unknown-field` / `select-field-shape`); `strict: true` throws `OGMError`.
+- **Item 41 — a falsy `disconnect` (`false`, `0`, `''`) in a nested update item.** It was skipped silently, while `true` / `5` hit item 41. Default mode still unlinks nothing and now warns (`disconnect-non-object-item`); `strict: true` throws the item 41 `OGMError`.
+- **Item 43 — `connectOrCreate` in create field inputs.** This covers `create()` and the relationship fields of every nested create, including creates nested in update items. It is the `@neo4j/graphql` 5.x input, now applied under `strict: true`, after `create` and `connect`. It works as it does in an update item:
+  - a `MERGE` on a `@unique` / `@id` key;
+  - an existing node is linked only if the target's `read` policy admits it;
+  - a created node is checked against the target's `create` policies and WITH CHECK.
+
+  Default mode still ignores it, and warns. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field.
+
 ## 2.22.1 (2026-10-29) — security: @cypher node fields in where and sort
 
 > **Security patch.** Filtering or sorting by a `@cypher` field that returns a node ignored that type's `read` policies. OGMs without `policies` emit byte-identical Cypher.
