@@ -2052,6 +2052,15 @@ await Author.find({
 
 All standard operator suffixes are supported (`_EQ`, `_NOT`, `_IN`, `_NOT_IN`, `_LT`, `_LTE`, `_GT`, `_GTE`, `_CONTAINS`, `_NOT_CONTAINS`, `_STARTS_WITH`, `_ENDS_WITH`, `_MATCHES`).
 
+A `@cypher` field whose type is a node, interface or union type is filtered with its target's where input (since vNEXT, as in `@neo4j/graphql` 5.x): a singular field takes the where object itself, a list field takes `_SOME`, `_NONE`, `_ALL` and `_SINGLE`, with the same meaning as on a relationship.
+
+```typescript
+await User.find({ where: { topPost: { title_CONTAINS: 'graph' } } });   // topPost: Post @cypher(…)
+await User.find({ where: { posts_ALL: { rank_GT: 2 } } });               // posts: [Post!]! @cypher(…)
+```
+
+Before vNEXT the object was compared with the node itself and never matched. The filter sees the value as a selection returns it: with [Node-Level Security](#node-level-security), a node the target's `read` policy hides counts as `null` (and is left out of a list), so a filter cannot tell whether it exists, and relationship filters inside the target where apply their own targets' policies. A target where that needs `@cypher` projections (it filters on the target's own `@cypher` fields, or the target's read policy does) throws `OGMError`. `topPost: null` / `topPost_NOT: null` still test whether the field has a value. The generated `<Type>Where` offers these keys.
+
 #### Using @cypher in ORDER BY
 
 ```typescript

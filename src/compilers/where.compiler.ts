@@ -1323,6 +1323,25 @@ export class WhereCompiler {
           );
       }
 
+      // vNEXT — a node-typed @cypher field filtered by its target's where.
+      if (isPlainObject(value)) {
+        const cypherNode = this.tryCompileCypherNodeFilter(
+          key,
+          value,
+          nodeVar,
+          nodeDef,
+          counter,
+          depth,
+          scope,
+          params,
+          policyContext,
+        );
+        if (cypherNode !== null) {
+          clauses.push(cypherNode);
+          continue;
+        }
+      }
+
       // Scalar property operators
       const scalarResult = this.compileScalarCondition(
         key,
@@ -1455,6 +1474,104 @@ export class WhereCompiler {
     if (!parts.policy) return ref;
     mergeParams(guard.params, parts.params);
     return guardCypherNodeExpr(ref, propDef, asList, nodeVar, parts.policy);
+  }
+
+  /**
+   * vNEXT — `where: { topPost: { title: 'x' } }` on a node-typed `@cypher`
+   * field (its type a node, interface or union type), and
+   * `posts_SOME` / `_NONE` / `_ALL` / `_SINGLE` on a list one, filter by the
+   * target type's where input, as `@neo4j/graphql` 5.x does. Pre-vNEXT the
+   * object was compared with the node (`node = map`), which never matches,
+   * so the filter always returned nothing (and the quantifier keys compiled
+   * as a stored property `posts_SOME`, never set).
+   *
+   * The filter runs on the GUARDED value (v2.22.1 `guardCypherNodeRef`): a
+   * node the target's `read` policy hides reads as `null` (absent from the
+   * list), so it never matches and cannot reveal that it exists. The target
+   * where compiles like a relationship filter's (`compileTargetBody`), with
+   * the target's read policy beside it and traversals inside enforcing their
+   * own targets' policies. A target where that needs `@cypher` projections
+   * (it filters on the target's own `@cypher` fields, or its policy does)
+   * cannot be stitched into the list predicate and throws.
+   *
+   * Returns `null` for any other key (compiled as before).
+   */
+  private tryCompileCypherNodeFilter(
+    key: string,
+    value: Record<string, unknown>,
+    nodeVar: string,
+    nodeDef: NodeDefinition,
+    counter: { count: number },
+    depth: number,
+    scope: CypherFieldScope,
+    params: Record<string, unknown>,
+    policyContext: PolicyContextBundle | undefined,
+  ): string | null {
+    const quantifier = (['_SOME', '_NONE', '_ALL', '_SINGLE'] as const).find(
+      (q) => key.endsWith(q),
+    );
+    const fieldName = quantifier ? key.slice(0, -quantifier.length) : key;
+    const propDef = nodeDef.properties.get(fieldName);
+    if (!propDef?.isCypher || !propDef.cypherStatement) return null;
+    if (resolveCypherNodeType(propDef.type, this.schema) === null) return null;
+    // Singular field: the field itself; list field: the quantifiers.
+    if (propDef.isArray !== (quantifier !== undefined)) return null;
+    const label = `${nodeDef.typeName}.${fieldName}`;
+    const targetDef = resolveTargetDef(propDef.type, this.schema);
+    if (!targetDef)
+      throw new OGMError(
+        `The @cypher field "${label}" returns unknown type "${propDef.type}".`,
+      );
+    assertWhereDepth(depth + 1);
+    const guard: CypherNodeGuardArgs = { policyContext, counter, params };
+    // A list quantifier needs the whole list; default mode projects a list
+    // field as its first row elsewhere (strict item 24), so it is projected
+    // under its own alias then.
+    const asList = propDef.isArray;
+    const sharedList =
+      asList &&
+      cypherFieldAsList(this.strictMode, nodeDef.typeName, fieldName, propDef);
+    const ref = scope.register(
+      fieldName,
+      propDef,
+      undefined,
+      asList,
+      asList && !sharedList ? '_list' : '',
+    );
+    const value_ = this.guardCypherNodeRef(
+      ref,
+      propDef,
+      asList,
+      nodeVar,
+      label,
+      guard,
+    );
+    const el = `${nodeVar}__cfw${counter.count++}`;
+    assertSafeIdentifier(el, '@cypher filter variable');
+    const body = this.compileTargetBody(
+      value,
+      el,
+      targetDef,
+      counter,
+      policyContext,
+      undefined,
+      depth + 1,
+    );
+    if (body.preludes.length > 0)
+      throw new OGMError(
+        `Filtering the @cypher field "${label}" by @cypher fields of "${targetDef.typeName}" ` +
+          `(in the filter or in its read policy) is not supported. Filter on stored properties ` +
+          `or relationships of "${targetDef.typeName}".`,
+      );
+    mergeParams(params, body.params);
+    const conditions = [body.user, body.policy].filter(Boolean);
+    const predicate = conditions.length > 0 ? conditions.join(' AND ') : 'true';
+    if (!quantifier)
+      return `ANY(${el} IN [${value_}] WHERE ${el} IS NOT NULL AND ${predicate})`;
+    const fn = { _SOME: 'ANY', _NONE: 'NONE', _ALL: 'ALL', _SINGLE: 'SINGLE' }[
+      quantifier
+    ];
+    return `${fn}(${el} IN coalesce(${value_}, []) WHERE ${predicate})`;
   }
 
   /**
@@ -2880,4 +2997,19 @@ function rewritePolicyFragment(
     const renamed = rename.get(name);
     return renamed ? `$${renamed}` : match;
   });
+}
+
+/**
+ * vNEXT — `type` when it names a node, interface or union type (the type of
+ * a node-typed `@cypher` field), `null` for a scalar or enum.
+ */
+function resolveCypherNodeType(
+  type: string,
+  schema: SchemaMetadata,
+): string | null {
+  return schema.nodes.has(type) ||
+    schema.interfaces?.has(type) ||
+    schema.unions?.has(type)
+    ? type
+    : null;
 }

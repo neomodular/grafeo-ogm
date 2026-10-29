@@ -268,6 +268,12 @@ export class CypherFieldScope {
     guardLabels?: string | readonly string[],
     /** v2.14.0 — strict item 24: project the whole list (see `cypherFieldAsList`). */
     asList: boolean = false,
+    /**
+     * vNEXT — keys and aliases this projection apart from the field's
+     * default one (`_list`: the whole list of a list field that default
+     * mode otherwise projects as its first row). Unset: unchanged.
+     */
+    keySuffix: string = '',
   ): string {
     assertSafeIdentifier(fieldName, '@cypher field');
     const guards =
@@ -276,8 +282,10 @@ export class CypherFieldScope {
       for (const l of guards) assertSafeIdentifier(l, '@cypher guard label');
     const guardLabel = guards === undefined ? undefined : guards.join('_');
 
+    if (keySuffix) assertSafeIdentifier(keySuffix, '@cypher alias suffix');
     const key =
-      guardLabel === undefined ? fieldName : `${guardLabel}:${fieldName}`;
+      (guardLabel === undefined ? fieldName : `${guardLabel}:${fieldName}`) +
+      (keySuffix ? `:${keySuffix}` : '');
     const cached = this.aliases.get(key);
     if (cached) return cached;
 
@@ -290,9 +298,10 @@ export class CypherFieldScope {
     assertSafeIdentifier(columnName, '@cypher columnName');
 
     const alias =
-      guardLabel === undefined
+      (guardLabel === undefined
         ? `${this.aliasNamespace}_${this.nodeVar}_${fieldName}`
-        : `${this.aliasNamespace}_${this.nodeVar}_${guardLabel}_${fieldName}`;
+        : `${this.aliasNamespace}_${this.nodeVar}_${guardLabel}_${fieldName}`) +
+      keySuffix;
     assertSafeIdentifier(alias, '@cypher alias');
 
     const carry = [...this.preserveVars, ...this.carriedAliases];
