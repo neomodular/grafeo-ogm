@@ -445,6 +445,44 @@ export class OGM<
       }
   }
 
+  /**
+   * vNEXT — strict item 50: on an OGM configured with `policies`, a model
+   * from `ogm.model()` / `ogm.interfaceModel()` (no `withContext`) applies
+   * NO policy — not the type's own, not its relationship targets'. 2.x
+   * keeps that (byte-identical Cypher) and warns once per OGM and type;
+   * strict mode throws here, once per lookup, not per query. The
+   * `unsafe.bypassPolicies()` clone is the intentional way to get an
+   * unbound model and never warns or throws; neither does an OGM without
+   * policies.
+   */
+  private checkUnboundModel(
+    method: 'model' | 'interfaceModel',
+    name: string,
+  ): void {
+    if (this.globalBypass || this.policyRegistry.size === 0) return;
+    // An unknown or misnamed type keeps its own, more useful, error.
+    const known =
+      method === 'model'
+        ? this.schema.nodes.has(name)
+        : this.schema.interfaces.has(name);
+    if (!known) return;
+    const strictMode = this.modelCompilers.strictMode;
+    if (!strictMode) return;
+    if (strictMode.strict)
+      throw new OGMError(
+        `ogm.${method}('${name}') on an OGM configured with \`policies\` applies no policy. ` +
+          `Use \`ogm.withContext(ctx).${method}('${name}')\` to enforce them, or ` +
+          `\`ogm.unsafe.bypassPolicies().${method}('${name}')\` for intentional system access.`,
+      );
+    strictMode.warn(
+      'model-without-context',
+      `${method}\u0000${name}`,
+      `ogm.${method}('${name}') on an OGM configured with \`policies\` applies no policy (not "${name}"'s, not its relationship targets'): ` +
+        `use \`ogm.withContext(ctx).${method}('${name}')\`, or \`ogm.unsafe.bypassPolicies().${method}('${name}')\` for intentional system access.`,
+      `throw OGMError from ogm.${method}() on a policy-configured OGM`,
+    );
+  }
+
   /** Internal cloning hook used by `unsafe.bypassPolicies()`. */
   private cloneAsBypassed(): OGM<TModelMap, TInterfaceModelMap> {
     const clone = Object.create(OGM.prototype) as OGM<
@@ -614,6 +652,7 @@ export class OGM<
   model(
     name: string,
   ): Model<any, any, any, any, any, any, any, any, any, any, any, any> {
+    this.checkUnboundModel('model', name);
     const existing = this.models.get(name);
     if (existing) return existing;
 
@@ -690,6 +729,7 @@ export class OGM<
   >;
   interfaceModel<T = Record<string, unknown>>(name: string): InterfaceModel<T>;
   interfaceModel(name: string): InterfaceModel<any, any, any> {
+    this.checkUnboundModel('interfaceModel', name);
     const existing = this.interfaceModels.get(name);
     if (existing) return existing as InterfaceModel<any, any, any>;
 

@@ -1745,6 +1745,19 @@ A performance change, not a fix: both modes return the same rows with the same v
 
 **Tie order.** Rows that are equal on every sort key may come back in a different order, or a different one of them may land on a page boundary: Neo4j plans a bounded `Top` instead of a full `Sort`, and neither keeps ties in a defined order. Cypher never guaranteed their order, but if you page on a key that is not unique, add a unique field (`id`) as the last sort key, in either mode. Default mode emits exactly the previous Cypher and does not warn, as its result is correct.
 
+#### 50. A bare `ogm.model()` on an OGM configured with `policies` (since vNEXT)
+
+```typescript
+const ogm = new OGM({ typeDefs, driver, policies });
+await ogm.model('Book').find();                        // no policy applies
+await ogm.withContext(ctx).model('Book').find();       // policies apply
+await ogm.unsafe.bypassPolicies().model('Book').find(); // explicit system access
+// default: the bare lookup works as before and warns once per OGM and type
+// strict:  OGMError from ogm.model() / ogm.interfaceModel(), naming both alternatives
+```
+
+`ogm.model()` and `ogm.interfaceModel()` carry no request context, so they apply no [Node-Level Security](#node-level-security) policy at all, even on an OGM that declares them, which is easy to miss when a code path forgets `withContext`. Default mode keeps the behaviour and the Cypher exactly as before and warns (code `model-without-context`); strict mode throws from the lookup itself, not from each query. The `unsafe.bypassPolicies()` clone, models from `withContext`, and OGMs without `policies` (or with only empty policy arrays) never warn or throw.
+
 #### Not behind the switch: `aggregate` on list fields
 
 `avg` / `sum` on an `[Int]` / `[Float]` field made the server reject the whole aggregate query. Since 2.6.0, in both modes, those keys come back `null` and the rest of the aggregate works: `{ scores: { min, max, average: null, sum: null } }`.
@@ -2084,6 +2097,8 @@ const ogm = new OGM<ModelMap>({
 const Books = ogm.withContext({ userId, capabilities, tierIds }).model('Book');
 const visible = await Books.find({ where: { published_GT: '2024-01-01' } });
 ```
+
+> **Policies apply only through `withContext`.** A model from a bare `ogm.model('Book')` / `ogm.interfaceModel(...)` carries no context, so it applies **no** policy: not the type's own, and not those of the types it reaches through relationships, nested writes or connects. Use `ogm.withContext(ctx).model(...)` for every request, and `ogm.unsafe.bypassPolicies().model(...)` when you mean system access (migrations, seeds, admin jobs). Since vNEXT a bare lookup on an OGM with `policies` warns once per OGM and type in 2.x and throws `OGMError` under `strict: true` (see [strict item 50](#50-a-bare-ogmmodel-on-an-ogm-configured-with-policies-since-vnext)).
 
 The Cypher emitted for the call above is roughly:
 

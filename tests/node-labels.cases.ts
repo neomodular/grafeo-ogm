@@ -79,8 +79,16 @@ export const labelPolicies = {
 };
 
 type Run = (ogm: OGM) => Promise<unknown>;
+/**
+ * The OGM has `policies`: shapes without a context take the explicit
+ * system-access path (vNEXT — strict item 50 throws on a bare
+ * `ogm.model()` of a policy-configured OGM). Same Cypher as a bare model.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const m = (ogm: OGM, name: string): any => ogm.model(name);
+const sys = (ogm: any): any =>
+  ogm instanceof OGM ? ogm.unsafe.bypassPolicies() : ogm;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const m = (ogm: OGM, name: string): any => sys(ogm).model(name);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ctx = (ogm: OGM): any => ogm.withContext({});
 
@@ -201,12 +209,16 @@ export const labelShapes: Record<string, Run> = {
       removeLabels: ['Bad'],
     }),
   'interface find': (ogm) =>
-    ogm.interfaceModel('Animal').find({
-      where: { name: 'a' },
-      selectionSet: '{ __typename id ... on Dog { bark } }',
-    }),
+    sys(ogm)
+      .interfaceModel('Animal')
+      .find({
+        where: { name: 'a' },
+        selectionSet: '{ __typename id ... on Dog { bark } }',
+      }),
   'interface count with labels': (ogm) =>
-    ogm.interfaceModel('Animal').count({ labels: ['Vip'] }),
+    sys(ogm)
+      .interfaceModel('Animal')
+      .count({ labels: ['Vip'] }),
   'policies: find, update and delete': async (ogm) => {
     await m(ctx(ogm), 'Person').find({
       where: { pets_SOME: { name: 'x' } },

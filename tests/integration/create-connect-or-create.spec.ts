@@ -106,7 +106,15 @@ describeLive('create() connectOrCreate (strict item 43) — live Neo4j', () => {
           }
         : {}),
     });
-    return { ogm, users: ogm.model('ItCcUser'), warnings };
+    return {
+      ogm,
+      // lazy: a bare model() of the policy-bound strict OGM throws
+      // (vNEXT — strict item 50); its tests use withContext.
+      get users() {
+        return ogm.model('ItCcUser');
+      },
+      warnings,
+    };
   }
 
   const key = (s: string) => `${runId}-${s}-${++seq}`;

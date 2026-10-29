@@ -105,7 +105,15 @@ describeLive(
             }
           : {}),
       });
-      return { ogm, users: ogm.model('ItRoUser'), warnings };
+      return {
+        ogm,
+        // lazy: a bare model() of the policy-bound strict OGM throws
+        // (vNEXT — strict item 50); its tests use withContext.
+        get users() {
+          return ogm.model('ItRoUser');
+        },
+        warnings,
+      };
     }
 
     /** A fresh key, unique to this run. */

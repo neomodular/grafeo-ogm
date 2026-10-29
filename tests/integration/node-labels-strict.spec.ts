@@ -78,6 +78,8 @@ async function cypher(
 describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
   let driver: Driver;
   let strict: OGM;
+  /** System access to the policy-bound strict OGM (vNEXT — strict item 50). */
+  let system: OGM;
   let lenient: OGM;
   const runId = `lb${Date.now()}${Math.floor(Math.random() * 1e6)}`;
   const id = (s: string) => `${runId}-${s}`;
@@ -105,6 +107,7 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
         ],
       },
     });
+    system = strict.unsafe.bypassPolicies();
     lenient = new OGM({ typeDefs, driver });
     // Written as @neo4j/graphql writes them: no type-name label.
     await cypher(
@@ -133,7 +136,7 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
   });
 
   it('strict finds them, with relationships, interface members and __typename', async () => {
-    const people = (await strict.model('ItLbPerson').find({
+    const people = (await system.model('ItLbPerson').find({
       where: mine,
       selectionSet: `{ id name pets { __typename id name } }`,
     })) as Array<{ id: string; pets: Array<Record<string, unknown>> }>;
@@ -146,7 +149,7 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
       ['ItLbCat', id('c')],
       ['ItLbDog', id('d')],
     ]);
-    const animals = (await strict.interfaceModel('ItLbAnimal').find({
+    const animals = (await system.interfaceModel('ItLbAnimal').find({
       where: mine,
       selectionSet: '{ id }',
       options: { sort: [{ id: 'ASC' }] },
@@ -156,22 +159,22 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
       ['ItLbDog', id('d')],
     ]);
     expect(
-      await strict.model('ItLbPerson').count({
+      await system.model('ItLbPerson').count({
         where: { runId, pets_SOME: { name: 'Rex' } } as never,
       }),
     ).toBe(1);
   });
 
   it('strict update, connect and policies reach them', async () => {
-    await strict.model('ItLbDog').update({
+    await system.model('ItLbDog').update({
       where: { id: id('d') } as never,
       update: { name: 'Max' } as never,
     });
-    await strict.model('ItLbPerson').update({
+    await system.model('ItLbPerson').update({
       where: { id: id('p') } as never,
       connect: { favorite: { where: { node: { id: id('d') } } } } as never,
     });
-    const [p] = (await strict.model('ItLbPerson').find({
+    const [p] = (await system.model('ItLbPerson').find({
       where: { id: id('p') } as never,
       selectionSet: '{ favorite { id name } }',
     })) as Array<{ favorite: { id: string; name: string } }>;
@@ -184,7 +187,7 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
   });
 
   it('strict creates carry exactly the listed labels (nested ones too)', async () => {
-    await strict.model('ItLbPerson').create({
+    await system.model('ItLbPerson').create({
       input: [
         {
           id: id('p2'),
@@ -193,10 +196,10 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
         },
       ] as never,
     });
-    await strict.model('ItLbCat').createMany({
+    await system.model('ItLbCat').createMany({
       data: [{ id: id('c2'), runId }] as never,
     });
-    await strict.model('ItLbDog').upsert({
+    await system.model('ItLbDog').upsert({
       where: { id: id('d3') } as never,
       create: { runId } as never,
       update: {} as never,
@@ -213,14 +216,14 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
     // ...and strict still finds those grafeo-written nodes (they carry the
     // listed labels too).
     expect(
-      await strict
+      await system
         .model('ItLbPerson')
         .count({ where: { id: id('p3') } as never }),
     ).toBe(1);
   });
 
   it('strict disconnect and delete reach them', async () => {
-    await strict.model('ItLbPerson').update({
+    await system.model('ItLbPerson').update({
       where: { id: id('p') } as never,
       disconnect: { pets: [{ where: { node: { id: id('c') } } }] } as never,
     });
@@ -231,7 +234,7 @@ describeLive('strict item 23 — @node(labels) data, live Neo4j', () => {
         { p: id('p') },
       ),
     ).toEqual([{ n: neo4j.int(1) }]);
-    await strict.model('ItLbCat').delete({ where: { id: id('c') } as never });
+    await system.model('ItLbCat').delete({ where: { id: id('c') } as never });
     expect(await labelsOf(id('c'))).toBeUndefined();
   });
 });

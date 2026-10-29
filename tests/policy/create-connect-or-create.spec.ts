@@ -227,7 +227,7 @@ describe('create() connectOrCreate — target policies (strict)', () => {
 });
 
 describe('create() connectOrCreate — byte-identical without a bound policy', () => {
-  it('bare model(), bypassPolicies() and per-call unsafe match a policy-free OGM', async () => {
+  it('bypassPolicies() and per-call unsafe match a policy-free OGM; bare model() throws (strict item 50)', async () => {
     const a: Recorded[] = [];
     await new OGM({
       typeDefs: schema,
@@ -239,8 +239,9 @@ describe('create() connectOrCreate — byte-identical without a bound policy', (
     expect(a[0].cypher).toContain('MERGE');
     expect(a[0].cypher).not.toContain('OPTIONAL MATCH');
 
-    const b: Recorded[] = [];
-    await policyOgm(b).model('User').create(create('u1'));
+    // vNEXT — strict item 50: a bare model() on a policy-configured
+    // strict OGM throws instead of silently applying no policy.
+    expect(() => policyOgm([]).model('User')).toThrow(/applies no policy/);
     const c: Recorded[] = [];
     await policyOgm(c)
       .unsafe.bypassPolicies()
@@ -251,6 +252,6 @@ describe('create() connectOrCreate — byte-identical without a bound policy', (
       .withContext({ uid: 'u1' })
       .model('User')
       .create({ ...create('u1'), unsafe: { bypassPolicies: true } });
-    for (const other of [b, c, d]) expect(other[0].cypher).toBe(a[0].cypher);
+    for (const other of [c, d]) expect(other[0].cypher).toBe(a[0].cypher);
   });
 });

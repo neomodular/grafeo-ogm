@@ -218,15 +218,16 @@ describe('connectOrCreate — byte-identical without a bound policy', () => {
       delete: { books: [{ where: { node: { isbn: 'i2' } } }] },
     });
 
-  it('bare model(), bypassPolicies() and per-call unsafe match a policy-free OGM', async () => {
+  it('bypassPolicies() and per-call unsafe match a policy-free OGM; bare model() throws (strict item 50)', async () => {
     const a: Recorded[] = [];
     await run(
       new OGM({ typeDefs: schema, driver: createMockDriver(a), strict: true }),
     );
     expect(a[0].cypher).not.toContain('OPTIONAL MATCH');
 
-    const b: Recorded[] = [];
-    await run(policyOgm(b));
+    // vNEXT — strict item 50: a bare model() on a policy-configured
+    // strict OGM throws instead of silently applying no policy.
+    expect(() => run(policyOgm([]))).toThrow(/applies no policy/);
     const c: Recorded[] = [];
     await run(policyOgm(c).unsafe.bypassPolicies());
     const d: Recorded[] = [];
@@ -241,6 +242,6 @@ describe('connectOrCreate — byte-identical without a bound policy', () => {
         delete: { books: [{ where: { node: { isbn: 'i2' } } }] },
         unsafe: { bypassPolicies: true },
       });
-    for (const other of [b, c, d]) expect(other[0].cypher).toBe(a[0].cypher);
+    for (const other of [c, d]) expect(other[0].cypher).toBe(a[0].cypher);
   });
 });
