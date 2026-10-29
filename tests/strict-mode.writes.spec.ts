@@ -509,6 +509,88 @@ describe('item 45 — a nested create that is not an object (vNEXT)', () => {
   );
 });
 
+describe('item 46 — other nested write values that are not objects (vNEXT)', () => {
+  const cases: [string, string, string][] = [
+    [
+      'update: true (nested in update)',
+      'A nested update on "posts" is a boolean (true)',
+      'an object such as { node: { … } }',
+    ],
+    [
+      'update: false (nested in update)',
+      'A nested update on "posts" is a boolean (false)',
+      'an object such as { node: { … } }',
+    ],
+    [
+      'connect: false (nested in update)',
+      `A nested update or create's connect on "posts" is a boolean (false)`,
+      'an object or an array of objects such as [{ where: { node: { … } } }]',
+    ],
+    [
+      'connect: 0 (nested in create)',
+      `A nested update or create's connect on "posts" is a number (0)`,
+      'an object or an array of objects such as [{ where: { node: { … } } }]',
+    ],
+    [
+      'update field: string item',
+      'A nested update item on "posts" is a string ("x")',
+      'an object such as { where?, update?, connect?, … }',
+    ],
+    [
+      'update field: boolean',
+      'A nested update item on "posts" is a boolean (true)',
+      'an object such as { where?, update?, connect?, … }',
+    ],
+    [
+      'create field input: boolean',
+      'The nested create input on "posts" is a boolean (true)',
+      'an object such as { create?, connect? }',
+    ],
+  ];
+  it.each(cases)('default warns once and writes nothing: %s', (name, what) =>
+    warnsOnce(
+      badWriteShapes[name],
+      `${what}, not an object: it is ignored (nothing is written).`,
+    ),
+  );
+  it.each(cases)(
+    'strict throws and runs nothing: %s',
+    async (name, what, must) => {
+      const { ogm, records } = setup(true);
+      await expect(badWriteShapes[name](ogm)).rejects.toThrow(
+        new OGMError(`${what}. It must be ${must}.`),
+      );
+      expect(records).toEqual([]);
+    },
+  );
+  // Pre-vNEXT: `Invalid identifier "0" in nested update property`.
+  it.each([false, true])(
+    'strict=%s: a string or non-empty array update throws a clear OGMError',
+    async (strict) => {
+      const { ogm, records } = setup(strict);
+      for (const update of ['x', ['x'], [{ title: 't' }], { node: 'x' }])
+        await expect(
+          ogm.model('User').update({
+            where: { id: 'u1' },
+            update: { posts: [{ update: update as never }] },
+          }),
+        ).rejects.toThrow('A nested update on "posts" is ');
+      expect(records).toEqual([]);
+    },
+  );
+  it('`posts: []` in a create input and `update: { edge }` never warn', async () => {
+    const { ogm, warnings } = setup(false);
+    await ogm
+      .model('User')
+      .create({ input: [{ email: 'a@x', posts: [] as never }] });
+    await ogm.model('User').update({
+      where: { id: 'u1' },
+      update: { posts: [{ update: { edge: { role: 'r' } } }] },
+    });
+    expect(warnings()).toEqual([]);
+  });
+});
+
 describe('a null / undefined item inside a nested write array throws OGMError in both modes (v2.18.0)', () => {
   const shapes: [string, Run, RegExp][] = [
     [

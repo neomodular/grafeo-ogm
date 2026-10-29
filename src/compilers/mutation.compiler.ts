@@ -1992,6 +1992,8 @@ export class MutationCompiler {
     const lines: string[] = [];
     let counter = 0;
 
+    // vNEXT — strict item 46: a non-object field input writes nothing.
+    this.checkNonObjectNestedValue('create field input', relInput, relDef);
     // v2.10.0 — strict item 22: only `create` / `connect` are read here
     // (and, v2.23.0 — strict item 43, `connectOrCreate` under strict mode).
     this.checkNestedWriteKeys(relInput, 'create field input', relDef);
@@ -2133,6 +2135,8 @@ export class MutationCompiler {
     }
 
     // --- connect ---
+    // vNEXT — strict item 46: a falsy connect is skipped.
+    this.checkNonObjectNestedValue('connect', relInput.connect, relDef);
     if (relInput.connect) {
       const connectItems = Array.isArray(relInput.connect)
         ? (relInput.connect as Record<string, unknown>[])
@@ -3151,6 +3155,78 @@ export class MutationCompiler {
     }
   }
 
+  /**
+   * vNEXT — strict item 46: other nested write values that are not objects
+   * and are skipped, writing nothing:
+   *
+   * - `'update'`: a nested update item's `update` (or its `node`) that is
+   *   `true`, a number, `[]` or falsy. A non-empty string or array crashed
+   *   with `Invalid identifier "0" in nested update property` (its indexes
+   *   were read as field names): an `OGMError` in both modes now.
+   * - `'connect'`: a falsy `connect` (`false`, `0`, `''`) in a nested update
+   *   item or a create field input (truthy non-objects have thrown since
+   *   v2.5.1).
+   * - `'update item'` / `'create field input'`: the value of a relationship
+   *   field in an update / create input (or an item of an update array)
+   *   that is not an object (`posts: true`, `posts: ['p1']`, a create
+   *   field input given as an array).
+   *
+   * Default: one warning per OGM, field and shape, nothing written as
+   * before; strict: `OGMError` before anything runs.
+   */
+  private checkNonObjectNestedValue(
+    kind: 'update' | 'connect' | 'update item' | 'create field input',
+    value: unknown,
+    relDef: RelationshipDefinition,
+  ): void {
+    if (value == null) return;
+    let shown = value;
+    if (kind === 'update') {
+      // The node body the compiler reads, as in emitUpdate.
+      const node = isPlainObject(value)
+        ? (value.node ?? (value.edge ? undefined : value))
+        : value;
+      if (node == null || isPlainObject(node)) return;
+      shown = node;
+      if (Object.keys(node as object).length > 0)
+        throw new OGMError(
+          `A nested update on "${relDef.fieldName}" is ${describeValue(value, node)}. A nested update must be ` +
+            `an object such as { node: { … } }.`,
+        );
+    } else if (kind === 'connect') {
+      if (value) return;
+    } else if (
+      isPlainObject(value) ||
+      // `posts: []` in a create input: no items, as in an update input.
+      (Array.isArray(value) && value.length === 0)
+    )
+      return;
+    const what = {
+      update: 'A nested update',
+      connect: "A nested update or create's connect",
+      'update item': 'A nested update item',
+      'create field input': 'The nested create input',
+    }[kind];
+    const shape =
+      kind === 'update' ? describeValue(value, shown) : describeValue(value);
+    const example = {
+      update: '{ node: { … } }',
+      connect: '[{ where: { node: { … } } }]',
+      'update item': '{ where?, update?, connect?, … }',
+      'create field input': '{ create?, connect? }',
+    }[kind];
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `${what} on "${relDef.fieldName}" is ${shape}. It must be ${kind === 'connect' ? 'an object or an array of objects' : 'an object'} such as ${example}.`,
+      );
+    this.strictMode.warn(
+      'nested-op-non-object',
+      `${kind}\u0000${relDef.fieldName}`,
+      `${what} on "${relDef.fieldName}" is ${shape}, not an object: it is ignored (nothing is written).`,
+      'throw an OGMError for a nested write value that is not an object',
+    );
+  }
+
   /** One relationship's disconnect items; `tag` as in buildRelConnects. */
   private buildRelDisconnects(
     spec: unknown,
@@ -3549,6 +3625,8 @@ export class MutationCompiler {
         const item = items[i];
         // v2.18.0 — pre-v2.18.0 a null / undefined item threw a raw TypeError.
         if (item == null) throw nullNestedItemError('update', relDef, item);
+        // vNEXT — strict item 46: a non-object item writes nothing.
+        this.checkNonObjectNestedValue('update item', item, relDef);
         const itemPrefix = `${relPrefix}_${i}`;
         // v2.10.0 — strict item 22: unknown keys in the item, its create
         // items and its `update` body.
@@ -3725,6 +3803,8 @@ export class MutationCompiler {
         // (see the end of the item loop).
         const emitLinks = (): void => {
           // --- connect ---
+          // vNEXT — strict item 46: a falsy connect is skipped.
+          this.checkNonObjectNestedValue('connect', item.connect, relDef);
           if (item.connect) {
             const connectItems = Array.isArray(item.connect)
               ? (item.connect as Record<string, unknown>[])
@@ -3919,6 +3999,9 @@ export class MutationCompiler {
 
         const emitUpdate = (): void => {
           // --- update (nested) ---
+          // vNEXT — strict item 46: a non-object update writes nothing (a
+          // string / non-empty array crashed: OGMError in both modes).
+          this.checkNonObjectNestedValue('update', item.update, relDef);
           if (item.update) {
             const updateSpec = item.update as Record<string, unknown>;
             const edgeUpdate = updateSpec.edge as
@@ -4913,6 +4996,18 @@ function aliveGuard(nodeVar: string): string {
 }
 
 /** A nested delete item's own `delete` asks for a deeper cascade. */
+/**
+ * vNEXT — `a boolean (true)`, `an array`, or `{ node: a number (5) }` when
+ * `inner` (the `node` of `value`) is the non-object part, for messages.
+ */
+function describeValue(value: unknown, inner: unknown = value): string {
+  const one = (v: unknown) =>
+    Array.isArray(v)
+      ? 'an array'
+      : `a ${typeof v} (${typeof v === 'string' ? JSON.stringify(v) : String(v)})`;
+  return inner === value ? one(value) : `{ node: ${one(inner)} }`;
+}
+
 function hasNestedCascade(value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (Array.isArray(value)) return value.length > 0;

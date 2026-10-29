@@ -108,6 +108,21 @@ const V253: Record<string, string> = {
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nWITH n\nCREATE (n_c0:`Post` { `id`: randomUUID() })\nCREATE (n)-[:`WROTE`]->(n_c0)\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create: 0 (nested in create)':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  // vNEXT — strict item 46 (captured from 041511b, v2.23.0).
+  'update: true (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'update: false (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'connect: false (nested in update)':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'connect: 0 (nested in create)':
+    "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'update field: string item':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'update field: boolean':
+    "MATCH (n:`User`)\nWHERE n.`id` = $param0\nSET n.`name` = $update_name\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
+  'create field input: boolean':
+    "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
   'create with labels':
     "CREATE (n:`User` { `id`: randomUUID(), `email`: $create0_email })\nSET n:`Vip`\nRETURN n { __typename: 'User', .`id`, .`email`, .`name` }",
 };

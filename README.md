@@ -1750,6 +1750,22 @@ await authors.update({ where: { id }, update: { posts: [{ create: true }] } });
 
 A nested create item that is `true`, a number, `''`, `[]` or `{ node: true }` carries no node input, so it created a target node with only its `@id` and `@default` values (a node a required field may then be missing from), and a falsy `create` (`false`, `0`, `''`) was skipped. Strict mode rejects both, in nested update items, in the relationship fields of `create()` and of every nested create, and in the root `create` of `update()`. A string or non-empty array item (`create: 'x'`, `[['t']]`) crashed with `Invalid identifier "0" in create property` and throws a clear `OGMError` in both modes since vNEXT. The target's `create` policies apply to these items as to `{}` (a security fix in vNEXT: before, they skipped them). The warning code is `create-non-object`, logged once per OGM instance, relationship field and shape.
 
+#### 46. Other nested write values that are not objects (since vNEXT)
+
+```typescript
+await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, update: true }] } });
+// default: p1 is not updated, the call reports success (and warns)
+// strict:  OGMError: A nested update on "posts" is a boolean (true). It must be an object such as { node: { … } }.
+```
+
+These values carry nothing to write, and 2.x skipped them without a word:
+
+- a nested update item's `update` (or its `update.node`) that is `true`, a number, `[]`, `false`, `0` or `''`;
+- a falsy `connect` (`false`, `0`, `''`) in a nested update item or a create field input (other non-object connect items have thrown since 2.5.1);
+- a relationship field of an `update` input, or an item of its array, that is not an object (`posts: true`, `posts: ['p1']`), and a relationship field of a `create()` input (or of a nested create) that is not an object (`posts: true`, `posts: [{ create: … }]`; `posts: []` is fine).
+
+Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since vNEXT. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-vnext) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-vnext) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
+
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript

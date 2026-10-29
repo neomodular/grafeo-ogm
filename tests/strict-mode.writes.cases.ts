@@ -259,6 +259,32 @@ export const badWriteShapes: Record<string, Run> = {
     user(ogm).create({
       input: [{ email: 'a@x', posts: { create: 0 as never } }],
     }),
+  // vNEXT — strict item 46 (captured from 041511b, v2.23.0).
+  'update: true (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ update: true as never }] },
+    }),
+  'update: false (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ update: false as never }] },
+    }),
+  'connect: false (nested in update)': (ogm) =>
+    user(ogm).update({
+      where,
+      update: { name: 'n', posts: [{ connect: false as never }] },
+    }),
+  'connect: 0 (nested in create)': (ogm) =>
+    user(ogm).create({
+      input: [{ email: 'a@x', posts: { connect: 0 as never } }],
+    }),
+  'update field: string item': (ogm) =>
+    user(ogm).update({ where, update: { name: 'n', posts: ['x'] as never } }),
+  'update field: boolean': (ogm) =>
+    user(ogm).update({ where, update: { name: 'n', posts: true as never } }),
+  'create field input: boolean': (ogm) =>
+    user(ogm).create({ input: [{ email: 'a@x', posts: true as never }] }),
 };
 
 /** Legitimate shapes: never warn, compile the same in both modes. */
