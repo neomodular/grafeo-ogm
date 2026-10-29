@@ -1766,6 +1766,16 @@ These values carry nothing to write, and 2.x skipped them without a word:
 
 Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since vNEXT. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-vnext) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-vnext) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
 
+#### 47. A connection sort on a node-typed or aggregating `@cypher` field (since vNEXT)
+
+```typescript
+await users.find({ selectionSet: '{ friendsConnection(sort: [{ node: { topPost: DESC } }]) { edges { node { name } } } }' });
+// default: the edges come back unsorted — the sort is ignored (and warns)
+// strict:  OGMError: Cannot sort connection "friendsConnection" by the @cypher field "User.topPost": it returns a node …
+```
+
+A connection `sort` (selectionSet) or `orderBy` (typed `select`) on a `@cypher` field read a stored property of that name, which the field never has, so the sort was ignored. Since vNEXT a scalar `@cypher` field sorts by its statement's value in both modes, as a nested relationship sort does. Two kinds of field still cannot be sorted by: a node-typed field (a node has no sort order) and a statement that aggregates (it cannot be computed per edge; sort at the top level instead). Default mode keeps ignoring them and warns; strict mode throws. The warning code is `connection-sort-cypher-field`, logged once per OGM instance, field and connection.
+
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
 ```typescript

@@ -3445,6 +3445,58 @@ export class SelectionCompiler {
   }
 
   /**
+   * vNEXT — the sort value of a node-scope connection sort key that is a
+   * `@cypher` field, or `undefined` for a stored property. Pre-vNEXT every
+   * key compiled to `n0.<field>`, a stored property a `@cypher` field never
+   * has, so the sort was silently ignored (the projected `score` came back
+   * unsorted). A scalar field now sorts by its statement's first row, as a
+   * nested relationship sort does (`compileSortedComprehension`); this is a
+   * default-mode fix (the ignored sort was not a result anyone could rely
+   * on).
+   *
+   * Strict item 47: a node-typed field (a node is no sort key:
+   * `apoc.coll.sortMulti` fails on one) and an aggregating statement (it
+   * cannot be inlined) keep the ignored `n0.<field>` key by default, with a
+   * warning; strict mode throws `OGMError`.
+   */
+  private connectionCypherSortKey(
+    field: string,
+    childVar: string,
+    targetDef: NodeDefinition,
+    node: SelectionNode,
+  ): string | undefined {
+    const prop = targetDef.properties.get(field);
+    if (!prop?.isCypher || !prop.cypherStatement) return undefined;
+    const label = `${targetDef.typeName}.${field}`;
+    let problem: string | undefined;
+    if (!isScalarProperty(prop, this.schema))
+      problem = `it returns ${prop.isArray ? 'a list of nodes' : 'a node'} (type "${prop.type}"), which has no sort order`;
+    else
+      try {
+        return buildInlineCypherFieldExpr(
+          prop.cypherStatement,
+          childVar,
+          label,
+        );
+      } catch (err) {
+        if (!(err instanceof OGMError)) throw err;
+        problem =
+          'its statement aggregates, so it cannot be computed per edge (select and sort it at the top level instead)';
+      }
+    if (this.strictMode.strict)
+      throw new OGMError(
+        `Cannot sort connection "${node.fieldName}" by the @cypher field "${label}": ${problem}.`,
+      );
+    this.strictMode.warn(
+      'connection-sort-cypher-field',
+      `${label}\u0000${node.fieldName}`,
+      `The sort of connection "${node.fieldName}" by the @cypher field "${label}" is ignored: ${problem}.`,
+      'throw an OGMError for a connection sort key that cannot be sorted by',
+    );
+    return undefined;
+  }
+
+  /**
    * A pattern comprehension sorted with `apoc.coll.sortMulti` (v2.4.8).
    * Each element is wrapped as `{ __node: <projection>, __skN: <sort
    * value> }` — sortMulti only reads top-level map keys — and unwrapped
@@ -3864,8 +3916,12 @@ export class SelectionCompiler {
         assertSafeIdentifier(field, 'connection orderBy field');
         const sourceVar = scope === 'edge' ? edgeVar : childVar;
         const syntheticKey = `__sk${i}`;
+        const value =
+          scope === 'node'
+            ? this.connectionCypherSortKey(field, childVar, targetDef, node)
+            : undefined;
         mapParts.push(
-          `${syntheticKey}: ${sourceVar}.${escapeIdentifier(field)}`,
+          `${syntheticKey}: ${value ?? `${sourceVar}.${escapeIdentifier(field)}`}`,
         );
         // apoc.coll.sortMulti convention: ^ prefix = ASC, no prefix = DESC
         sortKeyTokens.push(
