@@ -658,6 +658,9 @@ export class SelectNormalizer {
       isConnection: true,
     };
 
+    const typePrefix = `${nodeDef.typeName}${baseFieldName.charAt(0).toUpperCase()}${baseFieldName.slice(1)}`;
+    this.checkConnectionShape(fieldName, value, relDef, nodeDef, typePrefix);
+
     // v2.5.3 — the generated SelectFields offer `xConnection: true`,
     // `edges: true`, `node: true` and `properties: true`. Pre-2.5.3 only the
     // `{ select }` object forms were read, so every `true` form returned
@@ -767,14 +770,159 @@ export class SelectNormalizer {
     }
 
     // v2.8.0 — report `pageInfo` / `cursor` the runtime cannot project.
-    for (const issue of connectionKeyIssues(
-      node,
-      `${nodeDef.typeName}${baseFieldName.charAt(0).toUpperCase()}${baseFieldName.slice(1)}`,
-      'select',
-    ))
+    for (const issue of connectionKeyIssues(node, typePrefix, 'select'))
       reportUnknownSelectedField(this.strictMode, 'select', issue);
 
     return node;
+  }
+
+  /**
+   * vNEXT — report a connection select value the runtime cannot honour,
+   * as {@link SelectNormalizer.checkRelationshipShape} does for a
+   * relationship (strict items 16 / 17): a value that is neither `true` nor
+   * `{ select, where?, orderBy? }`, a key the connection, its `select`, its
+   * `edges` or an edge's `node` / `properties` does not take, and
+   * `totalCount` / `edges` / `node` / `properties` given a value of the
+   * wrong kind. Pre-vNEXT all of them were dropped silently in both modes —
+   * `edges: { select: { node, properties } }` came back as `edges: [{}]`.
+   * 2.x output is unchanged (warned); strict throws.
+   */
+  private checkConnectionShape(
+    fieldName: string,
+    value: unknown,
+    relDef: RelationshipDefinition,
+    nodeDef: NodeDefinition,
+    typePrefix: string,
+  ): void {
+    if (value === true) return;
+    const connectionType = `type "${typePrefix}Connection"`;
+    const edgeType = `type "${typePrefix}Relationship"`;
+    const set = (v: unknown) => v != null && v !== false;
+    const quote = (keys: readonly string[]) =>
+      keys.map((k) => `"${k}"`).join(', ');
+    const shape = (
+      owner: string,
+      field: string,
+      expected: string,
+      outcome: string,
+    ) =>
+      reportUnknownSelectedField(this.strictMode, 'select', {
+        owner,
+        field,
+        subSelection: true,
+        shape: { expected, outcome },
+      });
+    const unknownKey = (owner: string, field: string, hint?: string) =>
+      reportUnknownSelectedField(this.strictMode, 'select', {
+        owner,
+        field,
+        subSelection: true,
+        outcome: LEFT_OUT,
+        ...(hint ? { hint } : {}),
+      });
+    const ignored = (keys: readonly string[]) =>
+      `2.x ignores the unknown key${keys.length > 1 ? 's' : ''}`;
+    const EMPTY_EDGES = '2.x returns every edge as an empty object';
+
+    const connectionForm =
+      `\`${fieldName}: true\` or ` +
+      `\`${fieldName}: { select: { edges: { node, properties, cursor }, totalCount, pageInfo }, where?, orderBy? }\``;
+    if (!isPlainObject(value)) {
+      shape(
+        `type "${nodeDef.typeName}"`,
+        fieldName,
+        `is a connection of ${relDef.target}: select it with ${connectionForm}`,
+        EMPTY_EDGES,
+      );
+      return;
+    }
+    const topUnknown = Object.keys(value).filter(
+      (k) => value[k] !== undefined && !RELATIONSHIP_SELECT_KEYS.has(k),
+    );
+    const select = value.select;
+    const hasSelect = !!select && typeof select === 'object';
+    if (topUnknown.length > 0 || !hasSelect)
+      shape(
+        `type "${nodeDef.typeName}"`,
+        fieldName,
+        `is a connection of ${relDef.target} and takes \`select\` (required), \`where\` and \`orderBy\`` +
+          (topUnknown.length > 0 ? `, not ${quote(topUnknown)}` : ''),
+        hasSelect ? ignored(topUnknown) : EMPTY_EDGES,
+      );
+    if (!isPlainObject(select)) return;
+
+    for (const [key, v] of Object.entries(select)) {
+      if (!set(v)) continue;
+      if (key === 'pageInfo') continue; // connectionKeyIssues (item 16)
+      if (key === 'totalCount') {
+        if (v !== true)
+          shape(
+            connectionType,
+            key,
+            'is a scalar field (Int!): select it with `totalCount: true`',
+            LEFT_OUT,
+          );
+        continue;
+      }
+      if (key !== 'edges') {
+        unknownKey(
+          connectionType,
+          key,
+          key === 'node' || key === 'properties' || key === 'cursor'
+            ? `"${key}" is a field of each edge: \`select: { edges: { ${key}: … } }\`.`
+            : undefined,
+        );
+        continue;
+      }
+      if (v === true) continue;
+      if (!isPlainObject(v)) {
+        shape(
+          connectionType,
+          key,
+          'is a list of edges: select it with `edges: true` or `edges: { node, properties, cursor }`',
+          EMPTY_EDGES,
+        );
+        continue;
+      }
+      for (const [edgeKey, ev] of Object.entries(v)) {
+        if (!set(ev)) continue;
+        if (edgeKey === 'cursor') continue; // connectionKeyIssues (item 16)
+        if (edgeKey !== 'node' && edgeKey !== 'properties') {
+          unknownKey(
+            edgeType,
+            edgeKey,
+            edgeKey === 'select'
+              ? '`node`, `properties` and `cursor` go directly under `edges`, without a `select`: ' +
+                  '`edges: { node: { select: { … } }, properties: { select: { … } } }`.'
+              : undefined,
+          );
+          continue;
+        }
+        if (ev === true) continue;
+        const what =
+          edgeKey === 'node'
+            ? `is the ${relDef.target} node`
+            : `is the relationship properties${relDef.properties ? ` (${relDef.properties})` : ''}`;
+        const form = `select it with \`${edgeKey}: true\` (all scalar fields) or \`${edgeKey}: { select: { … } }\``;
+        if (!isPlainObject(ev)) {
+          shape(edgeType, edgeKey, `${what}: ${form}`, LEFT_OUT);
+          continue;
+        }
+        const extra = Object.keys(ev).filter(
+          (k) => ev[k] !== undefined && k !== 'select',
+        );
+        const usable = !!ev.select && typeof ev.select === 'object';
+        if (extra.length > 0 || !usable)
+          shape(
+            edgeType,
+            edgeKey,
+            `${what} and takes only \`select\`` +
+              (extra.length > 0 ? `, not ${quote(extra)}` : '') +
+              `: ${form}`,
+            usable ? ignored(extra) : LEFT_OUT,
+          );
+      }
+    }
   }
 
   /**

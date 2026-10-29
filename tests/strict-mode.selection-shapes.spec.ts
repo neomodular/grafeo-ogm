@@ -142,7 +142,153 @@ const CASES: Array<{
       'Field "stars" in select on relationship properties type "LbWrote" is a scalar field (Int): select it with `stars: true`.',
     outcome: '2.x leaves it out of the result.',
   },
+  // vNEXT — connection select shapes (silently dropped before vNEXT).
+  {
+    label: 'typed: connection given a number',
+    run: typed({ postsConnection: 1 }),
+    error:
+      'Field "postsConnection" in select on type "LbUser" is a connection of LbPost: select it with `postsConnection: true` or `postsConnection: { select: { edges: { node, properties, cursor }, totalCount, pageInfo }, where?, orderBy? }`.',
+    outcome: '2.x returns every edge as an empty object.',
+  },
+  {
+    label: 'typed: connection object with an unknown key',
+    run: typed({ postsConnection: { selct: { edges: true } } }),
+    error:
+      'Field "postsConnection" in select on type "LbUser" is a connection of LbPost and takes `select` (required), `where` and `orderBy`, not "selct".',
+    outcome: '2.x returns every edge as an empty object.',
+  },
+  {
+    label: 'typed: connection object with select and an unknown key',
+    run: typed({ postsConnection: { select: { edges: true }, first: 2 } }),
+    error:
+      'Field "postsConnection" in select on type "LbUser" is a connection of LbPost and takes `select` (required), `where` and `orderBy`, not "first".',
+    outcome: '2.x ignores the unknown key.',
+  },
+  {
+    label: 'typed: connection without select',
+    run: typed({ postsConnection: { where: { node: { title: 'a' } } } }),
+    error:
+      'Field "postsConnection" in select on type "LbUser" is a connection of LbPost and takes `select` (required), `where` and `orderBy`.',
+    outcome: '2.x returns every edge as an empty object.',
+  },
+  {
+    label: 'typed: connection totalCount given an object',
+    run: typed({
+      postsConnection: { select: { totalCount: { select: {} }, edges: true } },
+    }),
+    error:
+      'Field "totalCount" in select on type "LbUserPostsConnection" is a scalar field (Int!): select it with `totalCount: true`.',
+    outcome: '2.x leaves it out of the result.',
+  },
+  {
+    label: 'typed: connection edges given a number',
+    run: typed({ postsConnection: { select: { edges: 1 } } }),
+    error:
+      'Field "edges" in select on type "LbUserPostsConnection" is a list of edges: select it with `edges: true` or `edges: { node, properties, cursor }`.',
+    outcome: '2.x returns every edge as an empty object.',
+  },
+  {
+    label: 'typed: connection edge node without select',
+    run: typed({
+      postsConnection: { select: { edges: { node: { title: true } } } },
+    }),
+    error:
+      'Field "node" in select on type "LbUserPostsRelationship" is the LbPost node and takes only `select`, not "title": select it with `node: true` (all scalar fields) or `node: { select: { … } }`.',
+    outcome: '2.x leaves it out of the result.',
+  },
+  {
+    label: 'typed: connection edge node with select and an unknown key',
+    run: typed({
+      postsConnection: {
+        select: {
+          edges: {
+            node: { select: { id: true }, where: { title: 'a' } },
+          },
+        },
+      },
+    }),
+    error:
+      'Field "node" in select on type "LbUserPostsRelationship" is the LbPost node and takes only `select`, not "where": select it with `node: true` (all scalar fields) or `node: { select: { … } }`.',
+    outcome: '2.x ignores the unknown key.',
+  },
+  {
+    label: 'typed: connection edge properties given a string',
+    run: typed({
+      postsConnection: { select: { edges: { properties: 'stars' } } },
+    }),
+    error:
+      'Field "properties" in select on type "LbUserPostsRelationship" is the relationship properties (LbWrote): select it with `properties: true` (all scalar fields) or `properties: { select: { … } }`.',
+    outcome: '2.x leaves it out of the result.',
+  },
 ];
+
+/** vNEXT — keys a connection's `select` / `edges` does not take. */
+const UNKNOWN_CONNECTION_KEYS: Array<{
+  label: string;
+  run: (m: ModelOf) => Promise<unknown>;
+  error: string;
+}> = [
+  {
+    label: 'edges wrapped in select',
+    run: typed({
+      postsConnection: {
+        select: {
+          edges: {
+            select: {
+              node: { select: { title: true } },
+              properties: { select: { stars: true } },
+            },
+          },
+        },
+      },
+    }),
+    error:
+      'Unknown field "select" in select on type "LbUserPostsRelationship". `node`, `properties` and `cursor` go directly under `edges`, without a `select`: `edges: { node: { select: { … } }, properties: { select: { … } } }`.',
+  },
+  {
+    label: 'unknown key in the connection select',
+    run: typed({ postsConnection: { select: { edgs: true } } }),
+    error: 'Unknown field "edgs" in select on type "LbUserPostsConnection".',
+  },
+  {
+    label: 'node directly under the connection select',
+    run: typed({ postsConnection: { select: { node: true } } }),
+    error:
+      'Unknown field "node" in select on type "LbUserPostsConnection". "node" is a field of each edge: `select: { edges: { node: … } }`.',
+  },
+  {
+    label: 'unknown key in edges',
+    run: typed({ postsConnection: { select: { edges: { nod: true } } } }),
+    error: 'Unknown field "nod" in select on type "LbUserPostsRelationship".',
+  },
+];
+
+describe('vNEXT — unknown keys in a typed connection select', () => {
+  it.each(UNKNOWN_CONNECTION_KEYS.map((c) => [c.label, c] as const))(
+    'default: %s warns once, output unchanged',
+    async (_label, c) => {
+      const h = harness();
+      await c.run(h.model);
+      await c.run(h.model);
+      expect(h.logger.warn).toHaveBeenCalledTimes(1);
+      const [, field, owner] = c.error.match(
+        /^Unknown field "([^"]+)" in select on (type "[^"]+")/,
+      )!;
+      expect(String(h.logger.warn.mock.calls[0][0])).toContain(
+        `selects "${field}", which is not a field of ${owner}; 2.x leaves it out of the result.`,
+      );
+    },
+  );
+
+  it.each(UNKNOWN_CONNECTION_KEYS.map((c) => [c.label, c] as const))(
+    'strict: %s throws',
+    async (_label, c) => {
+      const h = harness({ strict: true });
+      await expect(c.run(h.model)).rejects.toThrow(new OGMError(c.error));
+      expect(h.logger.warn).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('known fields in the wrong shape — default mode', () => {
   it.each(CASES.map((c) => [c.label, c] as const))(
@@ -193,6 +339,36 @@ describe('shapes that work never warn', () => {
       typed({ posts: { where: { title: 'a' } } }),
     ],
     ['typed connection true', typed({ postsConnection: true })],
+    [
+      'typed connection, every documented key',
+      typed({
+        postsConnection: {
+          where: { node: { title: 'a' } },
+          orderBy: [{ edge: { stars: 'DESC' } }],
+          select: {
+            totalCount: true,
+            pageInfo: { select: { hasNextPage: true } },
+            edges: {
+              cursor: true,
+              node: { select: { id: true } },
+              properties: { select: { stars: true } },
+            },
+          },
+        },
+      }),
+    ],
+    [
+      'typed connection true / false / null parts',
+      typed({
+        postsConnection: {
+          select: {
+            totalCount: false,
+            pageInfo: null,
+            edges: { node: true, properties: true, cursor: false },
+          },
+        },
+      }),
+    ],
     ['typed scalar false / null', typed({ id: true, name: false, big: null })],
   ] as const)('%s', async (_label, run) => {
     for (const strict of [false, true]) {

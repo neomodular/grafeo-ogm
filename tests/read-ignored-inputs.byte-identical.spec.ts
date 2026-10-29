@@ -153,6 +153,37 @@ const V270: Record<string, { cypher: string; params: unknown }> = {
       'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { properties: e0 { .`note` } }] } }',
     params: {},
   },
+  // vNEXT — connection select shapes, captured from v2.22.0 (ad90081).
+  'typed: connection edges wrapped in select': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { .`id`, postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | {  }] } }',
+    params: {},
+  },
+  'typed: connection totalCount given an object': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { node: n0 { .`id`, .`runId`, .`rank`, .`title`, .`secret` }, properties: e0 { .`note`, .`stars` } }] } }',
+    params: {},
+  },
+  'typed: connection select with an unknown key': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { totalCount: size([(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | 1]) } }',
+    params: {},
+  },
+  'typed: connection edge node without select': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | { properties: e0 { .`note`, .`stars` } }] } }',
+    params: {},
+  },
+  'typed: connection object with an unknown key': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | {  }] } }',
+    params: {},
+  },
+  'typed: connection edges given a number': {
+    cypher:
+      'MATCH (n:`LbUser`)\nRETURN n { postsConnection: { edges: [(n)-[e0:`LB_WROTE`]->(n0:`LbPost`) | {  }] } }',
+    params: {},
+  },
   'union parent: relationship where': {
     cypher:
       "MATCH (n:`LbUser`)\nRETURN n { items: [(n)-[:`LB_HAS_ITEM`]->(n0) | n0 { __typename: head([__label IN labels(n0) WHERE __label IN ['LbPost', 'LbDoc']]), .`id`, author: CASE WHEN n0:`LbPost` THEN head([(n0)<-[:`LB_WROTE`]-(n1:`LbUser`) | n1 { .`id` }]) ELSE null END }] }",

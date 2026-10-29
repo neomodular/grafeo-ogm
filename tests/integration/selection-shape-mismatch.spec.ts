@@ -99,6 +99,69 @@ describeLive('selection shape mismatches — live Neo4j', () => {
     ).rejects.toThrow(OGMError);
   });
 
+  // vNEXT — a connection select in a shape the runtime cannot honour was
+  // dropped silently in both modes (`edges: [{}]`).
+  const wrappedEdges = {
+    id: true,
+    postsConnection: {
+      select: {
+        edges: {
+          select: {
+            node: { select: { title: true } },
+            properties: { select: { stars: true } },
+          },
+        },
+      },
+    },
+  };
+
+  it('default: connection edges wrapped in select keep the v2.22.0 result, with a warning', async () => {
+    const { user, logger } = make(false);
+    const rows = (await user.find({
+      where: where(),
+      select: wrappedEdges,
+    } as never)) as Row[];
+    expect(rows).toEqual([{ id: h.id('u'), postsConnection: { edges: [{}] } }]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(String(logger.warn.mock.calls[0][0])).toContain(
+      'selects "select", which is not a field of type "LbUserPostsRelationship"',
+    );
+  });
+
+  it('strict: connection edges wrapped in select throw; the documented shape works', async () => {
+    const { user, logger } = make(true);
+    await expect(
+      user.find({ where: where(), select: wrappedEdges } as never),
+    ).rejects.toThrow(
+      'Unknown field "select" in select on type "LbUserPostsRelationship".',
+    );
+    const rows = (await user.find({
+      where: where(),
+      select: {
+        id: true,
+        postsConnection: {
+          select: {
+            totalCount: true,
+            edges: {
+              node: { select: { title: true } },
+              properties: { select: { stars: true } },
+            },
+          },
+        },
+      },
+    } as never)) as Row[];
+    expect(rows).toEqual([
+      {
+        id: h.id('u'),
+        postsConnection: {
+          totalCount: 1,
+          edges: [{ node: { title: 'a' }, properties: { stars: 5 } }],
+        },
+      },
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it('default: typed relationship {} is left out, with a warning', async () => {
     const { user, logger } = make(false);
     const rows = (await user.find({

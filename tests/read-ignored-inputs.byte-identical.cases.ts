@@ -235,6 +235,55 @@ export const SHAPE_CASES: Case[] = [
       },
     }),
   ],
+  // vNEXT — connection select shapes, warned since vNEXT (captured from v2.22.0).
+  [
+    'typed: connection edges wrapped in select',
+    {},
+    typed({
+      id: true,
+      postsConnection: {
+        select: {
+          edges: {
+            select: {
+              node: { select: { title: true } },
+              properties: { select: { stars: true } },
+            },
+          },
+        },
+      },
+    }),
+  ],
+  [
+    'typed: connection totalCount given an object',
+    {},
+    typed({
+      postsConnection: { select: { totalCount: { select: {} }, edges: true } },
+    }),
+  ],
+  [
+    'typed: connection select with an unknown key',
+    {},
+    typed({ postsConnection: { select: { edgs: true, totalCount: true } } }),
+  ],
+  [
+    'typed: connection edge node without select',
+    {},
+    typed({
+      postsConnection: {
+        select: { edges: { node: { title: true }, properties: true } },
+      },
+    }),
+  ],
+  [
+    'typed: connection object with an unknown key',
+    {},
+    typed({ postsConnection: { selct: { edges: true } } }),
+  ],
+  [
+    'typed: connection edges given a number',
+    {},
+    typed({ postsConnection: { select: { edges: 1 } } }),
+  ],
 ];
 
 /** Bug 2 — typed select `where` under a union parent: 2.x ignores it. */

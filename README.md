@@ -1286,6 +1286,18 @@ await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } 
 
 Checked wherever unknown fields are (#12): nested selections, connection `node` and edge `properties`, inline fragments. In the typed `select`, a scalar or edge property must be `true`, and a relationship `true` (all scalar fields) or an object with only `select`, `where` and `orderBy`. An unknown key next to a usable `select` / `where` / `orderBy` is ignored in 2.x, as before; on its own the field is left out. A relationship given `{}` (every key of the generated object type is optional) is left out of the result in 2.x, with a one-time warning; under `strict: true` it selects all scalar fields of the target, as `true` does.
 
+Since vNEXT the same check covers a typed connection select, which was dropped silently in both modes before:
+
+```typescript
+await users.find({
+  select: { postsConnection: { select: { edges: { select: { node: { select: { title: true } } } } } } },
+});
+// default: { postsConnection: { edges: [{}, …] } } — node and properties are left out (and warns)
+// strict:  OGMError: Unknown field "select" in select on type "UserPostsRelationship". `node`, `properties` and `cursor` go directly under `edges`, without a `select`: …
+```
+
+A connection takes `true` or `{ select, where?, orderBy? }` (`select` required, as in the generated types); its `select` takes `edges`, `totalCount` (`true`) and `pageInfo` ([item 16](#16-pagination-fields-selected-in-the-wrong-shape-since-280)); `edges` takes `true` or `{ node, properties, cursor }`; `node` and `properties` take `true` or `{ select: { … } }`. Anything else is reported with the warning codes `select-unknown-field` / `select-field-shape`; 2.x output is unchanged.
+
 #### 18. Typed `select` `where` / `orderBy` under a union (since 2.8.0)
 
 ```typescript
