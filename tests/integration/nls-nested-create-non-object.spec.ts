@@ -1,5 +1,5 @@
 /**
- * Live suite (vNEXT, security): a nested create item that is not an object.
+ * Live suite (v2.24.1, security): a nested create item that is not an object.
  *
  * `create: true`, `create: [5]`, `create: [[]]` or `{ node: true }` writes
  * an empty node of the target type (`@id` and `@default` values only). The

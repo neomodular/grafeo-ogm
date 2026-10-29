@@ -284,9 +284,9 @@ function checkCreates(
 ): void {
   const abstract = abstractTarget(targetDef.typeName, schema);
   for (const item of asArray(creates)) {
-    // vNEXT — the compiler creates a node for every non-null item, a
+    // v2.24.1 — the compiler creates a node for every non-null item, a
     // non-object one too (`create: true`, `[5]`, `[[]]`, `{ node: true }`
-    // write an empty node: `@id` and `@default` values only). Pre-vNEXT this
+    // write an empty node: `@id` and `@default` values only). Pre-2.24.1 this
     // walk skipped those items, so they created a node of a type whose
     // `create` policies (default deny, WITH CHECK) would reject `{}`. They
     // are checked as the empty input they write. `null` items throw in the
@@ -400,7 +400,7 @@ export function targetBundle(
   };
 }
 
-/** vNEXT — the node input a non-object create spec writes: none. */
+/** v2.24.1 — the node input a non-object create spec writes: none. */
 function emptyIfNotObject(value: unknown): Record<string, unknown> {
   return isPlainObject(value) ? value : {};
 }

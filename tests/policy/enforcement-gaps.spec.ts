@@ -346,7 +346,7 @@ describe('Nested writes enforce the target type as a direct write would', () => 
     expect(recorded).toHaveLength(0);
   });
 
-  // vNEXT — a non-object nested create item writes an empty node; the
+  // v2.24.1 — a non-object nested create item writes an empty node; the
   // policy walk used to skip it, so it bypassed default deny and WITH CHECK.
   const nonObjectCreates: [string, unknown][] = [
     ['true', true],
