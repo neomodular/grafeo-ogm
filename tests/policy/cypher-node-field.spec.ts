@@ -207,10 +207,10 @@ describe('policy: node-typed @cypher field projected bare (v2.20.1)', () => {
 });
 
 /**
- * vNEXT — security: the same guard applies where the value is filtered or
+ * v2.22.1 — security: the same guard applies where the value is filtered or
  * sorted on. Live coverage: tests/integration/nls-cypher-node-filter-sort.spec.ts.
  */
-describe('policy: node-typed @cypher field in where / sort (vNEXT)', () => {
+describe('policy: node-typed @cypher field in where / sort (2.22.1)', () => {
   type UserModel = ReturnType<ReturnType<OGM['withContext']>['model']>;
   const run = async (
     call: (m: UserModel) => Promise<unknown>,

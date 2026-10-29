@@ -369,7 +369,7 @@ type Tag @node { id: ID! @unique }
 });
 
 /**
- * vNEXT — security: a node-typed `@cypher` field used in a where filter
+ * v2.22.1 — security: a node-typed `@cypher` field used in a where filter
  * (root, relationship quantifier, `count`) or as a sort key (root
  * `options.sort`, nested `sort`) is read through the target's read policy.
  * Without `policies`, with a bypass, an override, or no read clause on the

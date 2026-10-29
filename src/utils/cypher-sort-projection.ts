@@ -58,7 +58,7 @@ export function compileSortClause(args: {
   propertyLookup: (field: string) => PropertyDefinition | undefined;
   preserveVars?: ReadonlyArray<string>;
   /**
-   * vNEXT — security: the ORDER BY expression for a `@cypher` sort key's
+   * v2.22.1 — security: the ORDER BY expression for a `@cypher` sort key's
    * projected alias. `Model` / `InterfaceModel` filter a node-typed field's
    * value by the target's read policy here (`guardCypherSortRef`), so rows
    * don't sort by a node the caller cannot read. Absent → the bare alias.

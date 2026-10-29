@@ -346,7 +346,7 @@ export class CypherFieldScope {
  * statement's first row, which is a node or a list, so both shapes are
  * filtered.
  *
- * vNEXT — shared by the projection (`SelectionCompiler`), the where
+ * v2.22.1 — shared by the projection (`SelectionCompiler`), the where
  * reference (`WhereCompiler`) and the sort keys, so a hidden node reads as
  * absent wherever the value is evaluated.
  */

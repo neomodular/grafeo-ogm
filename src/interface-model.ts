@@ -482,7 +482,7 @@ export class InterfaceModel<
         nodeVar: 'n',
         propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
         preserveVars: ['__typename', ...selectScope.carried()],
-        // vNEXT — security: a node-typed `@cypher` sort key is read through
+        // v2.22.1 — security: a node-typed `@cypher` sort key is read through
         // the target's read policy (`WhereCompiler.guardCypherSortRef`).
         guardCypherSort: policyContext
           ? (alias, propDef, field) =>

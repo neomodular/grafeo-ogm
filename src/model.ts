@@ -3095,7 +3095,7 @@ export class Model<
      * RETURN can still reference them.
      */
     preserveVars: ReadonlyArray<string> = [],
-    /** vNEXT — see `compileSortClause`'s `guardCypherSort`. */
+    /** v2.22.1 — see `compileSortClause`'s `guardCypherSort`. */
     guard?: CypherNodeGuardArgs,
   ): { pre: string; post: string } {
     const postParts: string[] = [];

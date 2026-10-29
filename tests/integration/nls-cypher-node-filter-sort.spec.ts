@@ -2,9 +2,9 @@
  * Live: a node-typed `@cypher` field (its type a node, interface or union
  * type) used in a where filter or as a sort key is evaluated on its value
  * filtered by the target type's `read` policy, the value the selection
- * returns since v2.20.1 (vNEXT — security).
+ * returns since v2.20.1 (v2.22.1 — security).
  *
- * Pre-vNEXT the filter and the sort read the statement's raw value, so a
+ * Pre-2.22.1 the filter and the sort read the statement's raw value, so a
  * caller learned whether a node the target's policy hides exists:
  * `topPost_NOT: null`, `posts: []`, `friends_SOME: { topPost_NOT: null }`,
  * `count`, `aggregate`, `options.sort: [{ topPost: … }]`, through Model and
@@ -278,7 +278,7 @@ describeApoc('NLS — node-typed @cypher nested sort key (live, APOC)', () => {
   ])(
     '%s mode: a nested sort reads a hidden node as null',
     async (_label, strict) => {
-      // Pre-vNEXT the sort key was y's friend a's hidden post: sortMulti
+      // Pre-2.22.1 the sort key was y's friend a's hidden post: sortMulti
       // cannot compare nodes, so the query failed only when a hidden (or
       // visible) node existed. With the hidden node read as null it runs.
       const rows = (await makeOgm(driver, strict)

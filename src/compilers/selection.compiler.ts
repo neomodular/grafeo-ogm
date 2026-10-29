@@ -3472,8 +3472,8 @@ export class SelectionCompiler {
         throw new OGMError(
           `Invalid sort field "${field}": not a scalar property of ${targetDef.typeName}.`,
         );
-      // vNEXT — security: a node-typed `@cypher` sort key is read through
-      // the target's read policy, as its projection is (v2.20.1). Pre-vNEXT
+      // v2.22.1 — security: a node-typed `@cypher` sort key is read through
+      // the target's read policy, as its projection is (v2.20.1). Pre-2.22.1
       // the list was ordered by nodes the caller cannot read. The inline
       // expression is the statement's first row, never the whole list.
       const value =

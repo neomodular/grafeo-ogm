@@ -41,7 +41,7 @@ import {
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 
 /**
- * vNEXT — what `WhereCompiler.guardCypherNodeRef` needs to filter a
+ * v2.22.1 — what `WhereCompiler.guardCypherNodeRef` needs to filter a
  * node-typed `@cypher` value by its target's read policy: the policy
  * context (none → no guard), the statement's param counter and the params
  * the policy clause binds into.
@@ -1368,7 +1368,7 @@ export class WhereCompiler {
     nodeVar: string,
     propsHolder: { properties: Map<string, PropertyDefinition> } | undefined,
     scope: CypherFieldScope | null,
-    /** vNEXT — see `guardCypherNodeRef`. */
+    /** v2.22.1 — see `guardCypherNodeRef`. */
     guard?: CypherNodeGuardArgs,
   ): string {
     const propDef = propsHolder?.properties.get(fieldName);
@@ -1400,11 +1400,11 @@ export class WhereCompiler {
   }
 
   /**
-   * vNEXT — security: a node-typed `@cypher` field (its type a node,
+   * v2.22.1 — security: a node-typed `@cypher` field (its type a node,
    * interface or union type) referenced by a where filter is evaluated on
    * its value filtered by the target type's `read` policy, the same value
    * the selection returns (v2.20.1, `guardCypherNodeExpr`): a hidden node
-   * reads as `null`, a list without its hidden elements. Pre-vNEXT the
+   * reads as `null`, a list without its hidden elements. Pre-2.22.1 the
    * filter saw the statement's raw value, so `topPost_NOT: null` (and
    * `_NOT_IN`, `_NOT` with any value, `posts: []` …) told a caller whether
    * a node the target's policy hides exists — at the root, through
@@ -1458,7 +1458,7 @@ export class WhereCompiler {
   }
 
   /**
-   * vNEXT — the guarded value of a node-typed `@cypher` sort key (`ref`, the
+   * v2.22.1 — the guarded value of a node-typed `@cypher` sort key (`ref`, the
    * projected `__sort_<field>` alias) for `Model` / `InterfaceModel`
    * `options.sort`: rows sort as if a hidden node were absent. See
    * `guardCypherNodeRef`.
@@ -2359,7 +2359,7 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     scope: CypherFieldScope,
-    /** vNEXT — see `guardCypherNodeRef`. */
+    /** v2.22.1 — see `guardCypherNodeRef`. */
     guard?: CypherNodeGuardArgs,
   ): string {
     if (nodeDef.relationships.has(key))
@@ -2517,7 +2517,7 @@ export class WhereCompiler {
     scope: CypherFieldScope | null,
     counter: { count: number },
     caseInsensitive = false,
-    /** vNEXT — see `guardCypherNodeRef`. */
+    /** v2.22.1 — see `guardCypherNodeRef`. */
     policyContext?: PolicyContextBundle,
   ): WhereResult {
     if (!policyContext)
