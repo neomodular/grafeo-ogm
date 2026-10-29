@@ -143,3 +143,18 @@ export function compileSortClause(args: {
 export function orderBeforeProjection(post: string): string[] {
   return post ? ['WITH *', post] : [];
 }
+
+/**
+ * vNEXT — strict item 49: whether `options` both sort (a non-empty `sort`)
+ * and page (`offset` or `limit`). Only then does moving the SELECT
+ * `@cypher` preludes after the paging save work: an unsorted LIMIT already
+ * stops early, and an unpaged sort evaluates every row either way.
+ */
+export function sortsAndPages(
+  options:
+    | { sort?: ReadonlyArray<unknown>; offset?: unknown; limit?: unknown }
+    | undefined,
+): boolean {
+  if (!options?.sort?.length) return false;
+  return options.offset != null || options.limit != null;
+}

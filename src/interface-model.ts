@@ -28,6 +28,7 @@ import { selectionSetSource } from './utils/selection-set-source';
 import {
   compileSortClause,
   orderBeforeProjection,
+  sortsAndPages,
 } from './utils/cypher-sort-projection';
 import {
   assertSafeIdentifier,
@@ -474,6 +475,9 @@ export class InterfaceModel<
     // WITH must preserve `__typename` (already in scope from the typename
     // resolution step above) AND any `__sel_*` aliases that the select
     // prelude has already projected.
+    // vNEXT — strict item 49: sorted + paged queries project the SELECT
+    // `@cypher` fields after SKIP / LIMIT (see `Model.find`).
+    const pageFirst = this.strictMode.strict && sortsAndPages(params?.options);
     let sortPre = '';
     let sortOrderBy = '';
     if (params?.options?.sort?.length) {
@@ -481,7 +485,9 @@ export class InterfaceModel<
         sort: params.options.sort as ReadonlyArray<Record<string, unknown>>,
         nodeVar: 'n',
         propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
-        preserveVars: ['__typename', ...selectScope.carried()],
+        preserveVars: pageFirst
+          ? ['__typename']
+          : ['__typename', ...selectScope.carried()],
         // v2.22.1 — security: a node-typed `@cypher` sort key is read through
         // the target's read policy (`WhereCompiler.guardCypherSortRef`).
         guardCypherSort: policyContext
@@ -499,7 +505,8 @@ export class InterfaceModel<
       sortOrderBy = compiled.orderBy;
     }
 
-    if (selectScope.hasAny()) cypherParts.push(...selectScope.emit());
+    if (selectScope.hasAny() && !pageFirst)
+      cypherParts.push(...selectScope.emit());
     if (sortPre) cypherParts.push(sortPre);
 
     // Validate offset/limit BEFORE forwarding to the driver — pre-1.7.4
@@ -526,6 +533,8 @@ export class InterfaceModel<
     // Same as Model.find: order/page BEFORE the projection, or ORDER BY
     // reads the projected map instead of the node.
     cypherParts.push(...orderBeforeProjection(postParts.join('\n')));
+    if (selectScope.hasAny() && pageFirst)
+      cypherParts.push(...selectScope.emit());
     cypherParts.push(`RETURN ${injected}`);
 
     const cypher = cypherParts.join('\n');

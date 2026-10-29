@@ -1084,7 +1084,7 @@ const ogm = new OGM({ typeDefs, driver, logger, strict: true });
 
 Some input shapes compile to something other than what they say. A typo'd connect key widens the connect to every node. A fulltext `score` inside `OR` is ignored. Fixing these in place would change results that existing code may rely on, so 2.x keeps the old behaviour by default and adds an opt-in switch:
 
-- **`strict` off (the 2.x default).** An input that already worked compiles byte for byte as in the previous release and returns the same result, apart from the fixes listed in the [CHANGELOG](./CHANGELOG.md): a query the server rejected, a result that was always empty or always dropped, or input that used to throw (some are summed up under "Not behind the switch" at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log. Two items warn differently: `Neo4jRecordFactory.dateTime` (item 21), a static helper, emits a `DeprecationWarning` through `process.emitWarning` once per process, and the standalone `cloneSubgraph` (item 26) warns once per `logger`.
+- **`strict` off (the 2.x default).** An input that already worked compiles byte for byte as in the previous release and returns the same result, apart from the fixes listed in the [CHANGELOG](./CHANGELOG.md): a query the server rejected, a result that was always empty or always dropped, or input that used to throw (some are summed up under "Not behind the switch" at the end of this section). The first time an OGM instance sees one of the shapes below, it logs one `warn` through `logger`, naming the problem and ending in "Enable `strict: true` (default in 3.0) to …". Each warning is logged once per OGM instance and shape, so hot paths don't spam the log. Two items warn differently: `Neo4jRecordFactory.dateTime` (item 21), a static helper, emits a `DeprecationWarning` through `process.emitWarning` once per process, and the standalone `cloneSubgraph` (item 26) warns once per `logger`. Item 49, a performance change whose default output is already correct, does not warn.
 - **`strict: true`.** The corrected behaviour: the shape throws `OGMError` or compiles to what the input means. Strict mode never warns.
 - **3.0** makes `strict: true` the default. Turn it on now in new code, and use the warnings to find the call sites to fix in existing code.
 
@@ -1729,6 +1729,21 @@ await posts.create({
 ```
 
 It runs after the field input's `create` and `connect`, with the same `MERGE`, `onCreate`, read guard and `create` policies as in an update item (above). `createMany()` and `upsert()` take no relationship fields, so they are unaffected. The generated `<Type><Field>FieldInput` offers `connectOrCreate` when the target has a `@unique` / `@id` field; the warning code is `nested-write-unknown-key`, as before.
+
+#### 49. Selected `@cypher` fields on a sorted, paged `find` (since vNEXT)
+
+```typescript
+await users.find({
+  options: { sort: [{ name: 'ASC' }], limit: 20 },
+  selectionSet: '{ id postCount }', // postCount is a @cypher field
+});
+// default: postCount is computed for every matched user, then sorted and paged
+// strict:  sorted and paged first, postCount computed for the 20 returned users
+```
+
+A performance change, not a fix: both modes return the same rows with the same values. When a `find` (on a model or an `InterfaceModel`) both sorts and pages (`offset` or `limit`), strict mode projects the selected `@cypher` fields after `ORDER BY` / `SKIP` / `LIMIT`; a `@cypher` field you sort on is still computed for every row, before the sort. On 10k nodes (Neo4j 5.26) a sort on one `@cypher` field with another selected and `limit: 10` drops from 146k to 80k db hits (22 to 12 ms), and a sort on a stored field keeps a bounded top-k instead of fully sorting every row (1.9 MB to 2 KB of sort memory). Unsorted or unpaged queries compile the same in both modes.
+
+**Tie order.** Rows that are equal on every sort key may come back in a different order, or a different one of them may land on a page boundary: Neo4j plans a bounded `Top` instead of a full `Sort`, and neither keeps ties in a defined order. Cypher never guaranteed their order, but if you page on a key that is not unique, add a unique field (`id`) as the last sort key, in either mode. Default mode emits exactly the previous Cypher and does not warn, as its result is correct.
 
 #### Not behind the switch: `aggregate` on list fields
 
