@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.24.0 (2026-10-29) — faster creates, strict paging, bare model() check
+
+> **Minor release.** It adds strict items 49 and 50, and plans multi-input creates faster. Without `strict`, every read and write returns the same result as in 2.23.0. Default-mode Cypher changes in one case: a multi-input `create` whose later items have nested operations. A bare `ogm.model()` on an OGM with `policies` now warns once.
+
+### Performance
+
+- **Multi-input `create` with nested operations** carries the nodes created so far as one list instead of one variable each. Neo4j plans a 100-item create with connects about 3x faster (≈500 → 180 ms on 5.26). Results are unchanged. Cypher is unchanged for single-input creates, and for creates whose later items have no nested operations.
+
+### Strict mode
+
+- **Item 49:** with `strict: true`, a `find` (`Model` or `InterfaceModel`) that both sorts and pages computes selected `@cypher` fields only for the returned page. That is about 2x faster when sorting on another `@cypher` field, and the server keeps a bounded top-k instead of fully sorting. Rows tied on every sort key may come back in a different order; add a unique last sort key such as `id`. Default mode is unchanged and does not warn.
+- **Item 50:** on an OGM configured with `policies`, a bare `ogm.model()` / `ogm.interfaceModel()` applies no policy. Default mode keeps that and now warns once per OGM and type (`model-without-context`). `strict: true` throws `OGMError` from the lookup. Use `ogm.withContext(ctx).model(...)`, or `ogm.unsafe.bypassPolicies().model(...)` for intentional system access. OGMs without policies are unaffected.
+
+### Docs
+
+- Node-Level Security now states that policies apply only through `withContext`.
+
+### Tooling
+
+- `bench/live/` adds a live, server-side Cypher performance harness: slotted runtime; db hits, memory, and warm and cold time; and an interleaved A/B of two checkouts. It is not published.
+
 ## 2.23.0 (2026-10-29) — select shapes, falsy disconnect, create connectOrCreate
 
 > **Minor release.** It extends strict items 17, 41 and 43. Without `strict`, every call that worked in 2.22.1 compiles to byte-identical Cypher and returns the same result; the only addition is one warning per OGM instance and shape. Generated types add `connectOrCreate` to create field inputs.
