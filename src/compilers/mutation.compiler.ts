@@ -822,32 +822,34 @@ export class MutationCompiler {
 
       createdVars.push(nodeVar);
 
-      const hasRelOps = Object.entries(input).some(
-        ([key, value]) => value != null && nodeDef.relationships.has(key),
-      );
-      if (hasRelOps && pending.length > 0) {
-        const list = `[${pending.join(', ')}]`;
-        lines.push(
-          `WITH ${folded ? `__created + ${list}` : list} AS __created, ${nodeVar}`,
-        );
-        folded = true;
-        pending = [];
-      }
-
-      // Process relationship operations (nested create / connect)
-      // Pass the vars created before this item (folded or not) as ancestors
-      // so WITH clauses don't drop them from scope (needed for RETURN n).
+      // Process relationship operations (nested create / connect). The
+      // vars created before this item travel as `__created` once anything
+      // has been created before it; the fold that defines `__created` is
+      // emitted only if the item actually produces nested-op lines (an
+      // ignored key such as a default-mode `connectOrCreate` produces
+      // none, and then nothing changes).
+      const carryList = folded || pending.length > 0;
       const relLines = this.buildCreateRelationships(
         input,
         nodeDef,
         nodeVar,
         prefix,
         params,
-        folded ? ['__created', ...pending] : [...pending],
+        carryList ? ['__created'] : [],
         policyContext,
         counter,
       );
-      lines.push(...relLines);
+      if (relLines.length > 0) {
+        if (pending.length > 0) {
+          const list = `[${pending.join(', ')}]`;
+          lines.push(
+            `WITH ${folded ? `__created + ${list}` : list} AS __created, ${nodeVar}`,
+          );
+          pending = [];
+        }
+        if (carryList) folded = true;
+        lines.push(...relLines);
+      }
       pending.push(nodeVar);
     }
 
