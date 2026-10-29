@@ -793,6 +793,14 @@ export class MutationCompiler {
     const lines: string[] = [];
     const params: Record<string, unknown> = {};
     const createdVars: string[] = [];
+    // vNEXT — created vars not yet folded into the `__created` list. Before
+    // an item with nested ops, the earlier items' vars are folded into ONE
+    // list variable, so its WITH / CALL imports carry `__created, n_<i>`
+    // instead of every earlier var. Pre-vNEXT each item carried all of them:
+    // the statement grew quadratically and Neo4j planned a 100-item create
+    // with connects in ~0.5 s (~3x slower than folded) on every cache miss.
+    let pending: string[] = [];
+    let folded = false;
 
     for (let i = 0; i < inputs.length; i++) {
       const input = inputs[i];
@@ -814,36 +822,58 @@ export class MutationCompiler {
 
       createdVars.push(nodeVar);
 
+      const hasRelOps = Object.entries(input).some(
+        ([key, value]) => value != null && nodeDef.relationships.has(key),
+      );
+      if (hasRelOps && pending.length > 0) {
+        const list = `[${pending.join(', ')}]`;
+        lines.push(
+          `WITH ${folded ? `__created + ${list}` : list} AS __created, ${nodeVar}`,
+        );
+        folded = true;
+        pending = [];
+      }
+
       // Process relationship operations (nested create / connect)
-      // Pass all previously created node vars as ancestors so WITH clauses
-      // don't drop them from scope (needed for RETURN n at the end)
+      // Pass the vars created before this item (folded or not) as ancestors
+      // so WITH clauses don't drop them from scope (needed for RETURN n).
       const relLines = this.buildCreateRelationships(
         input,
         nodeDef,
         nodeVar,
         prefix,
         params,
-        createdVars.slice(0, -1), // ancestors = all vars before current
+        folded ? ['__created', ...pending] : [...pending],
         policyContext,
         counter,
       );
       lines.push(...relLines);
+      pending.push(nodeVar);
     }
 
-    // Add extra labels to all created nodes
-    if (labels && labels.length > 0) {
-      const validatedLabels = labels.map((l) => assertSafeLabel(l)).join(':');
-      for (const nodeVar of createdVars)
-        lines.push(`SET ${nodeVar}:${validatedLabels}`);
-    }
+    const validatedLabels =
+      labels && labels.length > 0
+        ? labels.map((l) => assertSafeLabel(l)).join(':')
+        : '';
 
     // Each input binds its own variable (`n`, `n_1`, ...). Re-bind them
     // all to `n`, one row per created node in input order, so the trailing
     // `RETURN n` — and the projection that replaces it — covers every node,
     // not just the first.
-    if (createdVars.length > 1) {
-      lines.push(`WITH [${createdVars.join(', ')}] AS __created`);
+    if (folded) {
+      lines.push(`WITH __created + [${pending.join(', ')}] AS __created`);
       lines.push('UNWIND __created AS n');
+      // Add extra labels to all created nodes
+      if (validatedLabels) lines.push(`SET n:${validatedLabels}`);
+    } else {
+      // Add extra labels to all created nodes
+      if (validatedLabels)
+        for (const nodeVar of createdVars)
+          lines.push(`SET ${nodeVar}:${validatedLabels}`);
+      if (createdVars.length > 1) {
+        lines.push(`WITH [${createdVars.join(', ')}] AS __created`);
+        lines.push('UNWIND __created AS n');
+      }
     }
 
     lines.push('RETURN n');

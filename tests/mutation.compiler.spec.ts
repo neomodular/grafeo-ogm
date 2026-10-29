@@ -350,6 +350,88 @@ describe('MutationCompiler', () => {
       expect(result.cypher.endsWith('\nRETURN n')).toBe(true);
     });
 
+    // vNEXT (perf) — before an item with nested ops, the earlier items'
+    // vars fold into one `__created` list, so the carried scope stays
+    // `__created, n_<i>` instead of growing with every item (quadratic
+    // statement, ~3x slower Neo4j planning at 100 items).
+    describe('multi-input create with nested ops (folded __created)', () => {
+      const connect = (id: string) => ({
+        hasStatus: { connect: { where: { node: { id } } } },
+      });
+
+      it('folds earlier vars before each item with nested ops', () => {
+        const result = compiler.compileCreate(
+          [
+            { title: 'A', ...connect('s0') },
+            { title: 'B' },
+            { title: 'C', ...connect('s2') },
+            { title: 'D', ...connect('s3') },
+            { title: 'E' },
+          ],
+          bookNode,
+        );
+        const lines = result.cypher.split('\n');
+        // item 0 has nothing to fold: unchanged pre-vNEXT shape
+        expect(lines.slice(0, 3)).toEqual([lines[0], 'WITH n', 'CALL {']);
+        expect(lines).toContain('WITH [n, n_1] AS __created, n_2');
+        expect(lines).toContain('WITH __created + [n_2] AS __created, n_3');
+        expect(lines).toContain('WITH __created, n_3');
+        // no WITH ever carries more than __created + the current item
+        for (const l of lines.filter((x) => x.startsWith('WITH ')))
+          expect(
+            l.replace(/\[[^\]]*\]/g, '[]').split(',').length,
+          ).toBeLessThanOrEqual(2);
+        expect(
+          result.cypher.endsWith(
+            [
+              'WITH __created + [n_3, n_4] AS __created',
+              'UNWIND __created AS n',
+              'RETURN n',
+            ].join('\n'),
+          ),
+        ).toBe(true);
+      });
+
+      it('sets extra labels once, on the re-bound n, when folded', () => {
+        const result = compiler.compileCreate(
+          [{ title: 'A' }, { title: 'B', ...connect('s1') }],
+          bookNode,
+          ['Extra'],
+        );
+        expect(result.cypher).not.toMatch(/SET n_\d+:/);
+        expect(
+          result.cypher.endsWith(
+            [
+              'WITH __created + [n_1] AS __created',
+              'UNWIND __created AS n',
+              'SET n:`Extra`',
+              'RETURN n',
+            ].join('\n'),
+          ),
+        ).toBe(true);
+      });
+
+      it('leaves creates whose later items have no nested ops unchanged', () => {
+        const result = compiler.compileCreate(
+          [{ title: 'A', ...connect('s0') }, { title: 'B' }],
+          bookNode,
+          ['Extra'],
+        );
+        expect(result.cypher).not.toContain('__created +');
+        expect(
+          result.cypher.endsWith(
+            [
+              'SET n:`Extra`',
+              'SET n_1:`Extra`',
+              'WITH [n, n_1] AS __created',
+              'UNWIND __created AS n',
+              'RETURN n',
+            ].join('\n'),
+          ),
+        ).toBe(true);
+      });
+    });
+
     // 2. Create with nested relationship create
     it('should create a node with nested relationship create', () => {
       const result = compiler.compileCreate(
