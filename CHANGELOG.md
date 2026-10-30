@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.24.1 (2026-10-29) — security: non-object nested creates and create policies
+
+> **Security patch.** A nested create item that is not an object skipped the target type's `create` policies. OGMs without `policies` are unchanged.
+
+### Security
+
+- **Nested creates that are not objects bypassed create policies.** `create: true` / `5` / `[true]` / `[[]]` / `{ node: true }` still created an empty node (only its `@id` / `@default` values). This happened in a nested update item, in a `create()` relationship field input at any depth, and through the strict-mode root `create` of `update()`. It applied even to a type whose `create` policies reject it: default deny, or a WITH CHECK restrictive that rejects `{}`. These items are now checked as the empty input `{}` they write, so such a policy throws `PolicyDeniedError` before anything runs. Delete and read policies were not affected. Affects 1.7.0-beta.0 through 2.24.0 ([GHSA-7wp9-pchq-f8pq](https://github.com/neomodular/grafeo-ogm/security/advisories/GHSA-7wp9-pchq-f8pq)).
+
 ## 2.24.0 (2026-10-29) — faster creates, strict paging, bare model() check
 
 > **Minor release.** It adds strict items 49 and 50, and plans multi-input creates faster. Without `strict`, every read and write returns the same result as in 2.23.0. Default-mode Cypher changes in one case: a multi-input `create` whose later items have nested operations. A bare `ogm.model()` on an OGM with `policies` now warns once.
