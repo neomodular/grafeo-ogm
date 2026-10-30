@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.25.0 (2026-10-29) — non-object nested writes, @cypher sort and filter
+
+> **Minor release.** It adds strict items 44–47 for nested write values that are not objects, and for `@cypher` sort keys 2.x cannot honour. It also adds where filters on node-typed `@cypher` fields, and sorts connections by scalar `@cypher` fields. Every write that worked in 2.24.1 compiles to byte-identical Cypher in default mode; the only addition is one warning per OGM instance and shape. Two crashes now throw a clear `OGMError` instead.
+
+### Fixed
+
+- **Connection sort on scalar `@cypher` fields works, in both modes.** `friendsConnection(sort: [{ node: { score: DESC } }])` and the typed `orderBy` read a stored property that does not exist, so the sort was silently ignored. They now sort by the statement's value.
+- **A nested relationship sort by a node-typed `@cypher` field no longer crashes.** `apoc.coll.sortMulti` failed with a ClassCastException whenever a value was a node. Default mode now sorts that key as `null` and warns (`relationship-sort-cypher-node-field`); strict throws (item 47).
+- **`create: 'x'` and `update: 'x'` in nested inputs** crashed with `Invalid identifier "0"`. They now throw a clear `OGMError` in both modes.
+
+### Added
+
+- **Filter node-typed `@cypher` fields by their target's where**, as in `@neo4j/graphql` 5.x:
+  - singular fields: `where: { topPost: { title: 'x' } }` (before, this always matched nothing);
+  - list fields: `_SOME` / `_NONE` / `_ALL` / `_SINGLE`.
+
+  The filter sees the policy-filtered value (2.22.1), so a hidden node counts as `null`. The generated where types offer the new keys.
+
+### Strict mode
+
+- **Item 44 — a nested delete that is `true` or falsy.** `delete: true` is an undocumented pre-2.3.0 shorthand: it deleted every related node the delete policy allows, ignoring the item's `where`. A falsy `delete` was skipped silently. Default mode keeps both and warns (`delete-non-object`); `strict: true` throws `OGMError` and deletes nothing. `[{}]` stays "delete all".
+- **Item 45 — a nested create that is not an object.** `create: true` / `5` / `[[]]` / `{ node: true }` created a node with only its `@id` / `@default` values, and a falsy `create` was skipped. Default mode warns (`create-non-object`); strict throws.
+- **Item 46 — other nested write values that are not objects.** These wrote nothing, silently:
+  - a non-object `update` in a nested item;
+  - a falsy `connect`;
+  - a non-object relationship field value (`posts: true`, `posts: ['p1']`).
+
+  Default mode warns (`nested-op-non-object`); strict throws.
+- **Item 47 — a connection sort on a node-typed or aggregating `@cypher` field.** The key stays ignored in default mode and warns (`connection-sort-cypher-field`); strict throws. Nested relationship sorts by a node-typed `@cypher` field follow the same rule (see Fixed).
+
+### Docs
+
+- The README link from strict item 31 to item 41 pointed to a missing anchor.
+
 ## 2.24.1 (2026-10-29) — security: non-object nested creates and create policies
 
 > **Security patch.** A nested create item that is not an object skipped the target type's `create` policies. OGMs without `policies` are unchanged.
