@@ -25,6 +25,7 @@ interface DbPushFlags {
   username?: string;
   database?: string;
   'dry-run'?: boolean;
+  check?: boolean;
   'force-drop'?: boolean;
   yes?: boolean;
   debug?: boolean;
@@ -41,6 +42,7 @@ function parseDbPushFlags(argv: string[]): DbPushFlags {
         username: { type: 'string' },
         database: { type: 'string' },
         'dry-run': { type: 'boolean' },
+        check: { type: 'boolean' },
         'force-drop': { type: 'boolean' },
         yes: { type: 'boolean' },
         debug: { type: 'boolean' },
@@ -134,6 +136,38 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
     io.out(
       `Unmanaged — ${plan.unmanaged.length} ignored: ${plan.unmanaged.map(safeDisplay).join(', ')}`,
     );
+}
+
+/**
+ * vNEXT — `--check` (a CI gate, like `grafeo generate --verify`): the plan
+ * is computed and printed, nothing is written, and the exit code says
+ * whether the database has drifted from the SDL. Drift is any declared
+ * constraint / index that is missing (`create`, or `blocked`: missing and
+ * not creatable as the database stands), any whose live definition differs
+ * (`changed`), and any grafeo-managed item no longer declared (`orphans`).
+ * Unmanaged items never count; nor does a `@vector` index without config
+ * dimensions (`needsConfig`: it cannot be planned, a warning says so).
+ * Pre-vNEXT `db push` exited 0 on drift unless it applied changes, so CI
+ * could not fail on it.
+ */
+function reportCheck(plan: PushPlan, io: CliIO): number {
+  const counts: Array<[number, string]> = [
+    [plan.create.length + plan.blocked.length, 'missing'],
+    [plan.changed.length, 'changed'],
+    [plan.orphans.length, 'orphaned'],
+  ];
+  const drift = counts.filter(([n]) => n > 0);
+  io.out('');
+  if (drift.length === 0) {
+    io.out('✓ Check passed — the database matches the SDL.');
+    return 0;
+  }
+  io.err(
+    `error: schema drift — ${drift.map(([n, what]) => `${n} ${what}`).join(', ')}. ` +
+      'Run `grafeo db push` to create the missing items (`--force-drop` to recreate changed ' +
+      'definitions and drop orphans).',
+  );
+  return 1;
 }
 
 /**
@@ -278,6 +312,17 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
 
   const dryRun = flags['dry-run'] === true;
   const forceDrop = flags['force-drop'] === true;
+  const check = flags.check === true;
+  // `--check` never writes: the write-only flags would mean nothing.
+  if (check) {
+    const conflicting = (['dry-run', 'force-drop', 'yes'] as const).filter(
+      (f) => flags[f] === true,
+    );
+    if (conflicting.length > 0)
+      throw new CliError(
+        `db push: --check cannot be combined with ${conflicting.map((f) => `--${f}`).join(', ')} (it never writes)`,
+      );
+  }
 
   const driver = createDriver(io, connection);
   try {
@@ -324,6 +369,8 @@ export async function runDbPush(argv: string[], io: CliIO): Promise<number> {
         `warning: ${plan.changed.length} index definition(s) differ from the SDL and were NOT applied ` +
           `(${plan.changed.map((c) => c.statement.name).join(', ')}) — re-run with --force-drop to drop and recreate them`,
       );
+
+    if (check) return reportCheck(plan, io);
 
     // Nothing to create and nothing to drop → no writes (idempotent re-run).
     if (plan.create.length === 0 && !willDrop) return 0;

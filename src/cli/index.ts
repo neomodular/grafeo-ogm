@@ -8,7 +8,7 @@ const HELP = `grafeo — CLI for grafeo-ogm
 Usage:
   grafeo init     [--schema <path>] [--out <path>] [--seed] [--fresh] [--yes] [--force]
   grafeo generate [--schema <path>] [--out <path>] [--watch] [--verify] [--poll <ms>]
-  grafeo db push  [--schema <path>] [--dry-run] [--force-drop] [--yes] [--strict]
+  grafeo db push  [--schema <path>] [--dry-run | --check] [--force-drop] [--yes] [--strict]
                   [--uri <bolt-uri>] [--username <user>] [--database <name>]
   grafeo db seed  [--schema <path>] [--uri <bolt-uri>] [--username <user>] [--database <name>]
 
@@ -52,10 +52,12 @@ Usage:
   'db push': `grafeo db push — sync SDL-declared constraints/indexes to the database
 
 Usage:
-  grafeo db push [--schema <path>] [--dry-run] [--force-drop] [--yes] [--strict]
+  grafeo db push [--schema <path>] [--dry-run | --check] [--force-drop] [--yes] [--strict]
                  [--uri <bolt-uri>] [--username <user>] [--database <name>]
 
   --dry-run        print the full plan (with exact Cypher) and exit; no writes
+  --check          CI gate: print the plan, write nothing, exit 1 if the database
+                   drifted from the SDL (missing, changed or orphaned items)
   --force-drop     allow dropping orphaned grafeo-managed constraints/indexes
   --yes            confirm destructive drops non-interactively (CI)
   --strict         plan like new OGM({ strict: true }): @node(labels) types get

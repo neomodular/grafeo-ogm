@@ -304,6 +304,55 @@ describeLive('grafeo db push — live Neo4j', () => {
     }
   });
 
+  // vNEXT — `--check` is a CI gate: it never writes and exits 1 on drift.
+  // Pre-vNEXT `db push` exited 0 on drift unless it applied changes.
+  it('--check exits 1 on missing / changed / orphaned items, 0 in sync, and never writes', async () => {
+    const v1 = `type LaPushCk @node @fulltext(indexes: [{ name: "LaPushCkSearch", fields: ["title"] }]) {
+      id: ID! @unique
+      email: String @unique
+      title: String
+      body: String
+    }`;
+    const before = await push(v1, ['--check']);
+    expect(before.code).toBe(1);
+    expect(before.err).toContain('error: schema drift — 3 missing.');
+    expect(
+      (await constraintNames()).filter((n) => n.startsWith('LaPushCk')),
+    ).toEqual([]);
+    expect(await indexRow('LaPushCkSearch')).toBeUndefined();
+
+    expect((await push(v1)).code).toBe(0);
+    const synced = await push(v1, ['--check']);
+    expect(synced.code).toBe(0);
+    expect(synced.out).toContain('✓ Check passed');
+
+    const v2 = v1
+      .replace('fields: ["title"]', 'fields: ["title", "body"]')
+      .replace('email: String @unique', 'email: String');
+    const drift = await push(v2, ['--check']);
+    expect(drift.code).toBe(1);
+    expect(drift.err).toContain('error: schema drift — 1 changed, 1 orphaned.');
+    // Nothing was written: the old definition and the orphan are still there.
+    expect((await indexRow('LaPushCkSearch'))?.properties).toEqual(['title']);
+    expect(await constraintNames()).toContain('LaPushCk_email_unique');
+
+    // An unmanaged index never counts.
+    await run(
+      'CREATE INDEX la_ck_unmanaged IF NOT EXISTS FOR (n:LaPushCk) ON (n.body)',
+    );
+    expect((await push(v1, ['--check'])).code).toBe(0);
+  });
+
+  it('--check plans like strict: true when grafeo.config says so', async () => {
+    const schema = `type LaPushCs @node(labels: ["LaPushCsMain"]) { id: ID! @unique }`;
+    expect((await push(schema, [], { strict: true })).code).toBe(0);
+    expect((await push(schema, ['--check'], { strict: true })).code).toBe(0);
+    // Without strict, 2.x plans on :LaPushCs, which has no constraint.
+    const lenient = await push(schema, ['--check']);
+    expect(lenient.code).toBe(1);
+    expect(lenient.err).toContain('1 missing');
+  });
+
   // v2.12.5 — S5t-8: one @fulltext name on two types flipped between them
   // on every --force-drop run.
   it('a fulltext name declared on two types is never recreated back and forth', async () => {

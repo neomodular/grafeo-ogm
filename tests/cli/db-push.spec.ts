@@ -644,3 +644,162 @@ type Query { products: [Product!]! }
     expect(mock.runs).toEqual([]);
   });
 });
+
+// vNEXT — `--check`: a CI gate like `generate --verify`. It prints the plan,
+// never writes, and exits 1 on drift (missing, changed or orphaned items).
+describe('grafeo db push --check', () => {
+  const withOrphan: LiveSchema = {
+    ...ALL_IN_SYNC,
+    constraints: [
+      ...ALL_IN_SYNC.constraints,
+      {
+        name: 'Author_email_unique',
+        type: 'UNIQUENESS',
+        labelsOrTypes: ['Author'],
+        properties: ['email'],
+      },
+    ],
+  };
+  const changed: LiveSchema = {
+    constraints: ALL_IN_SYNC.constraints,
+    indexes: [
+      {
+        name: 'BookSearch',
+        type: 'FULLTEXT',
+        entityType: 'NODE',
+        labelsOrTypes: ['Book'],
+        properties: ['title', 'body'],
+      },
+    ],
+  };
+
+  it('exits 0 and writes nothing when the database matches the SDL', async () => {
+    const mock = makeDriver(ALL_IN_SYNC);
+    const io = makeIO(mock.driver);
+    expect(await runDbPush(['--check'], io)).toBe(0);
+    expect(io.stdout.join('\n')).toContain('✓ Check passed');
+    expect(io.stderr).toEqual([]);
+    expect(wrote(mock.runs)).toHaveLength(0);
+    expect(mock.isClosed()).toBe(true);
+  });
+
+  it('unmanaged items never count as drift', async () => {
+    const mock = makeDriver({
+      ...ALL_IN_SYNC,
+      indexes: [
+        ...ALL_IN_SYNC.indexes,
+        { name: 'dba_custom', type: 'FULLTEXT', labelsOrTypes: ['Book'] },
+      ],
+    });
+    const io = makeIO(mock.driver);
+    expect(await runDbPush(['--check'], io)).toBe(0);
+    expect(io.stdout.join('\n')).toContain('Unmanaged — 1 ignored: dba_custom');
+    expect(wrote(mock.runs)).toHaveLength(0);
+  });
+
+  it.each([
+    ['missing items', { constraints: [], indexes: [] }, '3 missing'],
+    ['a changed definition', changed, '1 changed'],
+    ['a grafeo-managed orphan', withOrphan, '1 orphaned'],
+  ] as const)('exits 1 and writes nothing on %s', async (_l, live, summary) => {
+    const mock = makeDriver(live as LiveSchema);
+    const io = makeIO(mock.driver);
+    expect(await runDbPush(['--check'], io)).toBe(1);
+    expect(io.stderr.join('\n')).toContain(`error: schema drift — ${summary}.`);
+    expect(io.stdout.join('\n')).not.toContain('✓ Check passed');
+    expect(wrote(mock.runs)).toHaveLength(0);
+    expect(mock.isClosed()).toBe(true);
+  });
+
+  it('reports every kind of drift together, with the plan', async () => {
+    const mock = makeDriver({
+      constraints: [withOrphan.constraints[2]],
+      indexes: changed.indexes,
+    });
+    const io = makeIO(mock.driver);
+    expect(await runDbPush(['--check'], io)).toBe(1);
+    expect(io.stderr.join('\n')).toContain(
+      'error: schema drift — 2 missing, 1 changed, 1 orphaned.',
+    );
+    const out = io.stdout.join('\n');
+    expect(out).toContain('CREATE CONSTRAINT Book_id_unique');
+    expect(out).toContain('~ BookSearch');
+    expect(out).toContain('Author_email_unique');
+    expect(wrote(mock.runs)).toHaveLength(0);
+  });
+
+  it('a unique constraint blocked by a range index is drift (it is missing)', async () => {
+    const mock = makeDriver({
+      constraints: [ALL_IN_SYNC.constraints[1]],
+      indexes: [
+        ...ALL_IN_SYNC.indexes,
+        {
+          name: 'dba_book_id',
+          type: 'RANGE',
+          entityType: 'NODE',
+          labelsOrTypes: ['Book'],
+          properties: ['id'],
+        },
+      ],
+    });
+    const io = makeIO(mock.driver);
+    expect(await runDbPush(['--check'], io)).toBe(1);
+    expect(io.stderr.join('\n')).toContain('error: schema drift — 1 missing.');
+    expect(wrote(mock.runs)).toHaveLength(0);
+  });
+
+  it('respects strict from grafeo.config (labels[0] constraints)', async () => {
+    const LABELLED = `
+type Person @node(labels: ["Human", "Entity"]) {
+  id: ID! @id @unique
+}
+`;
+    const humanOnly: LiveSchema = {
+      constraints: [
+        {
+          name: 'Human_id_unique',
+          type: 'UNIQUENESS',
+          labelsOrTypes: ['Human'],
+          properties: ['id'],
+        },
+      ],
+      indexes: [],
+    };
+    const run = async (config?: Record<string, unknown>) => {
+      const mock = makeDriver(humanOnly);
+      const io = makeIO(mock.driver);
+      fs.writeFileSync(path.join(io.cwd, 'schema.graphql'), LABELLED);
+      if (config)
+        fs.writeFileSync(
+          path.join(io.cwd, 'grafeo.config.json'),
+          JSON.stringify(config),
+        );
+      return { code: await runDbPush(['--check'], io), io, mock };
+    };
+    const strict = await run({ strict: true });
+    expect(strict.code).toBe(0);
+    expect(wrote(strict.mock.runs)).toHaveLength(0);
+    // 2.x plans on :Person, so Person_id_unique is missing.
+    const lenient = await run();
+    expect(lenient.code).toBe(1);
+    expect(lenient.io.stderr.join('\n')).toContain('1 missing');
+  });
+
+  it.each([['--dry-run'], ['--force-drop'], ['--yes']])(
+    'rejects --check with %s',
+    async (flag) => {
+      const mock = makeDriver(ALL_IN_SYNC);
+      await expect(
+        runDbPush(['--check', flag], makeIO(mock.driver)),
+      ).rejects.toThrow(
+        `db push: --check cannot be combined with ${flag} (it never writes)`,
+      );
+      expect(mock.runs).toEqual([]);
+    },
+  );
+
+  it('without --check, drift still exits 0 (unchanged)', async () => {
+    const mock = makeDriver(withOrphan);
+    expect(await runDbPush([], makeIO(mock.driver))).toBe(0);
+  });
+});

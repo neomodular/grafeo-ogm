@@ -240,7 +240,7 @@ grafeo-ogm ships a `grafeo` binary (installed with the package — no global ins
 |---|---|
 | `grafeo init` | Scaffold a project — or auto-detect an existing one — wiring config, schema, and an npm script |
 | `grafeo generate` | Generate TypeScript types from your SDL — one-shot, `--watch`, or `--verify` CI gate |
-| `grafeo db push` | Diff SDL-declared constraints/indexes against the live database and apply them |
+| `grafeo db push` | Diff SDL-declared constraints/indexes against the live database and apply them — or `--check` them in CI |
 | `grafeo db seed` | Run your seed script with a constructed, connected OGM |
 
 ### Configuration
@@ -324,6 +324,7 @@ Synchronizes the **constraints and indexes** your SDL declares (`@unique` → un
 npx grafeo db push --dry-run          # preview the plan — DO THIS FIRST
 npx grafeo db push                    # apply (additive: creates only what's missing)
 npx grafeo db push --force-drop --yes # also drop orphaned grafeo-managed items
+npx grafeo db push --check            # CI gate: exit 1 if the database drifted from the SDL
 ```
 
 `db push` introspects `SHOW CONSTRAINTS` / `SHOW INDEXES`, diffs against your SDL, and prints a plan in five buckets:
@@ -343,10 +344,13 @@ It is **additive by default** and **idempotent** — a second run with no schema
 | Flag | Description |
 |---|---|
 | `--dry-run` | Print the full plan (including the exact Cypher, drops included) and exit without writing |
+| `--check` | CI gate (since vNEXT): print the plan, write nothing, exit 1 on drift and 0 when in sync. Cannot be combined with `--dry-run`, `--force-drop` or `--yes` |
 | `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes, and dropping + recreating indexes whose definition changed |
 | `--yes` | Confirm destructive drops non-interactively (required with `--force-drop` in CI) |
 | `--strict` | Plan constraints and indexes as `new OGM({ strict: true })` uses the labels: a type with `@node(labels: [...])` gets them on its first listed label ([strict item 23](#23-nodelabels--replaces-the-type-name-since-2110)). Same as `strict: true` in the config file |
 | `--schema <path>`, `--uri`, `--username`, `--database` | Schema path and connection overrides |
+
+`--check` is the schema counterpart of `grafeo generate --verify`: without it `db push` exits 0 whenever it succeeds, so CI cannot fail on a database that drifted from the SDL. Drift is a declared constraint or index that is **missing** (including one reported as not creatable, such as a unique constraint a RANGE index blocks, or a name the SDL declares twice), a **changed** definition, or a grafeo-managed **orphan**. Unmanaged items never count, and neither does a `@vector` index without configured dimensions (it is reported as skipped). `strict` comes from the config file or `--strict`, as for a push. Run `grafeo db push` (with `--force-drop` for changed definitions and orphans) to bring the database in line.
 
 > **Vector indexes** declare no dimensions in the SDL (the `@vector` directive only names the index and its embedding property), but Neo4j requires them at creation time. Supply them in `vectorIndexes` (keyed by index name) in your config. A `@vector` index without configured dimensions is reported and skipped — never silently created or dropped.
 
