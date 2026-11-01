@@ -1,4 +1,5 @@
 import { format } from 'node:util';
+import { mapServerError } from './server-errors';
 import {
   Driver,
   isInt,
@@ -147,6 +148,22 @@ export class Executor {
    * or a new auto-commit session.
    */
   async execute(
+    cypher: string,
+    params: Record<string, unknown>,
+    context?: ExecutionContext,
+    options?: ExecuteOptions,
+  ): Promise<QueryResult> {
+    // vNEXT — a server error the generated Cypher causes on a server
+    // without an optional plugin (APOC) becomes a clear OGMError; every
+    // other error is rethrown unchanged.
+    try {
+      return await this.run(cypher, params, context, options);
+    } catch (err) {
+      throw mapServerError(err);
+    }
+  }
+
+  private async run(
     cypher: string,
     params: Record<string, unknown>,
     context?: ExecutionContext,

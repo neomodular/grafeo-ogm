@@ -3,9 +3,16 @@
  * Provides consistent error identification across the package.
  */
 export class OGMError extends Error {
-  constructor(message: string) {
+  /**
+   * The error this one wraps, when there is one (vNEXT — e.g. the Neo4j
+   * error behind a missing-APOC `OGMError`).
+   */
+  readonly cause?: unknown;
+
+  constructor(message: string, options?: { cause?: unknown }) {
     super(message);
     this.name = 'OGMError';
+    if (options && 'cause' in options) this.cause = options.cause;
   }
 }
 

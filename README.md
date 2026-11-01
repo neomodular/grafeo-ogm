@@ -749,7 +749,7 @@ Relationship fields accept `where` and `options` (`sort` needs APOC; `limit` / `
 
 ### Nested Sorting
 
-Array relationships and connection edges accept an `orderBy` clause that compiles to `apoc.coll.sortMulti` (requires the APOC plugin on the Neo4j instance).
+Array relationships and connection edges accept an `orderBy` clause that compiles to `apoc.coll.sortMulti` (requires the APOC plugin on the Neo4j instance). Since vNEXT, on a server without APOC such a query throws an `OGMError` that says so (the Neo4j error is its `cause`) instead of Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`.
 
 **Array relationships** — sort by target-node scalar fields. Priority follows array order:
 
@@ -2965,6 +2965,8 @@ Optional server features:
 | `searchByVector` | Neo4j 5.11+ (vector indexes) |
 | `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
 | Relationship `<rel>Aggregate` `sum` and `BigInt` aggregates, and a list-typed node `@cypher` field under a `read` policy (default mode) | Neo4j 5.9+ (type predicates, `x IS :: INTEGER`) |
+
+Without APOC, a query or subgraph operation that needs it fails with an `OGMError` (`SubgraphOperationError` for the subgraph operations) that names the feature and links here, with the Neo4j error as `cause` (since vNEXT; before, Neo4j's raw `Unknown function` / `There is no procedure` error).
 
 ### Do I need to know Cypher?
 

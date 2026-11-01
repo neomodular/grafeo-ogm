@@ -1,6 +1,10 @@
 import { Transaction } from 'neo4j-driver';
 import { SubgraphOperationError } from '../errors';
 import { OGMLogger } from '../execution/executor';
+import {
+  isMissingApocError,
+  OPTIONAL_SERVER_FEATURES_URL,
+} from '../execution/server-errors';
 import { StrictMode } from '../utils/strict-mode';
 import {
   assertSafeIdentifier,
@@ -243,10 +247,29 @@ export async function cloneSubgraph(
     throw new SubgraphOperationError(
       'clone',
       sourceRootId,
-      CLONE_GUARD_MESSAGE.exec(message)?.[1] ?? message,
+      missingApocMessage('cloneSubgraph', error) ??
+        CLONE_GUARD_MESSAGE.exec(message)?.[1] ??
+        message,
       error instanceof Error ? error : undefined,
     );
   }
+}
+
+/**
+ * vNEXT — the message for a subgraph operation that failed because the
+ * server has no APOC (pre-vNEXT: Neo4j's raw "There is no procedure with the
+ * name `apoc.path.subgraphAll` registered…"). `undefined` for any other error.
+ */
+function missingApocMessage(
+  operation: 'cloneSubgraph' | 'deleteSubgraph',
+  error: unknown,
+): string | undefined {
+  if (!isMissingApocError(error)) return undefined;
+  return (
+    `${operation} needs the APOC plugin, and this Neo4j server does not have it ` +
+    `(${(error as Error).message.split('\n')[0]}). Install APOC on the server. ` +
+    `See the optional server features: ${OPTIONAL_SERVER_FEATURES_URL}`
+  );
 }
 
 /**
@@ -313,7 +336,8 @@ export async function deleteSubgraph(
     throw new SubgraphOperationError(
       'delete',
       rootId,
-      error instanceof Error ? error.message : String(error),
+      missingApocMessage('deleteSubgraph', error) ??
+        (error instanceof Error ? error.message : String(error)),
       error instanceof Error ? error : undefined,
     );
   }
