@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.28.0 (2026-11-01) — `_MATCHES` dot-all contains form
+
+> **Minor release.** The `_MATCHES` ReDoS guard accepts the dot-all contains form, and its refusal message is corrected. It is a pure addition: every pattern accepted before is still accepted, and no emitted Cypher changes.
+
+### Added
+
+- **`_MATCHES` accepts the dot-all contains form** ([#2](https://github.com/neomodular/grafeo-ogm/issues/2)). `(?s).*term.*` and `(?is).*term.*` now pass the ReDoS guard. With dot-all, the final `.*` always matches the rest of the value, so matching stays linear: about 5 ms on a 1M-character value on Neo4j 5.26.
+  - The pattern must start with a flag group containing `s`, and no flag group may turn a flag off.
+  - `(?i).*term.*` without `s` is still refused. It is quadratic (about 9 s on a 100,000-character value), and Neo4j cannot interrupt a running regex. Its error now suggests the dot-all form.
+  - `(?s)` also matches values that contain line breaks.
+
+### Fixed
+
+- **The `_MATCHES` refusal message** suggested `features.filters.String.MATCHES` as a way to "run arbitrary regexes", but that flag disables `_MATCHES` entirely. The message now says there is no bypass, and points to `_CONTAINS` with `mode: 'insensitive'` and to the accepted regex forms.
+
+### Docs
+
+- **The README documents the `_MATCHES` guard**: what it accepts and refuses, how to escape interpolated terms, and a security note explaining why it fails closed. Neo4j cannot interrupt a running regex, even after the transaction times out or is terminated.
+
 ## 2.27.0 (2026-11-01) — compile-only OGM for unit tests
 
 > **Minor release.** It adds a compile-only OGM for unit tests and exports the `_MATCHES` validator. It is a pure addition: no emitted Cypher changes.
