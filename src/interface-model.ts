@@ -485,6 +485,11 @@ export class InterfaceModel<
         sort: params.options.sort as ReadonlyArray<Record<string, unknown>>,
         nodeVar: 'n',
         propertyLookup: (field) => this.syntheticNodeDef.properties.get(field),
+        nodeTypedCypherSort: {
+          schema: this.schema,
+          strictMode: this.strictMode,
+          typeName: this.interfaceDef.name,
+        },
         preserveVars: pageFirst
           ? ['__typename']
           : ['__typename', ...selectScope.carried()],

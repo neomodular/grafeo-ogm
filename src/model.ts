@@ -3124,6 +3124,11 @@ export class Model<
         nodeVar: 'n',
         propertyLookup: (field) => this.nodeDef.properties.get(field),
         preserveVars,
+        nodeTypedCypherSort: {
+          schema: this.schema,
+          strictMode: this.strictMode,
+          typeName: this.nodeDef.typeName,
+        },
         guardCypherSort: guard?.policyContext
           ? (alias, propDef, field) =>
               this.whereCompiler.guardCypherSortRef(

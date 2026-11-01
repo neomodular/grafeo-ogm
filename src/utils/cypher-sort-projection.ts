@@ -1,4 +1,6 @@
-import type { PropertyDefinition } from '../schema/types';
+import { OGMError } from '../errors';
+import type { PropertyDefinition, SchemaMetadata } from '../schema/types';
+import type { StrictMode } from './strict-mode';
 import { buildCypherFieldCall } from './cypher-field-projection';
 import {
   assertPlainObject,
@@ -68,6 +70,15 @@ export function compileSortClause(args: {
     propDef: PropertyDefinition,
     field: string,
   ) => string;
+  /**
+   * vNEXT — strict item 47: a root sort key that is a node-typed `@cypher`
+   * field (see `checkNodeTypedCypherSortKey`). Absent → no check.
+   */
+  nodeTypedCypherSort?: {
+    schema: SchemaMetadata;
+    strictMode: StrictMode;
+    typeName: string;
+  };
 }): { pre: string; orderBy: string } {
   const {
     sort,
@@ -75,6 +86,7 @@ export function compileSortClause(args: {
     propertyLookup,
     preserveVars = [],
     guardCypherSort,
+    nodeTypedCypherSort,
   } = args;
   const preLines: string[] = [];
   const sortItems: string[] = [];
@@ -99,6 +111,8 @@ export function compileSortClause(args: {
 
     const propDef = propertyLookup(field);
     if (propDef?.isCypher && propDef.cypherStatement) {
+      if (nodeTypedCypherSort)
+        checkNodeTypedCypherSortKey(propDef, field, nodeTypedCypherSort);
       const alias = `__sort_${field}`;
       const columnName = propDef.cypherColumnName ?? field;
       assertSafeIdentifier(columnName, '@cypher columnName');
@@ -128,6 +142,42 @@ export function compileSortClause(args: {
     pre: preLines.join('\n'),
     orderBy: sortItems.length ? `ORDER BY ${sortItems.join(', ')}` : '',
   };
+}
+
+/**
+ * vNEXT — strict item 47 (root sort): a root `options.sort` key that is a
+ * node-typed `@cypher` field (a node, a list of nodes, an interface or a
+ * union) orders the rows by Neo4j's internal order of nodes, which has no
+ * meaning. Default mode keeps that sort (byte-identical Cypher) and warns
+ * once per OGM instance and field; strict mode throws. A scalar `@cypher`
+ * field sorts by its value, as before.
+ */
+export function checkNodeTypedCypherSortKey(
+  propDef: PropertyDefinition,
+  field: string,
+  ctx: { schema: SchemaMetadata; strictMode: StrictMode; typeName: string },
+): void {
+  const { schema, strictMode, typeName } = ctx;
+  if (
+    !schema.nodes.has(propDef.type) &&
+    !schema.interfaces?.has(propDef.type) &&
+    !schema.unions?.has(propDef.type)
+  )
+    return;
+  const label = `${typeName}.${field}`;
+  const problem =
+    `it returns ${propDef.isArray ? 'a list of nodes' : 'a node'} (type "${propDef.type}"), which has no sort order: ` +
+    "the rows come back in Neo4j's internal order of those nodes";
+  if (strictMode.strict)
+    throw new OGMError(
+      `Cannot sort by the @cypher field "${label}": ${problem}. Sort by a scalar field (e.g. a scalar @cypher field that returns the node's property) instead.`,
+    );
+  strictMode.warn(
+    'root-sort-cypher-node-field',
+    label,
+    `A sort by the @cypher field "${label}" has no meaning: ${problem}.`,
+    'throw an OGMError for a sort key that cannot be sorted by',
+  );
 }
 
 /**

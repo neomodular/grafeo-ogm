@@ -392,9 +392,13 @@ type Tag @node { id: ID! @unique }
     posts_NOT: [],
     friends_SOME: { topPost: null },
   };
-  const options: { sort: Record<string, 'ASC' | 'DESC'>[] } = {
-    sort: [{ topPost: 'DESC' }, { id: 'ASC' }],
-  };
+  // vNEXT — strict item 47 (root sort): a root sort by a node-typed @cypher
+  // field throws in strict mode, so the strict golden sorts by `id` only.
+  const options = (
+    strict?: boolean,
+  ): { sort: Record<string, 'ASC' | 'DESC'>[] } => ({
+    sort: strict ? [{ id: 'ASC' }] : [{ topPost: 'DESC' }, { id: 'ASC' }],
+  });
   // v2.25.0 — strict item 47: a nested sort by a node-typed @cypher field
   // sorts as null by default (it failed in apoc.coll.sortMulti whenever a
   // value was a node) and throws in strict mode, so the strict golden
@@ -411,7 +415,7 @@ type Tag @node { id: ID! @unique }
       'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  RETURN head(collect(`p`)) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nRETURN count(n) AS count',
     ],
     strict: [
-      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__where_n_posts__cf_el`\n  RETURN collect(`__where_n_posts__cf_el`) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __sort_topPost\n}\nWITH n, __sort_topPost\nWITH *\nORDER BY __sort_topPost DESC, n.`id` ASC\nRETURN n { .`id`, friends: [(n)-[:`FRIEND`]->(n0:`User`) | n0 { .`id` }] }',
+      'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__where_n_posts__cf_el`\n  RETURN collect(`__where_n_posts__cf_el`) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nWITH *\nORDER BY n.`id` ASC\nRETURN n { .`id`, friends: [(n)-[:`FRIEND`]->(n0:`User`) | n0 { .`id` }] }',
       'MATCH (n:`User`)\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_n_topPost\n}\nWITH n, __where_n_topPost\nCALL {\n  WITH n\n  CALL {\n    WITH n\n    WITH n AS this\n    MATCH (p:Post) RETURN p\n  }\n  UNWIND `p` AS `__where_n_posts__cf_el`\n  RETURN collect(`__where_n_posts__cf_el`) AS __where_n_posts\n}\nWITH n, __where_n_topPost, __where_n_posts\nWHERE __where_n_topPost IS NOT NULL AND __where_n_posts <> $param0 AND EXISTS { MATCH (n)-[:`FRIEND`]->(r1:`User`) CALL {\n  WITH r1\n  CALL {\n    WITH r1\n    WITH r1 AS this\n    MATCH (p:Post) RETURN p LIMIT 1\n  }\n  RETURN head(collect(`p`)) AS __where_r1_topPost\n} WITH r1, __where_r1_topPost WHERE __where_r1_topPost IS NULL }\nRETURN count(n) AS count',
     ],
   };
@@ -428,7 +432,7 @@ type Tag @node { id: ID! @unique }
     const model = bind(createMockDriver(r)).model('User');
     await model.find({
       where,
-      options,
+      options: options(emitStrict),
       selectionSet: selectionSet(emitStrict),
       unsafe,
     });
@@ -506,9 +510,10 @@ type Tag @node { id: ID! @unique }
       expect(find).toMatch(
         /WHERE head\(\[(r\d+)__cfn IN \[__where_\1_topPost\] WHERE \(\1__cfn\.`ownerId` = /,
       );
-      expect(find).toContain(
-        'ORDER BY head([n__cfn IN [__sort_topPost] WHERE (n__cfn.`ownerId` = ',
-      );
+      if (!strict)
+        expect(find).toContain(
+          'ORDER BY head([n__cfn IN [__sort_topPost] WHERE (n__cfn.`ownerId` = ',
+        );
       // v2.25.0 — the nested node-typed sort key reads no node at all.
       if (!strict) expect(find).toContain('__sk0: null }');
       expect(count).toContain('head([n__cfn IN [__where_n_topPost] WHERE');

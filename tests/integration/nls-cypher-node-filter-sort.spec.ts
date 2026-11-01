@@ -217,10 +217,14 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
     });
 
     it('options.sort orders a hidden node as null', async () => {
+      const sort = { sort: [{ topPost: 'DESC' }, { id: 'ASC' }] };
+      // vNEXT — strict item 47 (root sort): a node has no sort order.
+      if (strict)
+        return expect(find({}, sort)).rejects.toThrow(
+          'Cannot sort by the @cypher field "ItNfUser.topPost": it returns a node',
+        );
       // DESC puts nulls first; the hidden `a` sorts with the empty b / d.
-      expect(
-        await find({}, { sort: [{ topPost: 'DESC' }, { id: 'ASC' }] }),
-      ).toEqual(['a', 'b', 'd', 'c']);
+      expect(await find({}, sort)).toEqual(['a', 'b', 'd', 'c']);
     });
 
     it('InterfaceModel find / count / sort', async () => {
@@ -230,12 +234,17 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
         short(await people.find({ where, selectionSet: '{ id }' })),
       ).toEqual(['c']);
       expect(await people.count({ where })).toBe(1);
-      const sorted = await people.find({
+      const sorted = people.find({
         where: { id_IN: abcd() },
         selectionSet: '{ id }',
         options: { sort: [{ topPost: 'DESC' }, { id: 'ASC' }] },
       });
-      expect(short(sorted)).toEqual(['a', 'b', 'd', 'c']);
+      // vNEXT — strict item 47 (root sort).
+      if (strict)
+        return expect(sorted).rejects.toThrow(
+          'Cannot sort by the @cypher field "ItNfPerson.topPost": it returns a node',
+        );
+      expect(short(await sorted)).toEqual(['a', 'b', 'd', 'c']);
     });
 
     it('bypassPolicies still reads the raw value', async () => {
@@ -247,6 +256,48 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
       expect(short(rows).sort()).toEqual(['a', 'c']);
     });
   });
+
+  // vNEXT — strict item 47 (root sort): without policies, default mode
+  // sorts by the node itself (Neo4j's internal node order) and warns once;
+  // strict mode throws before anything runs.
+  it.each([
+    ['default', undefined],
+    ['strict', true],
+  ])(
+    'an OGM without policies: a root sort by a node-typed @cypher field (%s)',
+    async (_label, strict) => {
+      const warn = jest.fn();
+      const plain = new OGM({
+        typeDefs,
+        driver,
+        strict,
+        logger: { warn, debug: () => undefined },
+      });
+      const call = () =>
+        plain.model('ItNfUser').find({
+          where: { id_IN: abcd() },
+          selectionSet: '{ id }',
+          options: { sort: [{ topPost: 'ASC' }, { id: 'ASC' }] },
+        });
+      if (strict) {
+        await expect(call()).rejects.toThrow(
+          'Cannot sort by the @cypher field "ItNfUser.topPost"',
+        );
+        return;
+      }
+      const first = short(await call());
+      await call();
+      // ASC puts nulls last: b and d have no post; a and c in node order.
+      expect(first.slice(2)).toEqual(['b', 'd']);
+      expect(first.slice(0, 2).sort()).toEqual(['a', 'c']);
+      const warned = warn.mock.calls.filter((c) =>
+        String(c[0]).includes(
+          'A sort by the @cypher field "ItNfUser.topPost" has no meaning',
+        ),
+      );
+      expect(warned).toHaveLength(1);
+    },
+  );
 
   it('an OGM without policies filters on the raw value', async () => {
     const plain = new OGM({
