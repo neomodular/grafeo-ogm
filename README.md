@@ -400,7 +400,7 @@ grafeo does not enforce idempotency — use `upsert` so re-running the seed is s
 | **Transaction support** | `$transaction()` for atomic multi-operation writes with automatic commit/rollback |
 | **Raw Cypher** | `$queryRaw()` and `$executeRaw()` for escape hatches |
 | **7 security controls** | Parameterization, identifier validation, label validation, prototype pollution prevention, Lucene escaping, depth limiting, sort direction validation |
-| **Testing utilities** | `CypherAssert`, `Neo4jRecordFactory`, `SelectionSetFactory` for unit testing without a database |
+| **Testing utilities** | Compile-only OGM (`compile(model).find(...)` → `{ cypher, params }`), `CypherAssert`, `Neo4jRecordFactory`, `SelectionSetFactory` for unit testing without a database |
 | **Backward compatible** | Drop-in replacement for `@neo4j/graphql-ogm` |
 
 ---
@@ -2742,10 +2742,123 @@ Import from `grafeo-ogm/testing`:
 
 ```typescript
 import {
+  createCompileOnlyOgm,
+  compile,
+  normalizeCompiled,
   CypherAssert,
   Neo4jRecordFactory,
   SelectionSetFactory,
 } from 'grafeo-ogm/testing';
+```
+
+(Every testing export is also available from `grafeo-ogm`.)
+
+### Compile-only OGM
+
+Since vNEXT. A unit test that mocks `model.find` never reaches grafeo, so
+nothing grafeo decides (how a `where` compiles, a filter dropped by an
+empty `AND`, a `_MATCHES` pattern the ReDoS guard refuses, a strict-mode
+rejection, where a policy predicate goes) is visible in your CI. A
+compile-only OGM turns a model call into the statement it would send, with
+no driver and no database, in milliseconds:
+
+```typescript
+import { createCompileOnlyOgm, compile } from 'grafeo-ogm/testing';
+import type { ModelMap, InterfaceModelMap } from './grafeo.generated';
+
+// Same config as your production OGM, minus driver / database.
+const ogm = createCompileOnlyOgm<ModelMap, InterfaceModelMap>({
+  typeDefs,
+  strict: true,
+  policies,
+});
+
+const q = await compile(ogm.model('Book')).find({
+  where: { title_CONTAINS: 'graph', mode: 'insensitive' },
+});
+expect(q.cypher).toContain('toLower(n.`title`) CONTAINS toLower($param0)');
+expect(q.params).toEqual({ param0: 'graph' });
+
+// Whatever the real call throws before it reaches the database, compile rejects with.
+await expect(
+  compile(ogm.model('Book')).find({ where: { title_MATCHES: '(a+)+' } }),
+).rejects.toThrow(/Unsafe `_MATCHES` pattern/);
+
+// Policies: the predicate and the audit metadata the call sends.
+const scoped = await compile(ogm.withContext({ tenantId: 't1' }).model('Book')).update({
+  where: { id: 'b1' },
+  connect: { author: { where: { node: { id: 'a1' } } } },
+});
+expect(scoped.metadata).toMatchObject({ modelType: 'Book', operation: 'update' });
+```
+
+`compile(model)` wraps any model of a compile-only OGM: `ogm.model(name)`,
+`ogm.interfaceModel(name)`, `ogm.withContext(ctx).model(name)`,
+`ogm.unsafe.bypassPolicies().model(name)`. It offers every method that
+compiles to one statement — `find`, `findFirst`, `findUnique`,
+`findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`,
+`createMany`, `update`, `updateMany`, `delete`, `deleteMany`, `upsert`,
+`setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies` (an
+interface model: its read methods) — with the same parameters as the real
+method, generated types included. Each resolves to a `CompiledQuery`:
+
+| Field | |
+|---|---|
+| `cypher` | The Cypher text, exactly as the real call sends it |
+| `params` | The parameters, exactly as sent (neo4j `Integer`s, temporals, …) |
+| `metadata` | Transaction metadata the call sends (policy audit fields), if any |
+| `accessMode` | `'READ'` when the call opens a read session (`explainPolicies`) |
+| `warnings` | The default-mode warnings logged while compiling this call — every call, not once per OGM |
+
+The statement is produced by the real model method — there is no second
+compiler — so strict mode, `features`, unknown-key checks, the `_MATCHES`
+guard and policies (default-deny, WITH CHECK, nested-write checks) all run.
+What a method does with the *result* is not run: `findFirstOrThrow` does not
+throw `RecordNotFoundError`, and mutation counters do not exist. For
+`update` / `updateMany`, `compile` returns the statement as first sent: in
+default mode, a statement whose nested delete is reached through a cycle is
+re-run once with an alive guard if the server reports `EntityNotFound`, and
+that re-run is not compiled (strict mode compiles the guard up front).
+
+Limits:
+
+- `context` takes only `metadata`; a `transaction`, `session` or
+  `executionContext` is refused, since it would run the statement.
+- A model method called directly on a compile-only OGM rejects with an
+  `OGMError`, and so do `$queryRaw`, `$executeRaw`, `$transaction`,
+  `$cloneSubgraph`, `$deleteSubgraph` and `assertIndexesAndConstraints`.
+- `compile()` refuses a model from an OGM with a real driver.
+
+**Stability.** The `CompiledQuery` shape, the list of compilable methods
+and the `normalizeCompiled` rules follow semver. **The Cypher text does
+not**: it can change in any release that fixes or improves a statement
+(the CHANGELOG says so when it does). Assert on what matters to you
+(`toContain`, `CypherAssert`), and treat snapshots as a diff to review when
+you upgrade, not as a contract.
+
+`normalizeCompiled(q)` returns a snapshot-friendly copy: neo4j `Integer` →
+number (decimal string outside the safe range), `bigint` → decimal string,
+JS `Date` → ISO string, temporal and point values → their `toString()`,
+object keys sorted, trailing whitespace trimmed from each Cypher line.
+Param names are left as they are: they are numbered deterministically per
+call.
+
+```typescript
+expect(normalizeCompiled(await compile(ogm.model('Book')).find({ where }))).toMatchSnapshot();
+```
+
+### `_MATCHES` guard
+
+`assertSafeRegexPattern(pattern, context)` (since vNEXT, also from
+`grafeo-ogm`) is the guard every `_MATCHES` value passes: it throws the
+`OGMError` the query would throw. `isSafeRegexPattern(pattern)` returns
+`true` / `false` instead. The accepted set can tighten in a security
+release, so test the patterns your code sends.
+
+```typescript
+import { isSafeRegexPattern } from 'grafeo-ogm/testing';
+
+expect(isSafeRegexPattern('^ABC-[0-9]+$')).toBe(true);
 ```
 
 ### CypherAssert

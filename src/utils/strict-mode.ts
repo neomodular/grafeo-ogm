@@ -2,6 +2,18 @@ import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
 
 /**
+ * vNEXT — loggers whose warnings are logged on every occurrence, not once
+ * per OGM and key. Only the compile-only OGM (`grafeo-ogm/testing`)
+ * registers one, so `compile()` can report each call's warnings.
+ */
+const UNDEDUPED_LOGGERS = new WeakSet<OGMLogger>();
+
+/** Log every warning `logger` receives from a `StrictMode` (internal). */
+export function warnOnEveryCall(logger: OGMLogger): void {
+  UNDEDUPED_LOGGERS.add(logger);
+}
+
+/**
  * v2.6.0 — strict mode.
  *
  * Several input shapes compile to something other than what the caller
@@ -62,6 +74,7 @@ export class StrictMode {
    */
   wouldWarn(code: string, detail: string): boolean {
     if (this.strict || !this.logger?.warn) return false;
+    if (UNDEDUPED_LOGGERS.has(this.logger)) return true;
     return !this.warned.has(this.keyFor(code, detail));
   }
 
@@ -76,6 +89,10 @@ export class StrictMode {
     if (this.strict) return;
     const warn = this.logger?.warn;
     if (!warn) return;
+    if (UNDEDUPED_LOGGERS.has(this.logger as OGMLogger)) {
+      warn.call(this.logger, message);
+      return;
+    }
     const key = this.keyFor(code, detail);
     if (this.warned.has(key)) return;
     this.warned.add(key);

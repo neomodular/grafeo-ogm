@@ -82,7 +82,15 @@ process.stdout.write(
 // to \`any\`, which is what an unresolvable declaration file degrades to.
 const CONSUMER_TS = `
 import { OGM, OGMError, Executor } from 'grafeo-ogm';
-import { CypherAssert } from 'grafeo-ogm/testing';
+import { CypherAssert, compile, createCompileOnlyOgm } from 'grafeo-ogm/testing';
+import type { CompiledQuery } from 'grafeo-ogm/testing';
+
+// vNEXT — the compile-only API resolves with real types.
+export const compiled: Promise<CompiledQuery> = compile(
+  createCompileOnlyOgm({ typeDefs: 'type A @node { id: ID! }' }).model('A'),
+).find();
+// @ts-expect-error — compile must not be \`any\`
+compile.__notAStaticMember;
 
 type Config = ConstructorParameters<typeof OGM>[0];
 export const typeDefs: Config['typeDefs'] = 'type A @node { id: ID! }';
@@ -163,10 +171,26 @@ describe('published ES module entry points (v2.9.1)', () => {
       expect.arrayContaining(['OGM', 'OGMError', 'Model', 'CypherAssert']),
     );
     expect(report.testing).toEqual([
+      'COMPILABLE_METHODS',
       'CypherAssert',
       'Neo4jRecordFactory',
       'SelectionSetFactory',
+      'assertSafeRegexPattern',
+      'compile',
+      'createCompileOnlyOgm',
+      'isSafeRegexPattern',
+      'normalizeCompiled',
     ]);
+    // vNEXT — the compile-only API and the regex guard, from the main entry too.
+    expect(report.main).toEqual(
+      expect.arrayContaining([
+        'compile',
+        'createCompileOnlyOgm',
+        'normalizeCompiled',
+        'assertSafeRegexPattern',
+        'isSafeRegexPattern',
+      ]),
+    );
 
     // Every export is available from both entry points, both builds.
     expect(report.main).toEqual(report.cjsMain);

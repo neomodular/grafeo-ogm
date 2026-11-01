@@ -124,9 +124,11 @@ export { sanitizeLuceneQuery } from './utils/lucene';
 export {
   assertSafeIdentifier,
   assertSafeLabel,
+  assertSafeRegexPattern,
   assertSortDirection,
   escapeIdentifier,
 } from './utils/validation';
+export { isSafeRegexPattern } from './utils/safe-regex';
 
 // Testing utilities — re-exported from the main entry so consumers
 // on legacy module resolvers (TypeScript `moduleResolution: "node"`,
@@ -139,8 +141,19 @@ export {
   CypherAssert,
   Neo4jRecordFactory,
   SelectionSetFactory,
+  COMPILABLE_METHODS,
+  compile,
+  createCompileOnlyOgm,
+  normalizeCompiled,
 } from './testing';
-export type { DateTimeFactoryOptions } from './testing';
+export type {
+  DateTimeFactoryOptions,
+  CompilableMethod,
+  CompileContext,
+  Compiled,
+  CompiledQuery,
+  CompileOnlyOgmConfig,
+} from './testing';
 
 // CLI configuration — `defineConfig` gives grafeo.config.ts files full type
 // inference. The CLI itself (bin "grafeo") lives in dist/cjs/cli and is NOT

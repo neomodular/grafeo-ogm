@@ -10,6 +10,7 @@ import {
 import { WhereCompiler } from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor } from './execution/executor';
+import { bindDriver } from './execution/driver-registry';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
 import { hashCtx } from './policy/resolver';
@@ -177,6 +178,7 @@ export class InterfaceModel<
       compilers?.selection ?? new SelectionCompiler(schema, this.whereCompiler);
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
     this.executor = new Executor(driver, policyBinding?.logger);
+    bindDriver(this, driver);
     this.syntheticNodeDef = this.buildSyntheticNodeDef();
     this.policyBinding = policyBinding;
     this.logger = policyBinding?.logger;

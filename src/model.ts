@@ -21,6 +21,7 @@ import type {
 } from './compilers/where.compiler';
 import { OGMError, RecordNotFoundError } from './errors';
 import { ExecutionContext, Executor, OGMLogger } from './execution/executor';
+import { bindDriver } from './execution/driver-registry';
 import { ResultMapper } from './execution/result-mapper';
 import { PolicyDeniedError } from './policy/errors';
 import {
@@ -626,6 +627,7 @@ export class Model<
     this.fulltextCompiler = compilers?.fulltext ?? new FulltextCompiler(schema);
     this.vectorCompiler = compilers?.vector ?? new VectorCompiler();
     this.executor = new Executor(driver, logger);
+    bindDriver(this, driver);
     this.policyBinding = policyBinding;
     this.logger = logger;
     this.strictMode = compilers?.strictMode ?? lenientStrictMode();
