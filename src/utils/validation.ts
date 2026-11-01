@@ -298,6 +298,19 @@ export function mergeParams(
  * character set is provably disjoint from both (a hard fence). Both the
  * parse and the pair check are single-pass / bounded (no regex is ever run
  * against the input), so the guard cannot itself become a DoS vector.
+ *
+ * vNEXT — DOT-ALL ABSORBING TAIL. `=~` is a full match. When every `.` runs
+ * in DOTALL mode, a trailing `.*` (followed only by `$` / `)`) matches any
+ * remaining suffix on its FIRST greedy attempt, so the matcher never
+ * backtracks out of it into an earlier quantifier: it is dropped from the
+ * pair check. A trailing `.+` fails only when nothing is left (O(1)), which
+ * is exactly a required single `.`: it is checked as one. That admits the
+ * contains idiom `(?is).*term.*` (measured linear on Neo4j 5.26: ~5 ms on a
+ * 1M-char subject). Without DOTALL the tail can fail at a line terminator,
+ * and `(?i).*x.*` is quadratic (~9 s on a 100k-char `x…\n`), so it stays
+ * refused. DOTALL is honoured only when the pattern OPENS with a zero-width
+ * flag group containing `s` and no flag group anywhere turns a flag off
+ * (`-`) — anything else is treated as non-DOTALL (fail-closed).
  */
 
 /** Longest `_MATCHES` pattern accepted — a shape-independent backstop. */
@@ -327,6 +340,52 @@ interface MatchAtom {
   readonly loose: boolean;
   /** Quantifier requires at least one repetition (min>=1) — a fence candidate. */
   readonly required: boolean;
+  /**
+   * vNEXT — a candidate absorbing tail: a bare `.` quantified `{0,}` or
+   * `{1,}` (any greedy/lazy/possessive form) with only `$` / `)` after it.
+   * `min` is its repetition minimum (0 or 1).
+   */
+  readonly tail?: { readonly min: number };
+}
+
+/**
+ * vNEXT — remove (`.*`) or pin to one required `.` (`.+`) a trailing
+ * absorbing atom. Only valid when every `.` provably runs in DOTALL mode.
+ */
+function trimDotAllTail(atoms: MatchAtom[]): MatchAtom[] {
+  const last = atoms[atoms.length - 1];
+  if (!last?.tail) return atoms;
+  const head = atoms.slice(0, -1);
+  if (last.tail.min === 0) return head;
+  head.push({ charset: BROAD_CHARSET, loose: false, required: true });
+  return head;
+}
+
+/** True when two loose atoms can contend with no hard fence between them. */
+function hasUnfencedLoosePair(atoms: ReadonlyArray<MatchAtom>): boolean {
+  for (let i = 0; i < atoms.length; i++) {
+    const a = atoms[i];
+    if (!a.loose) continue;
+    for (let j = i + 1; j < atoms.length; j++) {
+      const b = atoms[j];
+      if (!b.loose) continue;
+      if (provablyDisjoint(a.charset, b.charset)) continue;
+      let fenced = false;
+      for (let k = i + 1; k < j; k++) {
+        const m = atoms[k];
+        if (
+          m.required &&
+          provablyDisjoint(m.charset, a.charset) &&
+          provablyDisjoint(m.charset, b.charset)
+        ) {
+          fenced = true;
+          break;
+        }
+      }
+      if (!fenced) return true;
+    }
+  }
+  return false;
 }
 
 const BROAD_CHARSET: MatchCharSet = { kind: 'broad' };
@@ -418,31 +477,23 @@ export function assertSafeRegexPattern(pattern: string, context: string): void {
     refuse(`pattern has too many components (>${MAX_MATCHES_ATOMS})`);
 
   // 3. Loose-pair rule: no two loose atoms may contend over an overlapping
-  //    character set unless a hard fence provably separates them.
-  for (let i = 0; i < atoms.length; i++) {
-    const a = atoms[i];
-    if (!a.loose) continue;
-    for (let j = i + 1; j < atoms.length; j++) {
-      const b = atoms[j];
-      if (!b.loose) continue;
-      if (provablyDisjoint(a.charset, b.charset)) continue;
-      let fenced = false;
-      for (let k = i + 1; k < j; k++) {
-        const m = atoms[k];
-        if (
-          m.required &&
-          provablyDisjoint(m.charset, a.charset) &&
-          provablyDisjoint(m.charset, b.charset)
-        ) {
-          fenced = true;
-          break;
-        }
-      }
-      if (!fenced)
-        refuse(
-          'two variable-length quantifiers can contend over the same input',
-        );
-    }
+  //    character set unless a hard fence provably separates them. vNEXT —
+  //    under a provable DOTALL a trailing `.*` / `.+` is absorbing (see the
+  //    design note above) and is trimmed before the check.
+  const checked = parsed.dotAll ? trimDotAllTail(atoms) : atoms;
+  if (hasUnfencedLoosePair(checked)) {
+    // vNEXT — the same pattern in dot-all form would pass: say so.
+    const dotAllWouldPass =
+      !parsed.dotAll &&
+      !parsed.flagTurnedOff &&
+      !hasUnfencedLoosePair(trimDotAllTail(atoms));
+    refuse(
+      'two variable-length quantifiers can contend over the same input' +
+        (dotAllWouldPass
+          ? ' (did you mean the dot-all form? Start the pattern with `(?s)`, e.g. `(?is).*term.*`; ' +
+            'it is accepted, and also lets `.` match line terminators)'
+          : ''),
+    );
   }
 }
 
@@ -456,11 +507,20 @@ export function assertSafeRegexPattern(pattern: string, context: string): void {
 function parseLinearAtomsOrRefuse(
   pattern: string,
   refuse: (why: string) => never,
-): { atoms: MatchAtom[]; caseInsensitive: boolean } {
+): {
+  atoms: MatchAtom[];
+  caseInsensitive: boolean;
+  /** vNEXT — every `.` provably runs in DOTALL mode. */
+  dotAll: boolean;
+  /** vNEXT — some flag group turns a flag off (`-`). */
+  flagTurnedOff: boolean;
+} {
   const atoms: MatchAtom[] = [];
   const n = pattern.length;
   let depth = 0; // open non-quantified groups
   let caseInsensitive = false;
+  let leadingDotAll = false;
+  let flagTurnedOff = false;
   let i = 0;
 
   while (i < n) {
@@ -491,7 +551,13 @@ function parseLinearAtomsOrRefuse(
         let j = i + 2;
         while (j < n && FLAG_CHARS.test(pattern[j])) j++;
         if (j > i + 2 && (pattern[j] === ')' || pattern[j] === ':')) {
-          if (pattern.slice(i + 2, j).includes('i')) caseInsensitive = true;
+          const flags = pattern.slice(i + 2, j);
+          if (flags.includes('i')) caseInsensitive = true;
+          if (flags.includes('-')) flagTurnedOff = true;
+          // vNEXT — a leading zero-width `(?…s…)` sets DOTALL for the whole
+          // pattern (provided nothing turns a flag off — checked at the end).
+          if (i === 0 && pattern[j] === ')' && flags.includes('s'))
+            leadingDotAll = true;
           if (pattern[j] === ')')
             i = j + 1; // zero-width flag setting — emits no atom
           else {
@@ -519,16 +585,27 @@ function parseLinearAtomsOrRefuse(
     // Otherwise: an atom (with an optional quantifier).
     const atom = parseAtomOrRefuse(pattern, i, refuse);
     const quant = parseQuantifier(pattern, atom.next);
+    const isTail =
+      c === '.' &&
+      quant.max === Infinity &&
+      quant.min <= 1 &&
+      /^[$)]*$/.test(pattern.slice(quant.next));
     atoms.push({
       charset: atom.charset,
       loose: quant.max !== quant.min || quant.min === 0,
       required: quant.min >= 1,
+      ...(isTail ? { tail: { min: quant.min } } : {}),
     });
     i = quant.next;
   }
 
   if (depth !== 0) refuse('unbalanced `(`');
-  return { atoms, caseInsensitive };
+  return {
+    atoms,
+    caseInsensitive,
+    dotAll: leadingDotAll && !flagTurnedOff,
+    flagTurnedOff,
+  };
 }
 
 /** Parse a single atom's character set. Returns the index after the atom. */

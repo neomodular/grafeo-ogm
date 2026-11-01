@@ -611,6 +611,15 @@ const book = await Book.findUniqueOrThrow({
 | `_NOT_ENDS_WITH` | `NOT ENDS WITH` | `{ name_NOT_ENDS_WITH: 'x' }` |
 | `_MATCHES` | `=~` (regex) | `{ name_MATCHES: '^A.*' }` |
 
+**`_MATCHES` and the ReDoS guard.** Neo4j evaluates `=~` with Java's backtracking regex engine. `=~` is a full match: the pattern must match the whole value. Some patterns take time that grows exponentially or polynomially with the value's length, and Neo4j cannot stop a regex once it runs (see [Security](#8-_matches-redos-guard)). So every `_MATCHES` value is checked when the query compiles. A pattern is accepted only if the guard can prove it runs in linear time. Anything it cannot prove throws `OGMError`; there is no bypass.
+
+- **Accepted:** flat patterns built from literals, escaped characters, character classes, `.`, `\d` `\w` `\s`, quantifiers on single characters, anchors, non-quantified groups and the inline flags `i` `m` `s` `d`. Two variable-length quantifiers must not compete for the same characters: they need provably different characters (`\d+[a-z]+`), or a required character between them that neither can match (`[a-z]+@[a-z]+\.[a-z]+`). One `.*` is fine (`'^foo.*bar$'`, `'(?i)^foo.*'`).
+- **The contains form (since vNEXT):** `'(?s).*term.*'` and `'(?is).*term.*'` are accepted. The pattern has to **start** with a flag group containing `s` (dot-all), and no flag group may turn a flag off (`-`). The trailing `.*` (or `.+`) must be the last thing in the pattern, followed only by `$` or `)`. Dot-all is what makes it safe: the final `.*` then always matches the rest of the value, so the engine never backtracks. Without it, `.` stops at a line break, and `(?i).*x.*` takes about 9 seconds on a 100 000-character value. That pattern is refused, and the error suggests the dot-all form. Note that `(?s)` also matches values that contain line breaks, which `(?i).*term.*` never did.
+- **Refused:** alternation (`a|b`), quantified groups (`(ab)+`), lookaround, backreferences, `\Q…\E`, `\p{…}`, the flags `x` `u` `U`, and two wildcards around more than one literal (`.*a.*b.*`, `.*x.*y`). These patterns can take polynomial time, and some take exponential time.
+- **Interpolating user input:** escape every regex metacharacter in the term with a backslash, one character at a time (`term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')`). Otherwise a term like `a+` or `(` changes the pattern's shape, and the guard refuses it.
+- **Plain substring search:** use `{ name_CONTAINS: term, mode: 'insensitive' }`. It needs no escaping and is always safe. `mode: 'insensitive'` lower-cases with Unicode rules; a regex `(?i)` folds ASCII only.
+- **`features.filters.String.MATCHES: false`** turns `_MATCHES` off: any use of it then throws. The flag does not relax the guard.
+
 **List fields** (`tags: [String!]`) are compared as a whole list, so only these operators exist for them:
 
 | Operator | Matches when | Example |
@@ -2925,7 +2934,7 @@ SelectionSetFactory.select(['id', 'title', { author: ['name'] }]);
 
 ## Security
 
-grafeo-ogm implements 7 layered security controls. Every user-provided value passes through validation before it reaches the Cypher string.
+grafeo-ogm implements 8 layered security controls. Every user-provided value passes through validation before it reaches the Cypher string.
 
 ### 1. Parameterization
 
@@ -2963,6 +2972,12 @@ Prevents denial-of-service via deeply nested or circular inputs.
 ### 7. Sort Direction Validation
 
 Sort directions are strictly validated as `"ASC"` or `"DESC"`. Any other value -- including injected Cypher fragments -- is rejected.
+
+### 8. `_MATCHES` ReDoS guard
+
+A `_MATCHES` value is a regex, and parameterization does not make it harmless: the pattern itself is what runs. Neo4j runs `=~` on Java's backtracking engine. **A running regex cannot be interrupted.** On Neo4j 5.26, a query whose transaction had timed out (`db.transaction.timeout` or a driver `timeout`) and that had been killed with `TERMINATE TRANSACTION` was reported as terminated, but kept one CPU core at 100% until the regex finished. The cost also adds up over every row scanned.
+
+That is why the guard fails closed. It accepts a pattern only when it can prove linear-time matching, and refuses everything else, with no bypass. See [`_MATCHES` and the ReDoS guard](#where-operators) for what it accepts and refuses. To remove the operator from your API entirely, set `features.filters.String.MATCHES: false`.
 
 ### Best Practices
 

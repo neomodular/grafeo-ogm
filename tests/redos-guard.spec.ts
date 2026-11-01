@@ -195,6 +195,109 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
     });
   });
 
+  // vNEXT — issue #2: under a provable DOTALL a trailing `.*` / `.+` is
+  // absorbing (it matches any remaining suffix on its first try), so the
+  // contains idiom `(?is).*term.*` is linear and accepted. Measured on Neo4j
+  // 5.26: `(?is).*x.*` ~5 ms on a 1M-char `x…\n`; `(?i).*x.*` ~9 s at 100k.
+  describe('dot-all absorbing tail (contains form)', () => {
+    const accepted = [
+      '(?s).*x.*',
+      '(?is).*x.*',
+      '(?si).*abc.*',
+      '(?s)^.*x.*$',
+      '(?s).*x.*$',
+      '(?s).+x.+',
+      '(?s).*x.+',
+      '(?s).+x.*',
+      '(?s).*x.*?',
+      '(?s).*x.*+',
+      '(?s).*x.+?',
+      '(?s)^foo.*bar.*',
+      '(?s).*[0-9].*',
+      '(?s).*(x).*',
+      '(?s)(.*x.*)',
+      '(?s)(?:.*x.*)$',
+      '(?ism).*x.*',
+      '(?sd).*x.*',
+      '(?is).*\\(a\\)\\.\\*.*', // a term with escaped metacharacters
+      '(?is).*foo bar.*',
+      '(?s)(?i).*x.*',
+      '(?s)(?i:.*x).*',
+    ];
+
+    it.each(accepted)('accepts %j', (pattern) => {
+      expect(() => check(pattern)).not.toThrow();
+    });
+
+    const stillRefused = [
+      // no DOTALL: `.` stops at a line terminator, so the tail can fail
+      '(?i).*x.*',
+      '.*x.*',
+      '.+x.+',
+      '^.*x.*$',
+      // a literal after the last wildcard — not absorbing (measured n²)
+      '(?s).*x.*y',
+      '(?s).*foo.*bar',
+      '(?s).*x.*?y',
+      // more than one gap left after trimming the tail
+      '(?s).*a.*b.*',
+      '(?s).*aa.*aa.*',
+      '(?s).*a.*b.*c.*',
+      '(?s).*x.*.*', // only the last atom is a tail
+      // the remainder must still pass on its own
+      '(?s).*a+.*',
+      '(?s)(a+)+.*',
+      '(?s).*(a|b).*',
+      // the tail must be a bare `.` with an unbounded max and min <= 1
+      '(?s).*x.{2,}',
+      '(?s).*x.{0,5}.*x.{0,5}',
+      '(?s).*x[^y]*',
+      '(?s).*x\\S*',
+      // a zero-width assertion after the tail can fail
+      '(?s).*x.*\\b',
+      '(?s).*x.*\\B',
+    ];
+
+    it.each(stillRefused)('still refuses %j', (pattern) => {
+      expect(() => check(pattern)).toThrow(OGMError);
+    });
+
+    describe('DOTALL is honoured only when provable (flag scoping, fail-closed)', () => {
+      const notDotAll = [
+        '(?-s).*x.*', // turned off
+        '(?s-i).*x.*', // any `-` disables the rule
+        '(?s)(?-s).*x.*', // turned back off later
+        '(?s)(?i-s:.*x.*)',
+        '(?s)(?-s:.*x).*',
+        '(?s)x(?-i).*x.*',
+        '^(?s).*x.*', // not the first token
+        'x(?s).*y.*', // not at the start
+        '(?i)(?s).*x.*', // only the opening group counts
+        '(?s:.*x.*)', // scoped, not zero-width
+        '(?i)(?s:.*x).*', // tail outside the scoped group
+        '(?x s).*x.*', // unmodeled flag — refused outright
+        '(?su).*x.*',
+      ];
+
+      it.each(notDotAll)('refuses %j', (pattern) => {
+        expect(() => check(pattern)).toThrow(OGMError);
+      });
+    });
+
+    it('hints at the dot-all form when it would be accepted', () => {
+      expect(() => check('(?i).*x.*')).toThrow(/did you mean the dot-all form/);
+      expect(() => check('.+abc.+')).toThrow(/did you mean the dot-all form/);
+      expect(() => check('.*x.*$')).toThrow(/Start the pattern with `\(\?s\)`/);
+    });
+
+    it('does not hint when the dot-all form would be refused too', () => {
+      for (const p of ['.*a.*b.*', '.*x.*y', '(?-s).*x.*', 'a+a+', '(a+)+'])
+        expect(() => check(p)).toThrow(OGMError);
+      for (const p of ['.*a.*b.*', '.*x.*y', '(?-s).*x.*', 'a+a+'])
+        expect(() => check(p)).not.toThrow(/dot-all/);
+    });
+  });
+
   describe('bounds its own work (cannot be a DoS vector)', () => {
     it('rejects an over-length pattern in O(1) before parsing', () => {
       expect(() => check('a'.repeat(1001))).toThrow(/exceeds/);
