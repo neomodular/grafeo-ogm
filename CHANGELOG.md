@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.26.0 (2026-11-01) — missing APOC, root sort and root ops, db push --check
+
+> **Minor release.** It extends strict items 46 and 47, adds `grafeo db push --check`, and turns the raw "missing APOC" server error into a clear `OGMError`. Without `strict`, every call that worked in 2.25.0 compiles to byte-identical Cypher and returns the same result; the only addition is one warning per OGM instance and shape.
+
+### Fixed
+
+- **A relationship or connection sort on a server without APOC** now throws an `OGMError` that names the feature and says it needs the APOC plugin. Before, the caller got Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`. This covers the typed `orderBy`, `selectionSet` `options.sort` and connection `sort`. `cloneSubgraph` / `deleteSubgraph` say the same. The Neo4j error is kept as `cause`, and `OGMError` accepts `{ cause }`.
+
+### Added
+
+- **`grafeo db push --check`**, a CI gate like `grafeo generate --verify`. It prints the plan, writes nothing, and exits 1 when constraints or indexes are missing, changed or orphaned; unmanaged items never count. It exits 0 when in sync, and respects `strict`.
+
+### Strict mode
+
+- **Item 47 — a root `options.sort` by a node-typed `@cypher` field** (`Model` and `InterfaceModel`). It orders rows by Neo4j's internal node order. Default mode keeps the sort and warns (`root-sort-cypher-node-field`); strict mode throws `OGMError`.
+- **Item 46 — a root write op that is not an object** (`false`, `0`, `''`, `true`, `5`, `[]`). It was accepted silently. This covers:
+  - the `update` / `connect` / `disconnect` of `update()`;
+  - `updateMany()`'s `data`;
+  - `upsert()`'s `create` / `update`;
+  - `delete()`'s cascade `delete`.
+
+  Default mode keeps skipping it and warns (`root-op-non-object`); strict mode throws `OGMError` before anything runs.
+
 ## 2.25.0 (2026-10-29) — non-object nested writes, @cypher sort and filter
 
 > **Minor release.** It adds strict items 44–47 for nested write values that are not objects, and for `@cypher` sort keys 2.x cannot honour. It also adds where filters on node-typed `@cypher` fields, and sorts connections by scalar `@cypher` fields. Every write that worked in 2.24.1 compiles to byte-identical Cypher in default mode; the only addition is one warning per OGM instance and shape. Two crashes now throw a clear `OGMError` instead.
