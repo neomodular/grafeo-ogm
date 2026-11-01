@@ -1766,6 +1766,16 @@ These values carry nothing to write, and 2.x skipped them without a word:
 
 Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since 2.25.0. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-2250) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-2250) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
 
+**Root ops (since vNEXT).** The same holds one level up, for a root write op that is not an object: the `update`, `connect` and `disconnect` of `update()`, the `data` of `updateMany()`, the `create` and `update` of `upsert()`, and the cascade `delete` of `delete()`:
+
+```typescript
+await users.update({ where: { id }, update: { name: 'n' }, connect: false });
+// default: name is set, the connect is skipped (and warns)
+// strict:  OGMError: The root "connect" of User.update() is a boolean (false). It must be an object keyed by relationship field, such as { posts: … }.
+```
+
+A value with no keys (`false`, `0`, `''`, `true`, `5`, `[]`) was skipped without a word, so a caller passing `connect: someCondition && { … }` lost the write silently. Default mode keeps skipping it and warns; strict mode throws, before anything runs. A string or non-empty array (`connect: 'p1'`, `update: [{ name: 'n' }]`) keeps its 2.x handling in default mode (an `Unknown relationship "0"` warning or error) and throws the same `OGMError` in strict mode. `null` / `undefined` are no op in both modes. The root `create`, `connectOrCreate` and `delete` of `update()` (strict only, [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)) have rejected these values since 2.22.0. The warning code is `root-op-non-object`, logged once per OGM instance, method and op.
+
 #### 47. A connection sort on a node-typed or aggregating `@cypher` field (since 2.25.0)
 
 ```typescript

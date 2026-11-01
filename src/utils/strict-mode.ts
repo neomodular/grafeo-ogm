@@ -130,6 +130,55 @@ export function checkParamKeys(
   );
 }
 
+/**
+ * vNEXT — strict item 46 (root ops): a root write op of a `Model` method
+ * that is not an object — `update()`'s `update` / `connect` / `disconnect`,
+ * `updateMany()`'s `data`, `upsert()`'s `create` / `update`, `delete()`'s
+ * cascade `delete` — such as `false`,
+ * `0`, `''`, `true`, `5` or `[]`. It carries nothing to write, and 2.x
+ * skipped it without a word (strict mode already threw for the root
+ * `create` / `connectOrCreate` / `delete` of `update()`, item 43). Default
+ * mode keeps skipping it and warns; strict mode throws. A string or a
+ * non-empty array (enumerable keys) keeps its existing handling by default
+ * (an unknown-relationship warning or error for the key `"0"`), and throws
+ * this error in strict mode. `null` / `undefined` are no op in both modes.
+ */
+export function checkRootOpObject(
+  strictMode: StrictMode,
+  owner: string,
+  method: string,
+  key: string,
+  value: unknown,
+  /** Whether the op is a node input (fields) or a relationship op. */
+  expects: 'fields' | 'relationships',
+): void {
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'object' && !Array.isArray(value))
+  )
+    return;
+  const shape = Array.isArray(value)
+    ? `an array (${value.length === 0 ? '[]' : `${value.length} item(s)`})`
+    : `a ${typeof value} (${typeof value === 'string' ? JSON.stringify(value) : String(value)})`;
+  const expected =
+    expects === 'fields'
+      ? 'an object of fields to write, such as { name: … }'
+      : 'an object keyed by relationship field, such as { posts: … }';
+  const what = `The root "${key}" of ${owner}.${method}()`;
+  if (strictMode.strict)
+    throw new OGMError(`${what} is ${shape}. It must be ${expected}.`);
+  // Only a value with no keys is skipped silently; any other keeps its
+  // existing handling (see above).
+  if (Object.keys(value as object).length > 0) return;
+  strictMode.warn(
+    'root-op-non-object',
+    `${owner}\u0000${method}\u0000${key}`,
+    `${what} is ${shape}, not an object: it is ignored (nothing in it is written).`,
+    'throw an OGMError for a root write op that is not an object',
+  );
+}
+
 /** Lenient, silent instance for compilers constructed without an OGM. */
 export function lenientStrictMode(): StrictMode {
   return new StrictMode(false);

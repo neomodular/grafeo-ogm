@@ -65,6 +65,7 @@ import {
 } from './utils/cypher-sort-projection';
 import {
   checkParamKeys,
+  checkRootOpObject,
   lenientStrictMode,
   StrictMode,
 } from './utils/strict-mode';
@@ -1337,6 +1338,16 @@ export class Model<
       this.strictMode.strict ? PARAMS.updateStrict : PARAMS.update,
       PARAM_HINTS.update,
     );
+    // vNEXT — strict item 46 (root ops).
+    for (const key of ['update', 'connect', 'disconnect'] as const)
+      checkRootOpObject(
+        this.strictMode,
+        this.nodeDef.typeName,
+        'update',
+        key,
+        params[key],
+        key === 'update' ? 'fields' : 'relationships',
+      );
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -1481,6 +1492,15 @@ export class Model<
       'delete',
       params,
       PARAMS.delete,
+    );
+    // vNEXT — strict item 46 (root ops): the cascade `delete`.
+    checkRootOpObject(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'delete',
+      'delete',
+      params.delete,
+      'relationships',
     );
     const labels = this.deleteLabels('delete', params);
     const policyContext = this.resolvePolicyContext('delete', params.unsafe);
@@ -1971,6 +1991,16 @@ export class Model<
       params,
       PARAMS.upsert,
     );
+    // vNEXT — strict item 46 (root ops).
+    for (const key of ['create', 'update'] as const)
+      checkRootOpObject(
+        this.strictMode,
+        this.nodeDef.typeName,
+        'upsert',
+        key,
+        params[key],
+        'fields',
+      );
     if (params.select && params.selectionSet)
       throw new OGMError(
         'Cannot provide both "select" and "selectionSet". They are mutually exclusive.',
@@ -2199,6 +2229,15 @@ export class Model<
       'updateMany',
       params,
       PARAMS.updateMany,
+    );
+    // vNEXT — strict item 46 (root ops).
+    checkRootOpObject(
+      this.strictMode,
+      this.nodeDef.typeName,
+      'updateMany',
+      'data',
+      params.data,
+      'fields',
     );
     const policyContext = this.resolvePolicyContext('update', params.unsafe);
     this.assertNotDeniedAtCompile(policyContext, 'update');
