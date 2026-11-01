@@ -85,7 +85,7 @@ import { OGM, OGMError, Executor } from 'grafeo-ogm';
 import { CypherAssert, compile, createCompileOnlyOgm } from 'grafeo-ogm/testing';
 import type { CompiledQuery } from 'grafeo-ogm/testing';
 
-// vNEXT — the compile-only API resolves with real types.
+// v2.27.0 — the compile-only API resolves with real types.
 export const compiled: Promise<CompiledQuery> = compile(
   createCompileOnlyOgm({ typeDefs: 'type A @node { id: ID! }' }).model('A'),
 ).find();
@@ -181,7 +181,7 @@ describe('published ES module entry points (v2.9.1)', () => {
       'isSafeRegexPattern',
       'normalizeCompiled',
     ]);
-    // vNEXT — the compile-only API and the regex guard, from the main entry too.
+    // v2.27.0 — the compile-only API and the regex guard, from the main entry too.
     expect(report.main).toEqual(
       expect.arrayContaining([
         'compile',

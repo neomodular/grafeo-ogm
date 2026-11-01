@@ -1,5 +1,5 @@
 /**
- * vNEXT — `compile(model)` takes the same, generated-typed params as the
+ * v2.27.0 — `compile(model)` takes the same, generated-typed params as the
  * real model methods (with `context` limited to `metadata`), compiled as
  * real user code against generated types.
  */

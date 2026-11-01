@@ -2755,7 +2755,7 @@ import {
 
 ### Compile-only OGM
 
-Since vNEXT. A unit test that mocks `model.find` never reaches grafeo, so
+Since v2.27.0. A unit test that mocks `model.find` never reaches grafeo, so
 nothing grafeo decides (how a `where` compiles, a filter dropped by an
 empty `AND`, a `_MATCHES` pattern the ReDoS guard refuses, a strict-mode
 rejection, where a policy predicate goes) is visible in your CI. A
@@ -2849,7 +2849,7 @@ expect(normalizeCompiled(await compile(ogm.model('Book')).find({ where }))).toMa
 
 ### `_MATCHES` guard
 
-`assertSafeRegexPattern(pattern, context)` (since vNEXT, also from
+`assertSafeRegexPattern(pattern, context)` (since 2.27.0, also from
 `grafeo-ogm`) is the guard every `_MATCHES` value passes: it throws the
 `OGMError` the query would throw. `isSafeRegexPattern(pattern)` returns
 `true` / `false` instead. The accepted set can tighten in a security

@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 /**
- * vNEXT — the driver each `Model` / `InterfaceModel` runs its statements
+ * v2.27.0 — the driver each `Model` / `InterfaceModel` runs its statements
  * through, keyed by the model instance. Internal: `compile()` (from
  * `grafeo-ogm/testing`) reads it to refuse any model that can reach a
  * database. A WeakMap, so it adds no member to the model types and holds

@@ -1,5 +1,5 @@
 /**
- * vNEXT — `compile()` on a compile-only OGM returns exactly the statements a
+ * v2.27.0 — `compile()` on a compile-only OGM returns exactly the statements a
  * real OGM sends. Every shared write / read / params case of the strict-mode
  * suites runs twice — on a real OGM over a recording driver, and on a
  * compile-only OGM whose models are wrapped in `compile()` — in default and

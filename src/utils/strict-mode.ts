@@ -2,7 +2,7 @@ import { OGMError } from '../errors';
 import type { OGMLogger } from '../execution/executor';
 
 /**
- * vNEXT — loggers whose warnings are logged on every occurrence, not once
+ * v2.27.0 — loggers whose warnings are logged on every occurrence, not once
  * per OGM and key. Only the compile-only OGM (`grafeo-ogm/testing`)
  * registers one, so `compile()` can report each call's warnings.
  */

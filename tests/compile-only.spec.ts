@@ -1,5 +1,5 @@
 /**
- * vNEXT — compile-only OGM (GitHub issue #3): `createCompileOnlyOgm()` +
+ * v2.27.0 — compile-only OGM (GitHub issue #3): `createCompileOnlyOgm()` +
  * `compile(model)` return the statement a model call would send, with no
  * driver, and reject with the error the real call throws before it reaches
  * the database.

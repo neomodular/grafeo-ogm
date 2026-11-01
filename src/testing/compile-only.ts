@@ -1,5 +1,5 @@
 /**
- * vNEXT — compile-only OGM (GitHub issue #3): turn a model call into the
+ * v2.27.0 — compile-only OGM (GitHub issue #3): turn a model call into the
  * `{ cypher, params }` it would send, in a unit test, with no driver and no
  * database.
  *
