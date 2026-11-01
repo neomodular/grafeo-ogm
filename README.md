@@ -2862,12 +2862,15 @@ expect(normalizeCompiled(await compile(ogm.model('Book')).find({ where }))).toMa
 `grafeo-ogm`) is the guard every `_MATCHES` value passes: it throws the
 `OGMError` the query would throw. `isSafeRegexPattern(pattern)` returns
 `true` / `false` instead. The accepted set can tighten in a security
-release, so test the patterns your code sends.
+release, so test the patterns your code sends. See
+[`_MATCHES` and the ReDoS guard](#where-operators) for what it accepts.
 
 ```typescript
 import { isSafeRegexPattern } from 'grafeo-ogm/testing';
 
 expect(isSafeRegexPattern('^ABC-[0-9]+$')).toBe(true);
+expect(isSafeRegexPattern('(?is).*term.*')).toBe(true); // dot-all contains form
+expect(isSafeRegexPattern('(?i).*term.*')).toBe(false); // quadratic without (?s)
 ```
 
 ### CypherAssert
