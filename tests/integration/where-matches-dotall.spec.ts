@@ -1,5 +1,5 @@
 /**
- * Live `_MATCHES` dot-all contains suite (vNEXT — issue #2).
+ * Live `_MATCHES` dot-all contains suite (v2.28.0 — issue #2).
  *
  * Opt-in on NEO4J_URI (see `tests/fixtures/read-paths.fixture.ts`).
  *

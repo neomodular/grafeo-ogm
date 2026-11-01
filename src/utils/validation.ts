@@ -299,7 +299,7 @@ export function mergeParams(
  * parse and the pair check are single-pass / bounded (no regex is ever run
  * against the input), so the guard cannot itself become a DoS vector.
  *
- * vNEXT — DOT-ALL ABSORBING TAIL. `=~` is a full match. When every `.` runs
+ * v2.28.0 — DOT-ALL ABSORBING TAIL. `=~` is a full match. When every `.` runs
  * in DOTALL mode, a trailing `.*` (followed only by `$` / `)`) matches any
  * remaining suffix on its FIRST greedy attempt, so the matcher never
  * backtracks out of it into an earlier quantifier: it is dropped from the
@@ -341,7 +341,7 @@ interface MatchAtom {
   /** Quantifier requires at least one repetition (min>=1) — a fence candidate. */
   readonly required: boolean;
   /**
-   * vNEXT — a candidate absorbing tail: a bare `.` quantified `{0,}` or
+   * v2.28.0 — a candidate absorbing tail: a bare `.` quantified `{0,}` or
    * `{1,}` (any greedy/lazy/possessive form) with only `$` / `)` after it.
    * `min` is its repetition minimum (0 or 1).
    */
@@ -349,7 +349,7 @@ interface MatchAtom {
 }
 
 /**
- * vNEXT — remove (`.*`) or pin to one required `.` (`.+`) a trailing
+ * v2.28.0 — remove (`.*`) or pin to one required `.` (`.+`) a trailing
  * absorbing atom. Only valid when every `.` provably runs in DOTALL mode.
  */
 function trimDotAllTail(atoms: MatchAtom[]): MatchAtom[] {
@@ -451,7 +451,7 @@ function caseFold(cs: MatchCharSet): MatchCharSet {
  * semantic guard on the operator, never string interpolation.
  */
 export function assertSafeRegexPattern(pattern: string, context: string): void {
-  // vNEXT — the message no longer offers `features.filters.String.MATCHES`
+  // v2.28.0 — the message no longer offers `features.filters.String.MATCHES`
   // as a way to run an unproven regex: that flag disables `_MATCHES`
   // entirely, and there is no bypass. It names what to use instead.
   const refuse = (why: string): never => {
@@ -484,12 +484,12 @@ export function assertSafeRegexPattern(pattern: string, context: string): void {
     refuse(`pattern has too many components (>${MAX_MATCHES_ATOMS})`);
 
   // 3. Loose-pair rule: no two loose atoms may contend over an overlapping
-  //    character set unless a hard fence provably separates them. vNEXT —
+  //    character set unless a hard fence provably separates them. v2.28.0 —
   //    under a provable DOTALL a trailing `.*` / `.+` is absorbing (see the
   //    design note above) and is trimmed before the check.
   const checked = parsed.dotAll ? trimDotAllTail(atoms) : atoms;
   if (hasUnfencedLoosePair(checked)) {
-    // vNEXT — the same pattern in dot-all form would pass: say so.
+    // v2.28.0 — the same pattern in dot-all form would pass: say so.
     const dotAllWouldPass =
       !parsed.dotAll &&
       !parsed.flagTurnedOff &&
@@ -517,9 +517,9 @@ function parseLinearAtomsOrRefuse(
 ): {
   atoms: MatchAtom[];
   caseInsensitive: boolean;
-  /** vNEXT — every `.` provably runs in DOTALL mode. */
+  /** v2.28.0 — every `.` provably runs in DOTALL mode. */
   dotAll: boolean;
-  /** vNEXT — some flag group turns a flag off (`-`). */
+  /** v2.28.0 — some flag group turns a flag off (`-`). */
   flagTurnedOff: boolean;
 } {
   const atoms: MatchAtom[] = [];
@@ -561,7 +561,7 @@ function parseLinearAtomsOrRefuse(
           const flags = pattern.slice(i + 2, j);
           if (flags.includes('i')) caseInsensitive = true;
           if (flags.includes('-')) flagTurnedOff = true;
-          // vNEXT — a leading zero-width `(?…s…)` sets DOTALL for the whole
+          // v2.28.0 — a leading zero-width `(?…s…)` sets DOTALL for the whole
           // pattern (provided nothing turns a flag off — checked at the end).
           if (i === 0 && pattern[j] === ')' && flags.includes('s'))
             leadingDotAll = true;

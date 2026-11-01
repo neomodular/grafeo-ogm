@@ -149,7 +149,7 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
     });
   });
 
-  // vNEXT — the message used to suggest `features.filters.String.MATCHES`
+  // v2.28.0 — the message used to suggest `features.filters.String.MATCHES`
   // for running "arbitrary regexes"; that flag disables the operator.
   describe('refusal message', () => {
     const message = (p: string): string => {
@@ -237,7 +237,7 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
     });
   });
 
-  // vNEXT — issue #2: under a provable DOTALL a trailing `.*` / `.+` is
+  // v2.28.0 — issue #2: under a provable DOTALL a trailing `.*` / `.+` is
   // absorbing (it matches any remaining suffix on its first try), so the
   // contains idiom `(?is).*term.*` is linear and accepted. Measured on Neo4j
   // 5.26: `(?is).*x.*` ~5 ms on a 1M-char `x…\n`; `(?i).*x.*` ~9 s at 100k.
