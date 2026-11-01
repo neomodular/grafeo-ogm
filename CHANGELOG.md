@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.27.0 (2026-11-01) — compile-only OGM for unit tests
+
+> **Minor release.** It adds a compile-only OGM for unit tests and exports the `_MATCHES` validator. It is a pure addition: no emitted Cypher changes.
+
+### Added
+
+- **Compile-only OGM for unit tests** ([#3](https://github.com/neomodular/grafeo-ogm/issues/3)). `createCompileOnlyOgm(config)` and `compile(model)` come from `grafeo-ogm/testing`, and also from `grafeo-ogm`. They turn a model call into the statement it would send, with no driver or database:
+
+  ```ts
+  const q = await compile(ogm.model('Book')).find({ where });
+  // { cypher, params, metadata, accessMode, warnings }
+  ```
+
+  - It goes through the real model method, so strict-mode errors, the `_MATCHES` guard and `withContext` policies show up exactly as in production.
+  - Default-mode warnings are reported per call.
+  - `normalizeCompiled()` gives snapshot-friendly params: neo4j `Integer`, `bigint`, temporal and spatial values become plain values.
+  - Every `Model` and `InterfaceModel` method is supported. `$queryRaw` / `$executeRaw`, `$transaction`, the subgraph operations and `assertIndexesAndConstraints` reject with `OGMError`, and so does a compiled call given a caller transaction or session.
+  - The response shape follows semver; the Cypher text may change between releases.
+- **`assertSafeRegexPattern` and a new `isSafeRegexPattern` are public**, from `grafeo-ogm` and `grafeo-ogm/testing`, so tests can check the patterns an app sends to `_MATCHES`.
+
 ## 2.26.0 (2026-11-01) — missing APOC, root sort and root ops, db push --check
 
 > **Minor release.** It extends strict items 46 and 47, adds `grafeo db push --check`, and turns the raw "missing APOC" server error into a clear `OGMError`. Without `strict`, every call that worked in 2.25.0 compiles to byte-identical Cypher and returns the same result; the only addition is one warning per OGM instance and shape.
