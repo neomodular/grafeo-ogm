@@ -451,12 +451,19 @@ function caseFold(cs: MatchCharSet): MatchCharSet {
  * semantic guard on the operator, never string interpolation.
  */
 export function assertSafeRegexPattern(pattern: string, context: string): void {
+  // vNEXT — the message no longer offers `features.filters.String.MATCHES`
+  // as a way to run an unproven regex: that flag disables `_MATCHES`
+  // entirely, and there is no bypass. It names what to use instead.
   const refuse = (why: string): never => {
     throw new OGMError(
       `Unsafe \`_MATCHES\` pattern in ${context}: ${why}. ` +
-        `It cannot be proven free of catastrophic backtracking (ReDoS) and is refused. ` +
-        `Use a dedicated operator (_CONTAINS / _STARTS_WITH / _ENDS_WITH / _IN) where possible, ` +
-        `simplify the pattern, or disable the _MATCHES operator via features.filters.String.MATCHES if you must run arbitrary regexes and accept the risk.`,
+        `It cannot be proven free of catastrophic backtracking (ReDoS) and is refused; ` +
+        `Neo4j cannot interrupt a running regex, so there is no bypass. ` +
+        `For substring search use _CONTAINS (with mode: 'insensitive' for case-insensitive), ` +
+        `_STARTS_WITH, _ENDS_WITH or _IN. Accepted regexes are flat patterns whose ` +
+        `variable-length parts cannot compete for the same characters (e.g. '^foo.*bar$'), ` +
+        `plus the dot-all contains form '(?s).*term.*' / '(?is).*term.*' ` +
+        `(escape regex metacharacters in an interpolated term with a backslash).`,
     );
   };
 

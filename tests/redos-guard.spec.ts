@@ -131,16 +131,58 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
   describe('conservatively refuses some safe patterns (documented precision cost)', () => {
     // Sound-by-construction means erring toward rejection: these are linear
     // but the guard cannot prove it, so it refuses them. Callers use the
-    // dedicated operators or the features.filters.String.MATCHES kill switch.
+    // dedicated operators (there is no bypass).
     const conservativelyRejected = [
       'foo|bar', // alternation
       '(cat|dog)', // alternation
       '(ab)+', // quantified group of a fixed string (actually linear)
-      '.*foo.*', // two broad loose atoms (mild, but refused)
     ];
 
     it.each(conservativelyRejected)('refuses %j', (pattern) => {
       expect(() => check(pattern)).toThrow(OGMError);
+    });
+
+    it('refuses `.*foo.*` without dot-all — it is quadratic, not just unproven', () => {
+      // Measured on 5.26: ~9 s on a 100k-char `x…\n`. The dot-all form is
+      // accepted (see "dot-all absorbing tail").
+      expect(() => check('.*foo.*')).toThrow(OGMError);
+    });
+  });
+
+  // vNEXT — the message used to suggest `features.filters.String.MATCHES`
+  // for running "arbitrary regexes"; that flag disables the operator.
+  describe('refusal message', () => {
+    const message = (p: string): string => {
+      try {
+        check(p);
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error(`expected ${p} to be refused`);
+    };
+
+    it('names the reason, the alternatives and the accepted forms', () => {
+      expect(message('(a|b)')).toBe(
+        'Unsafe `_MATCHES` pattern in test: alternation (`|`) is not supported. ' +
+          'It cannot be proven free of catastrophic backtracking (ReDoS) and is refused; ' +
+          'Neo4j cannot interrupt a running regex, so there is no bypass. ' +
+          "For substring search use _CONTAINS (with mode: 'insensitive' for case-insensitive), " +
+          '_STARTS_WITH, _ENDS_WITH or _IN. Accepted regexes are flat patterns whose ' +
+          "variable-length parts cannot compete for the same characters (e.g. '^foo.*bar$'), " +
+          "plus the dot-all contains form '(?s).*term.*' / '(?is).*term.*' " +
+          '(escape regex metacharacters in an interpolated term with a backslash).',
+      );
+    });
+
+    it('no longer offers features.filters.String.MATCHES as an escape hatch', () => {
+      for (const p of ['(a|b)', '(?i).*x.*', '.*a.*b.*', 'a'.repeat(1001)])
+        expect(message(p)).not.toMatch(/features\.filters|accept the risk/);
+    });
+
+    it('carries the dot-all hint inside the reason', () => {
+      expect(message('(?i).*x.*')).toMatch(
+        /^Unsafe `_MATCHES` pattern in test: two variable-length quantifiers can contend over the same input \(did you mean the dot-all form\? Start the pattern with `\(\?s\)`, e\.g\. `\(\?is\)\.\*term\.\*`; it is accepted, and also lets `\.` match line terminators\)\. It cannot be proven/,
+      );
     });
   });
 
@@ -294,7 +336,7 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
       for (const p of ['.*a.*b.*', '.*x.*y', '(?-s).*x.*', 'a+a+', '(a+)+'])
         expect(() => check(p)).toThrow(OGMError);
       for (const p of ['.*a.*b.*', '.*x.*y', '(?-s).*x.*', 'a+a+'])
-        expect(() => check(p)).not.toThrow(/dot-all/);
+        expect(() => check(p)).not.toThrow(/did you mean the dot-all form/);
     });
   });
 
