@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 47 (root sort): a root `options.sort` by a node-typed
+ * v2.26.0 — strict item 47 (root sort): a root `options.sort` by a node-typed
  * `@cypher` field orders the rows by Neo4j's internal order of nodes, which
  * has no meaning. Default mode keeps the sort (Cypher byte-identical to
  * v2.25.0, captured on b324181) and warns once per OGM instance and field;

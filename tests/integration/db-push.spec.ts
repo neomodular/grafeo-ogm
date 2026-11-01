@@ -304,8 +304,8 @@ describeLive('grafeo db push — live Neo4j', () => {
     }
   });
 
-  // vNEXT — `--check` is a CI gate: it never writes and exits 1 on drift.
-  // Pre-vNEXT `db push` exited 0 on drift unless it applied changes.
+  // v2.26.0 — `--check` is a CI gate: it never writes and exits 1 on drift.
+  // Pre-2.26.0 `db push` exited 0 on drift unless it applied changes.
   it('--check exits 1 on missing / changed / orphaned items, 0 in sync, and never writes', async () => {
     const v1 = `type LaPushCk @node @fulltext(indexes: [{ name: "LaPushCkSearch", fields: ["title"] }]) {
       id: ID! @unique

@@ -256,8 +256,8 @@ export async function cloneSubgraph(
 }
 
 /**
- * vNEXT — the message for a subgraph operation that failed because the
- * server has no APOC (pre-vNEXT: Neo4j's raw "There is no procedure with the
+ * v2.26.0 — the message for a subgraph operation that failed because the
+ * server has no APOC (pre-v2.26.0: Neo4j's raw "There is no procedure with the
  * name `apoc.path.subgraphAll` registered…"). `undefined` for any other error.
  */
 function missingApocMessage(

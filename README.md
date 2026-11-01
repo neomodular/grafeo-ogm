@@ -344,7 +344,7 @@ It is **additive by default** and **idempotent** — a second run with no schema
 | Flag | Description |
 |---|---|
 | `--dry-run` | Print the full plan (including the exact Cypher, drops included) and exit without writing |
-| `--check` | CI gate (since vNEXT): print the plan, write nothing, exit 1 on drift and 0 when in sync. Cannot be combined with `--dry-run`, `--force-drop` or `--yes` |
+| `--check` | CI gate (since 2.26.0): print the plan, write nothing, exit 1 on drift and 0 when in sync. Cannot be combined with `--dry-run`, `--force-drop` or `--yes` |
 | `--force-drop` | Permit dropping orphaned grafeo-managed constraints/indexes, and dropping + recreating indexes whose definition changed |
 | `--yes` | Confirm destructive drops non-interactively (required with `--force-drop` in CI) |
 | `--strict` | Plan constraints and indexes as `new OGM({ strict: true })` uses the labels: a type with `@node(labels: [...])` gets them on its first listed label ([strict item 23](#23-nodelabels--replaces-the-type-name-since-2110)). Same as `strict: true` in the config file |
@@ -753,7 +753,7 @@ Relationship fields accept `where` and `options` (`sort` needs APOC; `limit` / `
 
 ### Nested Sorting
 
-Array relationships and connection edges accept an `orderBy` clause that compiles to `apoc.coll.sortMulti` (requires the APOC plugin on the Neo4j instance). Since vNEXT, on a server without APOC such a query throws an `OGMError` that says so (the Neo4j error is its `cause`) instead of Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`.
+Array relationships and connection edges accept an `orderBy` clause that compiles to `apoc.coll.sortMulti` (requires the APOC plugin on the Neo4j instance). Since v2.26.0, on a server without APOC such a query throws an `OGMError` that says so (the Neo4j error is its `cause`) instead of Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`.
 
 **Array relationships** — sort by target-node scalar fields. Priority follows array order:
 
@@ -1770,7 +1770,7 @@ These values carry nothing to write, and 2.x skipped them without a word:
 
 Default mode still skips them and warns; strict mode throws, before anything runs. A string or non-empty array `update` (`update: 'x'`, `update: [{ title: 't' }]`) crashed with `Invalid identifier "0" in nested update property` and throws a clear `OGMError` in both modes since 2.25.0. Together with items [41](#41-a-disconnect-item-that-is-not-an-object-since-2210) (`disconnect`), [44](#44-a-nested-delete-that-is-true-false-0-or--since-2250) (`delete`), [45](#45-a-nested-create-that-is-not-an-object-since-2250) (`create`) and `connectOrCreate` (its items must be objects since 2.22.0), strict mode now rejects a non-object in every nested operation. The warning code is `nested-op-non-object`, logged once per OGM instance, shape and relationship field.
 
-**Root ops (since vNEXT).** The same holds one level up, for a root write op that is not an object: the `update`, `connect` and `disconnect` of `update()`, the `data` of `updateMany()`, the `create` and `update` of `upsert()`, and the cascade `delete` of `delete()`:
+**Root ops (since 2.26.0).** The same holds one level up, for a root write op that is not an object: the `update`, `connect` and `disconnect` of `update()`, the `data` of `updateMany()`, the `create` and `update` of `upsert()`, and the cascade `delete` of `delete()`:
 
 ```typescript
 await users.update({ where: { id }, update: { name: 'n' }, connect: false });
@@ -1792,7 +1792,7 @@ A connection `sort` (selectionSet) or `orderBy` (typed `select`) on a `@cypher` 
 
 The same applies to a nested relationship sort (`friends(options: { sort: [{ topPost: DESC }] })`, typed `orderBy`) by a node-typed `@cypher` field. Before v2.25.0 it failed in `apoc.coll.sortMulti` (`ClassCastException`) as soon as one value was a node; since 2.25.0 default mode sorts that key as `null` (no order, as when every value was `null`) and warns, and strict mode throws. The warning code is `relationship-sort-cypher-node-field`, logged once per OGM instance and field.
 
-**Root sort (since vNEXT).** A root `options.sort` by a node-typed `@cypher` field (`users.find({ options: { sort: [{ topPost: 'DESC' }] } })`, on a `Model` or an `InterfaceModel`; a node, a list of nodes, an interface or a union) orders the rows by Neo4j's internal order of those nodes, which has no meaning. Default mode keeps that sort (the Cypher is unchanged; under a `read` policy the value is still read through the target's policy, v2.22.1) and warns; strict mode throws `OGMError: Cannot sort by the @cypher field "User.topPost": it returns a node …`. Sort by a scalar field instead, e.g. a scalar `@cypher` field that returns the node's property. The warning code is `root-sort-cypher-node-field`, logged once per OGM instance and field.
+**Root sort (since 2.26.0).** A root `options.sort` by a node-typed `@cypher` field (`users.find({ options: { sort: [{ topPost: 'DESC' }] } })`, on a `Model` or an `InterfaceModel`; a node, a list of nodes, an interface or a union) orders the rows by Neo4j's internal order of those nodes, which has no meaning. Default mode keeps that sort (the Cypher is unchanged; under a `read` policy the value is still read through the target's policy, v2.22.1) and warns; strict mode throws `OGMError: Cannot sort by the @cypher field "User.topPost": it returns a node …`. Sort by a scalar field instead, e.g. a scalar `@cypher` field that returns the node's property. The warning code is `root-sort-cypher-node-field`, logged once per OGM instance and field.
 
 #### 49. Selected `@cypher` fields on a sorted, paged `find` (since 2.24.0)
 
@@ -2982,7 +2982,7 @@ Optional server features:
 | `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
 | Relationship `<rel>Aggregate` `sum` and `BigInt` aggregates, and a list-typed node `@cypher` field under a `read` policy (default mode) | Neo4j 5.9+ (type predicates, `x IS :: INTEGER`) |
 
-Without APOC, a query or subgraph operation that needs it fails with an `OGMError` (`SubgraphOperationError` for the subgraph operations) that names the feature and links here, with the Neo4j error as `cause` (since vNEXT; before, Neo4j's raw `Unknown function` / `There is no procedure` error).
+Without APOC, a query or subgraph operation that needs it fails with an `OGMError` (`SubgraphOperationError` for the subgraph operations) that names the feature and links here, with the Neo4j error as `cause` (since 2.26.0; before, Neo4j's raw `Unknown function` / `There is no procedure` error).
 
 ### Do I need to know Cypher?
 

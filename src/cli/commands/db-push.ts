@@ -139,7 +139,7 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
 }
 
 /**
- * vNEXT — `--check` (a CI gate, like `grafeo generate --verify`): the plan
+ * v2.26.0 — `--check` (a CI gate, like `grafeo generate --verify`): the plan
  * is computed and printed, nothing is written, and the exit code says
  * whether the database has drifted from the SDL. Drift is any declared
  * constraint / index that is missing (`create`, or `blocked`: missing and
@@ -147,7 +147,7 @@ function renderPlan(plan: PushPlan, io: CliIO, willDrop: boolean): void {
  * (`changed`), and any grafeo-managed item no longer declared (`orphans`).
  * Unmanaged items never count; nor does a `@vector` index without config
  * dimensions (`needsConfig`: it cannot be planned, a warning says so).
- * Pre-vNEXT `db push` exited 0 on drift unless it applied changes, so CI
+ * Pre-2.26.0 `db push` exited 0 on drift unless it applied changes, so CI
  * could not fail on it.
  */
 function reportCheck(plan: PushPlan, io: CliIO): number {

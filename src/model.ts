@@ -1338,7 +1338,7 @@ export class Model<
       this.strictMode.strict ? PARAMS.updateStrict : PARAMS.update,
       PARAM_HINTS.update,
     );
-    // vNEXT — strict item 46 (root ops).
+    // v2.26.0 — strict item 46 (root ops).
     for (const key of ['update', 'connect', 'disconnect'] as const)
       checkRootOpObject(
         this.strictMode,
@@ -1493,7 +1493,7 @@ export class Model<
       params,
       PARAMS.delete,
     );
-    // vNEXT — strict item 46 (root ops): the cascade `delete`.
+    // v2.26.0 — strict item 46 (root ops): the cascade `delete`.
     checkRootOpObject(
       this.strictMode,
       this.nodeDef.typeName,
@@ -1991,7 +1991,7 @@ export class Model<
       params,
       PARAMS.upsert,
     );
-    // vNEXT — strict item 46 (root ops).
+    // v2.26.0 — strict item 46 (root ops).
     for (const key of ['create', 'update'] as const)
       checkRootOpObject(
         this.strictMode,
@@ -2230,7 +2230,7 @@ export class Model<
       params,
       PARAMS.updateMany,
     );
-    // vNEXT — strict item 46 (root ops).
+    // v2.26.0 — strict item 46 (root ops).
     checkRootOpObject(
       this.strictMode,
       this.nodeDef.typeName,

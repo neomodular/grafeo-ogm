@@ -131,7 +131,7 @@ export function checkParamKeys(
 }
 
 /**
- * vNEXT — strict item 46 (root ops): a root write op of a `Model` method
+ * v2.26.0 — strict item 46 (root ops): a root write op of a `Model` method
  * that is not an object — `update()`'s `update` / `connect` / `disconnect`,
  * `updateMany()`'s `data`, `upsert()`'s `create` / `update`, `delete()`'s
  * cascade `delete` — such as `false`,

@@ -1,5 +1,5 @@
 /**
- * vNEXT — strict item 46 (root ops): a root write op that is not an object —
+ * v2.26.0 — strict item 46 (root ops): a root write op that is not an object —
  * `update()`'s `update` / `connect` / `disconnect`, `updateMany()`'s `data`,
  * `upsert()`'s `create` / `update`, `delete()`'s cascade `delete` — was
  * skipped without a word. Default mode: the Cypher is byte-identical to
@@ -71,7 +71,7 @@ const ops: Op[] = [
   },
 ];
 
-/** Values with no keys: skipped silently before vNEXT. */
+/** Values with no keys: skipped silently before v2.26.0. */
 const empty: Array<[string, unknown]> = [
   ['false', false],
   ['0', 0],

@@ -218,7 +218,7 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
 
     it('options.sort orders a hidden node as null', async () => {
       const sort = { sort: [{ topPost: 'DESC' }, { id: 'ASC' }] };
-      // vNEXT — strict item 47 (root sort): a node has no sort order.
+      // v2.26.0 — strict item 47 (root sort): a node has no sort order.
       if (strict)
         return expect(find({}, sort)).rejects.toThrow(
           'Cannot sort by the @cypher field "ItNfUser.topPost": it returns a node',
@@ -239,7 +239,7 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
         selectionSet: '{ id }',
         options: { sort: [{ topPost: 'DESC' }, { id: 'ASC' }] },
       });
-      // vNEXT — strict item 47 (root sort).
+      // v2.26.0 — strict item 47 (root sort).
       if (strict)
         return expect(sorted).rejects.toThrow(
           'Cannot sort by the @cypher field "ItNfPerson.topPost": it returns a node',
@@ -257,7 +257,7 @@ describeLive('NLS — node-typed @cypher field in where / sort (live)', () => {
     });
   });
 
-  // vNEXT — strict item 47 (root sort): without policies, default mode
+  // v2.26.0 — strict item 47 (root sort): without policies, default mode
   // sorts by the node itself (Neo4j's internal node order) and warns once;
   // strict mode throws before anything runs.
   it.each([

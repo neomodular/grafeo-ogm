@@ -153,7 +153,7 @@ export class Executor {
     context?: ExecutionContext,
     options?: ExecuteOptions,
   ): Promise<QueryResult> {
-    // vNEXT — a server error the generated Cypher causes on a server
+    // v2.26.0 — a server error the generated Cypher causes on a server
     // without an optional plugin (APOC) becomes a clear OGMError; every
     // other error is rethrown unchanged.
     try {

@@ -71,7 +71,7 @@ export function compileSortClause(args: {
     field: string,
   ) => string;
   /**
-   * vNEXT — strict item 47: a root sort key that is a node-typed `@cypher`
+   * v2.26.0 — strict item 47: a root sort key that is a node-typed `@cypher`
    * field (see `checkNodeTypedCypherSortKey`). Absent → no check.
    */
   nodeTypedCypherSort?: {
@@ -145,7 +145,7 @@ export function compileSortClause(args: {
 }
 
 /**
- * vNEXT — strict item 47 (root sort): a root `options.sort` key that is a
+ * v2.26.0 — strict item 47 (root sort): a root `options.sort` key that is a
  * node-typed `@cypher` field (a node, a list of nodes, an interface or a
  * union) orders the rows by Neo4j's internal order of nodes, which has no
  * meaning. Default mode keeps that sort (byte-identical Cypher) and warns

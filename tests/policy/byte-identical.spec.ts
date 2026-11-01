@@ -392,7 +392,7 @@ type Tag @node { id: ID! @unique }
     posts_NOT: [],
     friends_SOME: { topPost: null },
   };
-  // vNEXT — strict item 47 (root sort): a root sort by a node-typed @cypher
+  // v2.26.0 — strict item 47 (root sort): a root sort by a node-typed @cypher
   // field throws in strict mode, so the strict golden sorts by `id` only.
   const options = (
     strict?: boolean,

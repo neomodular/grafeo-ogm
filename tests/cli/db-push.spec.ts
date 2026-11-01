@@ -645,7 +645,7 @@ type Query { products: [Product!]! }
   });
 });
 
-// vNEXT — `--check`: a CI gate like `generate --verify`. It prints the plan,
+// v2.26.0 — `--check`: a CI gate like `generate --verify`. It prints the plan,
 // never writes, and exits 1 on drift (missing, changed or orphaned items).
 describe('grafeo db push --check', () => {
   const withOrphan: LiveSchema = {

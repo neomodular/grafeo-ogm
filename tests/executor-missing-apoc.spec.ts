@@ -1,5 +1,5 @@
 /**
- * vNEXT — a statement the OGM generated that needs APOC fails on a server
+ * v2.26.0 — a statement the OGM generated that needs APOC fails on a server
  * without it with a clear OGMError (the Neo4j error as `cause`), on every
  * execution path; other errors are rethrown unchanged. The live check is
  * tests/integration/missing-apoc.spec.ts.

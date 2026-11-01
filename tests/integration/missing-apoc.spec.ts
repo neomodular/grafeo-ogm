@@ -1,12 +1,12 @@
 /**
- * Live: OGM features that need APOC, on a server with and without it (vNEXT).
+ * Live: OGM features that need APOC, on a server with and without it (2.26.0).
  *
  * Opt-in on NEO4J_URI. The suite probes the server (`RETURN apoc.version()`)
  * and checks whichever case it gets, so it runs (and is never skipped) both
  * on the default local container (no APOC) and on CI's live service (APOC):
  * - without APOC, a nested relationship sort, a typed `orderBy` and a
  *   connection `sort` throw an `OGMError` that names the feature and APOC
- *   (pre-vNEXT: Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`), and
+ *   (pre-v2.26.0: Neo4j's raw `Unknown function 'apoc.coll.sortMulti'`), and
  *   `cloneSubgraph` / `deleteSubgraph` say that they need APOC;
  * - with APOC, the same calls sort / run.
  * The mapping itself is also pinned by a mock test

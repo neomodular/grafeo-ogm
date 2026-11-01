@@ -43,7 +43,7 @@ export function isMissingApocError(error: unknown, name?: string): boolean {
  * without an optional plugin to a clear `OGMError` (the original stays as
  * `cause`). Any other error is returned unchanged.
  *
- * vNEXT — pre-vNEXT a nested relationship sort or a connection `sort` on a
+ * v2.26.0 — pre-v2.26.0 a nested relationship sort or a connection `sort` on a
  * server without APOC failed with Neo4j's raw
  * `Unknown function 'apoc.coll.sortMulti'`, which does not say which OGM
  * feature needs what.

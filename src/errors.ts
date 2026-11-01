@@ -4,7 +4,7 @@
  */
 export class OGMError extends Error {
   /**
-   * The error this one wraps, when there is one (vNEXT — e.g. the Neo4j
+   * The error this one wraps, when there is one (v2.26.0 — e.g. the Neo4j
    * error behind a missing-APOC `OGMError`).
    */
   readonly cause?: unknown;

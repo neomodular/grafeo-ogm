@@ -1,5 +1,5 @@
 /**
- * Live: a root write op that is not an object (vNEXT, strict item 46).
+ * Live: a root write op that is not an object (v2.26.0, strict item 46).
  *
  * `update({ where, update, connect: false })`, `delete({ where, delete: 0 })`,
  * `updateMany({ where, data: true })`: default mode still skips the op (the
