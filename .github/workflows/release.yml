@@ -11,7 +11,14 @@ permissions:
 
 jobs:
   live:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in step with the ci.yml `live` matrix.
+        neo4j-driver: [lockfile, '6.3.0']
     uses: ./.github/workflows/live.yml
+    with:
+      neo4j-driver: ${{ matrix.neo4j-driver }}
     permissions:
       contents: read
 
