@@ -471,9 +471,61 @@ describe('FulltextCompiler - relationship index via compile()', () => {
     expect(result.cypher).toContain('CommentTextSearch');
     expect(result.cypher).toContain('startNode(rel)');
     // v2.4.8 — one row per node (best score), not one per relationship.
+    // v2.28.1 — after the far endpoint and the relationship type are
+    // checked (the target `Comment` is not a node of this mock schema, so
+    // no label check).
     expect(result.cypher).toContain(
-      'WITH startNode(rel) AS n, max(score) AS score',
+      "WITH rel, startNode(rel) AS n, endNode(rel) AS n__far, score\nWHERE type(rel) = 'HAS_COMMENT'\nWITH n, max(score) AS score",
     );
+  });
+
+  // v2.28.1 — the far endpoint carries the target's label and whatever the
+  // `targetGuard` (the target's read policy, from Model) requires.
+  it('checks the far endpoint label and the target guard (v2.28.1)', () => {
+    const relDef: RelationshipDefinition = {
+      fieldName: 'comments',
+      type: 'HAS_COMMENT',
+      direction: 'OUT',
+      target: 'Comment',
+      isArray: true,
+      isRequired: false,
+      properties: 'CommentEdgeProps',
+    };
+    const nodeDef = createMockNodeDef({
+      relationships: new Map([['comments', relDef]]),
+    });
+    const schema = createMockSchema(
+      nodeDef,
+      new Map([
+        [
+          'CommentEdgeProps',
+          {
+            typeName: 'CommentEdgeProps',
+            properties: new Map(),
+            fulltextIndexes: [{ name: 'CommentTextSearch', fields: ['text'] }],
+          },
+        ],
+      ]),
+    );
+    schema.nodes.set(
+      'Comment',
+      createMockNodeDef({ typeName: 'Comment', label: 'Comment' }),
+    );
+    const guard = jest.fn((type: string, v: string) => ({
+      cypher: `${v}.visible = $param7`,
+      params: { param7: true },
+    }));
+    const result = new FulltextCompiler(schema).compile(
+      { OR: [{ comments: { CommentTextSearch: { phrase: 'x' } } }] },
+      nodeDef,
+      'n',
+      { targetGuard: guard },
+    );
+    expect(guard).toHaveBeenCalledWith('Comment', 'n__far');
+    expect(result.cypher).toContain(
+      "WHERE type(rel) = 'HAS_COMMENT' AND n__far:`Comment` AND n__far.visible = $param7\nWITH n, max(score) AS score",
+    );
+    expect(result.params.param7).toBe(true);
   });
 
   // v1.7.4 regression — IN-direction relationship fulltext used to
@@ -528,8 +580,10 @@ describe('FulltextCompiler - relationship index via compile()', () => {
       nodeDef,
     );
 
-    expect(result.cypher).toContain('endNode(rel)');
-    expect(result.cypher).not.toContain('startNode(rel)');
+    // v2.28.1 — the far endpoint (the start node) is bound beside it.
+    expect(result.cypher).toContain(
+      'WITH rel, endNode(rel) AS n, startNode(rel) AS n__far, score',
+    );
   });
 
   it('should throw for unknown relationship field', () => {

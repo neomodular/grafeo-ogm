@@ -1,7 +1,10 @@
 import { DocumentNode } from 'graphql';
 import { selectionSetSource } from './utils/selection-set-source';
 import { Driver, int as neo4jInt, QueryResult } from 'neo4j-driver';
-import { FulltextCompiler } from './compilers/fulltext.compiler';
+import {
+  FulltextCompiler,
+  type FulltextTargetGuard,
+} from './compilers/fulltext.compiler';
 import {
   MutationCompiler,
   rootOpAsUpdate,
@@ -57,7 +60,7 @@ import type {
 } from './policy/types';
 import { nodeLabelExpr } from './schema/labels';
 import { NodeDefinition, SchemaMetadata } from './schema/types';
-import { getTargetLabelString } from './schema/utils';
+import { getTargetLabelString, resolveTargetDef } from './schema/utils';
 import { CypherFieldScope } from './utils/cypher-field-projection';
 import {
   compileSortClause,
@@ -675,6 +678,37 @@ export class Model<
     return labels as string[];
   }
 
+  /**
+   * v2.28.1 — the far-endpoint predicate of a relationship fulltext leaf:
+   * the target type's `read` policy (per member for an interface / union
+   * target; the strict member restriction without policies), compiled
+   * with the statement's `paramCounter` so its params never collide with
+   * the WHERE that follows. See `FulltextTargetGuard`.
+   */
+  private fulltextTargetGuard(
+    policyContext: PolicyContextBundle | null,
+    paramCounter: { count: number },
+  ): FulltextTargetGuard {
+    return (targetType, targetVar) => {
+      const targetDef = resolveTargetDef(targetType, this.schema);
+      if (!targetDef) return { cypher: '', params: {} };
+      const body = this.whereCompiler.compileTargetBody(
+        undefined,
+        targetVar,
+        targetDef,
+        paramCounter,
+        policyContext ?? undefined,
+      );
+      if (body.preludes.length > 0)
+        throw new OGMError(
+          `Policy on "${targetType}" requires @cypher field projection, which is ` +
+            `not supported in a relationship fulltext search. Refactor the policy ` +
+            `to use stored properties or a relationship traversal.`,
+        );
+      return { cypher: body.policy, params: body.params };
+    };
+  }
+
   private resolvePolicyContext(
     op: Operation,
     unsafe?: UnsafeOptions,
@@ -907,6 +941,9 @@ export class Model<
         params.fulltext,
         this.nodeDef,
         'n',
+        {
+          targetGuard: this.fulltextTargetGuard(policyContext, paramCounter),
+        },
       );
       cypherParts.push(ft.cypher);
       mergeParams(allParams, ft.params);
@@ -1622,6 +1659,9 @@ export class Model<
         params.fulltext,
         this.nodeDef,
         'n',
+        {
+          targetGuard: this.fulltextTargetGuard(policyContext, paramCounter),
+        },
       );
       cypherParts.push(ft.cypher);
       mergeParams(allParams, ft.params);

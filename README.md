@@ -541,6 +541,8 @@ type WrittenBy @relationshipProperties
 }
 ```
 
+A relationship index search (`fulltext: { author: { AuthorRoleSearch: { phrase } } }`) matches a root node through a relationship of the field's own type whose other end is a node the field reaches (of its target type; for an interface or union target, as `<field>Connection` reaches it) and the caller may read. An index can span several relationship types and endpoint labels; since v2.28.1 the other relationships in it no longer match.
+
 `indexName` (the `@neo4j/graphql` 4+ spelling) is accepted as an alias of `name` since 2.17.0: `{ indexName: "BookSearch", queryName: "booksByTitle", fields: ["title"] }` defines the same index (`queryName` is accepted and ignored; search with the index name). Giving both with different values is [strict item 27](#27-fulltext-name-and-indexname-disagree-since-2170).
 
 ---
@@ -2251,6 +2253,7 @@ Policies protect a **type**, wherever it is reached from. When a bound model rea
 Reads:
 - **Nested selection**: related nodes are filtered by their type's `read` policy.
 - **Relationship filters** (`_SOME`, `_NONE`, `_ALL`, `_SINGLE`, `…Connection`, and since v2.28.1 `rel: null` / `rel_NOT: null`): these range over the related nodes the caller may see. At any depth, a hidden node neither satisfies nor falsifies the quantifier.
+- **Relationship fulltext** (`fulltext: { charts: { TaggedFt: { phrase } } }`, since v2.28.1): a matching relationship counts only when the caller may see the related node. Before, edge text on a relationship to a hidden node made the root match.
 - **Interface and union targets**: each related node is checked against the policy of its concrete type (`CASE WHEN n:Chart THEN <Chart policy> WHEN n:Drug THEN <Drug policy> … ELSE false END`).
 
 Writes follow one principle: **a nested write enforces exactly what the equivalent direct write on the target type would.**

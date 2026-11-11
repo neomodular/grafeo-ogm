@@ -5,7 +5,7 @@ import {
   FulltextInput,
   FulltextIndexEntry,
 } from '../model';
-import { nodeLabelExpr } from '../schema/labels';
+import { nodeLabelExpr, typeLabelExpr } from '../schema/labels';
 import { FulltextIndex, NodeDefinition, SchemaMetadata } from '../schema/types';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
 import {
@@ -47,6 +47,30 @@ export interface FulltextResult {
 }
 
 /**
+ * v2.28.1 — the predicate a relationship fulltext leaf requires of the
+ * relationship's FAR endpoint (the related node, bound to `targetVar`)
+ * beyond its label: the target type's `read` policy (per member for an
+ * interface / union target), or `''` when none applies. `Model` builds it
+ * from the where compiler; its params must not collide with the rest of
+ * the statement.
+ */
+export type FulltextTargetGuard = (
+  targetType: string,
+  targetVar: string,
+) => { cypher: string; params: Record<string, unknown> };
+
+export interface FulltextCompileOptions {
+  /** v2.28.1 — see {@link FulltextTargetGuard}. */
+  targetGuard?: FulltextTargetGuard;
+}
+
+/** Recursion state shared by every leaf of one `compile()` call. */
+interface FulltextState {
+  count: number;
+  targetGuard?: FulltextTargetGuard;
+}
+
+/**
  * Compiles fulltext search input into Cypher CALL clauses using
  * db.index.fulltext.queryNodes and db.index.fulltext.queryRelationships.
  *
@@ -72,9 +96,13 @@ export class FulltextCompiler {
     fulltext: FulltextInput,
     nodeDef: NodeDefinition,
     nodeVar = 'n',
+    options?: FulltextCompileOptions,
   ): FulltextResult {
     assertSafeIdentifier(nodeVar, 'node variable');
-    const paramCounter = { count: 0 };
+    const paramCounter: FulltextState = {
+      count: 0,
+      targetGuard: options?.targetGuard,
+    };
     const result = this.compileNode(fulltext, nodeDef, nodeVar, paramCounter);
 
     // For simple leaf inputs, normalize param names for backward compat
@@ -331,7 +359,7 @@ export class FulltextCompiler {
     inner: Record<string, FulltextIndexEntry>,
     nodeDef: NodeDefinition,
     nodeVar: string,
-    paramCounter: { count: number },
+    paramCounter: FulltextState,
   ): FulltextResult {
     // Validate relationship field exists on node
     const relDef = nodeDef.relationships.get(relFieldName);
@@ -388,6 +416,29 @@ export class FulltextCompiler {
     // 1.7.4 this was hardcoded `startNode(rel)`, producing wrong /
     // empty results for IN-direction relationship fulltext queries.
     const endpointFn = relDef.direction === 'IN' ? 'endNode' : 'startNode';
+    const farFn = relDef.direction === 'IN' ? 'startNode' : 'endNode';
+
+    // v2.28.1 — only a relationship the field reaches counts, and only
+    // when the caller may see its FAR endpoint (the related node): the
+    // field's relationship type (an index can span several types, and the
+    // one `db push` creates for a shared `@relationshipProperties` type is
+    // on the first relationship that uses it), the target's label (an
+    // index spans every relationship of its type, whatever the endpoints)
+    // and the target's `read` policy (`targetGuard`, per member for an
+    // abstract target), as `<rel>Connection` applies them. Pre-2.28.1 the
+    // relationship was reduced to the root at once, so edge text on a
+    // relationship to a hidden node was searchable.
+    assertSafeIdentifier(relDef.type, 'relationship type');
+    const farVar = `${nodeVar}__far`;
+    assertSafeIdentifier(farVar, 'fulltext endpoint variable');
+    const farChecks: string[] = [`type(rel) = '${relDef.type}'`];
+    if (this.schema.nodes.has(relDef.target))
+      farChecks.push(`${farVar}:${typeLabelExpr(relDef.target, this.schema)}`);
+    const guard = paramCounter.targetGuard?.(relDef.target, farVar);
+    if (guard?.cypher) {
+      farChecks.push(guard.cypher);
+      mergeParams(params, guard.params);
+    }
 
     // v2.4.8 — the index yields one row per matching RELATIONSHIP; group
     // by the endpoint so a node with several matching relationships comes
@@ -396,7 +447,9 @@ export class FulltextCompiler {
     const cypher = [
       `CALL db.index.fulltext.queryRelationships('${indexName}', $${paramName})`,
       `YIELD relationship AS rel, score`,
-      `WITH ${endpointFn}(rel) AS ${nodeVar}, max(score) AS score`,
+      `WITH rel, ${endpointFn}(rel) AS ${nodeVar}, ${farFn}(rel) AS ${farVar}, score`,
+      `WHERE ${farChecks.join(' AND ')}`,
+      `WITH ${nodeVar}, max(score) AS score`,
     ].join('\n');
 
     const result: FulltextResult = { cypher, params };
