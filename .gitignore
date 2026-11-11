@@ -7,3 +7,11 @@ coverage/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Personal tooling (kept local, not part of the project)
+.mcp.json
+CLAUDE.local.md
+.claude/settings.json
+.claude/settings.local.json
+.claude/skills/generated/
+.trail/hook.cjs
