@@ -48,15 +48,17 @@ Define your graph model once in `.graphql` and get fully typed CRUD operations, 
 
 ## Why grafeo-ogm?
 
-The official [`@neo4j/graphql-ogm`](https://github.com/neo4j/graphql/tree/changeset-release/lts/packages/ogm/) was deprecated with no development path beyond v5. grafeo-ogm is a community continuation that maintains **full backward compatibility** while addressing five fundamental problems the original library could never patch:
+Neo4j removed the OGM from the GraphQL Library in version 6.0.0: [version 5 (LTS) is the last version to feature it](https://neo4j.com/docs/graphql/5/ogm/). [`@neo4j/graphql-ogm`](https://github.com/neo4j/graphql/tree/lts/packages/ogm) still gets patch releases on that 5.x LTS line, but it has no 6.x, and it requires `neo4j-driver` 5. grafeo-ogm is a community continuation that keeps its `OGM` / `Model` API (the differences are listed under [Migration](#migration-from-neo4jgraphql-ogm)) and builds on it. Compared with `@neo4j/graphql-ogm` 5.12.17, the latest LTS release:
 
-| Problem | @neo4j/graphql-ogm | grafeo-ogm |
+| | @neo4j/graphql-ogm 5.12.17 | grafeo-ogm |
 |---|---|---|
-| **Deprecation** | Abandoned by Neo4j; no path beyond v5 | Actively maintained; evolves with your schema |
+| **Release line** | 5.x LTS patches only; removed from `@neo4j/graphql` 6.0.0 | New features in 2.x |
 | **Driver** | Peer-depends on `neo4j-driver` ^5.8.0, so it cannot move to driver 6 | Supports `neo4j-driver` 5 and 6 |
-| **Security** | No identifier validation, no injection prevention, no parameterization enforcement | 7 security controls: parameterization, identifier regex, label validation, prototype pollution prevention, Lucene escaping, depth limiting, sort direction validation |
-| **Type generation** | Monolithic multi-MB output; required a running Neo4j driver at build time | Modular emitter pipeline; no driver needed at build time; output sized proportionally to schema |
-| **Customization** | No union type support, no subquery isolation, no edge property queries | Full union/interface support, `CALL` subquery isolation for mutations, connection fields with edge properties |
+| **Model methods** | `find`, `create`, `update`, `delete`, `aggregate` | The same five, plus `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `createMany`, `updateMany`, `deleteMany`, `upsert`, `count`, `setLabels` and a typed `select` |
+| **Access control** | Removes `@authentication` / `@authorization` from the schema it builds, so the OGM enforces no access rules | [Node-level security](#node-level-security) policies compiled into every read and write |
+| **Vector search** | No `Model` method (`@vector` queries exist only in the `@neo4j/graphql` GraphQL API) | `searchByVector` and `searchByPhrase` ([Vector Search](#vector-search)) |
+| **Empty `OR: []`** | Dropped from the `WHERE`, so `delete({ where: { OR: [] } })` deletes every node of the label | Matches nothing ([details](#deliberate-divergence-or--matches-nothing)) |
+| **Testing helpers** | Not included | Compile-only OGM, `CypherAssert`, `Neo4jRecordFactory`, `SelectionSetFactory` ([Testing Utilities](#testing-utilities)) |
 
 ### Relationship Projections
 
@@ -71,11 +73,13 @@ RETURN n {
 -- Always 1 row per node. Adding relationships adds list expressions, never rows.
 ```
 
-The deprecated OGM also returns one row per node; it uses a `CALL { … RETURN collect(…) }` subquery per relationship. Both shapes avoid Cartesian products, so grafeo-ogm makes no row-count or speed claim against it.
+`@neo4j/graphql-ogm` also returns one row per node; it uses a `CALL { … RETURN collect(…) }` subquery per relationship. Both shapes avoid Cartesian products, so grafeo-ogm makes no row-count or speed claim against it.
 
 ### CALL Subquery Isolation
 
 Mutations with multiple connect/disconnect operations are wrapped in `CALL { ... }` subqueries. Each operation runs in isolation -- no Cartesian products, no duplicate relationships, no silently dropped operations when a disconnect target doesn't exist.
+
+`@neo4j/graphql-ogm` also runs each connect and disconnect in its own `CALL` subquery, so this is not a difference either.
 
 ---
 
@@ -390,7 +394,7 @@ grafeo does not enforce idempotency — use `upsert` so re-running the seed is s
 | **Raw Cypher** | `$queryRaw()` and `$executeRaw()` for escape hatches |
 | **7 security controls** | Parameterization, identifier validation, label validation, prototype pollution prevention, Lucene escaping, depth limiting, sort direction validation |
 | **Testing utilities** | Compile-only OGM (`compile(model).find(...)` → `{ cypher, params }`), `CypherAssert`, `Neo4jRecordFactory`, `SelectionSetFactory` for unit testing without a database |
-| **Backward compatible** | Drop-in replacement for `@neo4j/graphql-ogm` |
+| **`@neo4j/graphql-ogm` API** | Same `OGM` / `Model` API, with the differences listed under [Migration](#migration-from-neo4jgraphql-ogm) |
 
 ---
 
@@ -2989,7 +2993,7 @@ That is why the guard fails closed. It accepts a pattern only when it can prove 
 
 ## Migration from @neo4j/graphql-ogm
 
-grafeo-ogm is a **drop-in replacement** for the deprecated `@neo4j/graphql-ogm`. Existing code works without changes, and you can adopt new features incrementally.
+grafeo-ogm keeps the `@neo4j/graphql-ogm` API, so the switch starts with a dependency and an import change. Then check your code against the differences listed below ([What's the Same](#whats-the-same), [What Changed](#what-changed-under-the-hood), [`OR: []`](#deliberate-divergence-or--matches-nothing)) and the 2.x defaults that [strict mode](#strict-mode) changes, and adopt the new features at your own pace.
 
 ### Step 1: Replace the dependency
 
@@ -3010,7 +3014,7 @@ import { OGM } from 'grafeo-ogm';
 
 ### Step 3: Update type generation
 
-Replace your existing type generation script to use `generateTypes()` from grafeo-ogm. No Neo4j driver connection is needed at build time.
+`@neo4j/graphql-ogm`'s `generate({ ogm, outFile })` takes an `OGM` instance and runs GraphQL Code Generator over the `@neo4j/graphql` schema. grafeo-ogm's `generateTypes({ typeDefs, outFile })` (or `grafeo generate`) reads the SDL directly. Neither connects to Neo4j. Regenerate your types with it and fix what no longer compiles.
 
 ### Step 4 (optional): Adopt new features
 
@@ -3026,12 +3030,12 @@ These are incremental improvements you can adopt at your own pace:
 
 ### What's the Same
 
-- `OGM` constructor signature: `{ typeDefs, driver }` -- identical
+- `new OGM({ typeDefs, driver, database })` -- same options; `typeDefs` must be an SDL string (upstream also took a `DocumentNode` or an array), and upstream's `resolvers`, `debug` and `validate` are not read
 - `ogm.model('Name')` -- same API
-- `model.find()`, `model.create()`, `model.update()`, `model.delete()` -- same signatures
+- `model.find()`, `model.create()`, `model.update()`, `model.delete()`, `model.aggregate()` -- same `where`, `options`, `fulltext`, input and `selectionSet` parameters. `args` and `rootValue` are not supported ([strict item 34](#34-unknown-parameters-of-model--interfacemodel-methods-since-2190)), and `context` takes `{ transaction }`, `{ session }` or `{ executionContext: transaction }` (upstream's `executionContext` also took a driver or session)
 - `selectionSet` -- fully supported
-- `init()` -- still works (now a no-op since schema parsing is synchronous)
-- `assertIndexesAndConstraints()` -- same behavior
+- `init()` -- still works (now a no-op since schema parsing is synchronous; upstream required it before the first query)
+- `assertIndexesAndConstraints({ options: { create: true } })` -- creates the unique constraints and fulltext indexes. **Without `create` it does nothing**, while upstream checks that they exist and throws if one is missing
 
 ### `<relationship>Aggregate` selections (since 2.7.0)
 
@@ -3043,10 +3047,9 @@ These are incremental improvements you can adopt at your own pace:
 
 ### What Changed (Under the Hood)
 
-- Relationship reads use **pattern comprehensions** (upstream used a `CALL` subquery per relationship) -- one row per node, same results
-- Mutations use **CALL subquery isolation** -- prevents Cartesian products in connect/disconnect
-- All identifiers are **validated and escaped** -- injection-safe by default
-- Type generation is **modular and driver-free** -- smaller output, faster builds
+- grafeo-ogm compiles Cypher itself; `@neo4j/graphql-ogm` wraps `@neo4j/graphql` and runs each `Model` call as a GraphQL operation against its generated schema
+- Relationship reads use **pattern comprehensions** (upstream uses a `CALL` subquery per relationship) -- one row per node, same results
+- Type generation reads the SDL directly instead of running GraphQL Code Generator over the `@neo4j/graphql` schema
 
 ### Upgrading to 2.5.0 or later: `selectionSet` arguments
 
@@ -3056,7 +3059,7 @@ Since v2.7.0 a connection `sort` is honoured (see [Nested Sorting](#nested-sorti
 
 ### Deliberate divergence: `OR: []` matches nothing
 
-This is the **one intentional behavioral difference** from `@neo4j/graphql-ogm`. The deprecated OGM silently dropped empty `OR` arrays from the WHERE clause, so `delete({ where: { OR: [] } })` compiled to an *unfiltered* `MATCH ... DETACH DELETE` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list.
+This difference from `@neo4j/graphql-ogm` is intentional and holds in both modes (it is not a [strict mode](#strict-mode) item). `@neo4j/graphql-ogm` silently drops empty `OR` arrays from the WHERE clause, so `delete({ where: { OR: [] } })` compiles to an *unfiltered* `MATCH ... DETACH DELETE` — a full-label wipe. The realistic trigger is a dynamically built filter (`OR: ids.map((id) => ({ id }))`) receiving an empty list.
 
 grafeo-ogm follows **Prisma semantics** instead: an `OR` with zero effective disjuncts compiles to `false` and matches **nothing** — at the top level, inside relationship quantifiers (`_SOME`/`_NONE`/...), in connection filters, and in nested `connect`/`disconnect` operations. `AND: []` still matches everything (the empty conjunction is true, also per Prisma). If you relied on `OR: []` behaving as "no filter", pass no `where` (or omit the `OR` key) instead.
 
@@ -3070,21 +3073,21 @@ When this happens at runtime, the compiler emits a `warn` through your configure
 
 If you're writing Cypher strings by hand and concatenating user input, you have two problems: every query is unvalidated against your schema, and every query is a potential injection vector. grafeo-ogm gives you typed CRUD on top of the same driver — your existing `Driver` instance is what you pass to `new OGM(config)`. Raw Cypher is still available via `ogm.$queryRaw(...)` when you need it.
 
-### grafeo-ogm vs. `@neo4j/graphql-ogm` (deprecated)
+### grafeo-ogm vs. `@neo4j/graphql-ogm` (discontinued after v5)
 
-grafeo-ogm is a drop-in replacement: same constructor shape, same `model().find()` API, same selection set strings. The compiler under the hood is rewritten (relationship reads use pattern comprehensions, mutations isolate each connect/disconnect in a `CALL` subquery), and the type generator is a modular emitter pipeline that doesn't need a live Neo4j driver at build time. See the [Migration section](#migration-from-neo4jgraphql-ogm) below.
+grafeo-ogm keeps the same constructor shape, the same `model().find()` API and the same selection set strings. It compiles Cypher itself instead of wrapping `@neo4j/graphql`, and generates types from the SDL instead of through GraphQL Code Generator. The differences that matter are in the [table at the top](#why-grafeo-ogm) and the [Migration section](#migration-from-neo4jgraphql-ogm).
 
 ### grafeo-ogm vs. Prisma (for graph users)
 
-Prisma is the gold standard for relational ORMs but doesn't speak Cypher. grafeo-ogm gives you a **Prisma-like API for Neo4j** — `find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `create`, `createMany`, `update`, `upsert`, `delete`, `deleteMany`, `count`, `aggregate` — with the same `where`, `select`, and ordering ergonomics. If you're moving from Postgres to Neo4j and miss Prisma, this is the closest equivalent.
+Prisma does not support Neo4j ([supported databases](https://www.prisma.io/docs/orm/reference/supported-databases)). grafeo-ogm borrows Prisma's method names for Neo4j — `find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `create`, `createMany`, `update`, `upsert`, `delete`, `deleteMany`, `count`, `aggregate` — and a Prisma-style typed `select`. Filters keep the `@neo4j/graphql` shape (`{ email_CONTAINS: 'foo' }`, not Prisma's `{ email: { contains: 'foo' } }`).
 
 ### grafeo-ogm vs. Cypher query builders
 
-Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragments but don't model your schema, don't generate types, and don't validate identifiers against your data model. grafeo-ogm includes a query builder under the hood — but the public API is schema-aware, so you write `User.find({ where: { email_CONTAINS: 'foo' } })` instead of stringifying clauses by hand.
+Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragments but don't model your schema, don't generate types, and don't validate identifiers against your data model. grafeo-ogm builds the Cypher for you from a schema-aware API, so you write `User.find({ where: { email_CONTAINS: 'foo' } })` instead of stringifying clauses by hand.
 
 ### grafeo-ogm vs. neogma
 
-[neogma](https://github.com/themetalfleece/neogma) is an ODM-style library where you define models in JavaScript classes. grafeo-ogm is **schema-first**: you write your data model once in `.graphql`, and TypeScript types + runtime validation are generated from it. If you want to keep schema as the single source of truth shared with frontend GraphQL consumers, grafeo-ogm fits naturally.
+[neogma](https://github.com/themetalfleece/neogma) is an OGM where you define models in code: TypeScript classes with decorators (`@Node`, `@Property`, `@Relationship`) or `ModelFactory` in plain JavaScript. grafeo-ogm is **schema-first**: you write your data model once in `.graphql`, and TypeScript types + runtime validation are generated from it. If you want to keep schema as the single source of truth shared with frontend GraphQL consumers, grafeo-ogm fits naturally.
 
 ---
 
@@ -3120,7 +3123,7 @@ Yes — grafeo-ogm is GraphQL-SDL-driven, so the same `typeDefs` you pass to `ne
 
 ### How is grafeo-ogm different from `@neo4j/graphql`?
 
-`@neo4j/graphql` is a full **server framework** that auto-generates resolvers and exposes a GraphQL endpoint. grafeo-ogm is a **library** — you import it into any TypeScript app (Express, Fastify, Hono, NestJS, Next.js API routes, scripts, workers) and call typed methods. No HTTP layer, no auto-resolvers. If you want full control over your stack, choose grafeo-ogm. If you want a batteries-included GraphQL server, choose `@neo4j/graphql`.
+`@neo4j/graphql` generates a complete GraphQL API from your type definitions: an executable schema with its queries, mutations and resolvers, which you serve with a GraphQL server such as Apollo Server. grafeo-ogm generates no GraphQL API — you import it into any TypeScript app (Express, Fastify, Hono, NestJS, Next.js API routes, scripts, workers) and call typed methods. If you want to write your own API and business logic, choose grafeo-ogm. If you want a generated GraphQL API over Neo4j, choose `@neo4j/graphql`.
 
 ### Does it support transactions?
 
