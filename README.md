@@ -53,21 +53,14 @@ The official [`@neo4j/graphql-ogm`](https://github.com/neo4j/graphql/tree/change
 | Problem | @neo4j/graphql-ogm | grafeo-ogm |
 |---|---|---|
 | **Deprecation** | Abandoned by Neo4j; no path beyond v5 | Actively maintained; evolves with your schema |
-| **Query efficiency** | `OPTIONAL MATCH` chains that create Cartesian products across relationships | Pattern comprehensions scoped to matched nodes -- O(1) rows per node regardless of relationship count |
+| **Driver** | Peer-depends on `neo4j-driver` ^5.8.0, so it cannot move to driver 6 | Supports `neo4j-driver` 5 and 6 |
 | **Security** | No identifier validation, no injection prevention, no parameterization enforcement | 7 security controls: parameterization, identifier regex, label validation, prototype pollution prevention, Lucene escaping, depth limiting, sort direction validation |
 | **Type generation** | Monolithic multi-MB output; required a running Neo4j driver at build time | Modular emitter pipeline; no driver needed at build time; output sized proportionally to schema |
 | **Customization** | No union type support, no subquery isolation, no edge property queries | Full union/interface support, `CALL` subquery isolation for mutations, connection fields with edge properties |
 
-### Pattern Comprehensions vs. OPTIONAL MATCH
+### Relationship Projections
 
-The most impactful difference is how relationships are queried. The old OGM chains `OPTIONAL MATCH` clauses that multiply intermediate rows:
-
-```
-10 variants x 5 categories x 3 tags = 150 intermediate rows per node
-Query 200 nodes = 30,000 rows processed
-```
-
-grafeo-ogm uses pattern comprehensions that evaluate each relationship independently inside the RETURN projection:
+grafeo-ogm projects relationships with pattern comprehensions, each evaluated independently inside the RETURN projection:
 
 ```cypher
 RETURN n {
@@ -78,11 +71,7 @@ RETURN n {
 -- Always 1 row per node. Adding relationships adds list expressions, never rows.
 ```
 
-| Query | Old OGM (rows) | grafeo-ogm (rows) | Reduction |
-|---|---|---|---|
-| 1 node, 10+5+3 rels | 150 | 1 | 150x |
-| 50 nodes, same rels | 7,500 | 50 | 150x |
-| 200 nodes, same rels | 30,000 | 200 | 150x |
+The deprecated OGM also returns one row per node; it uses a `CALL { … RETURN collect(…) }` subquery per relationship. Both shapes avoid Cartesian products, so grafeo-ogm makes no row-count or speed claim against it.
 
 ### CALL Subquery Isolation
 
@@ -3054,7 +3043,7 @@ These are incremental improvements you can adopt at your own pace:
 
 ### What Changed (Under the Hood)
 
-- Queries use **pattern comprehensions** instead of `OPTIONAL MATCH` -- better performance, same results
+- Relationship reads use **pattern comprehensions** (upstream used a `CALL` subquery per relationship) -- one row per node, same results
 - Mutations use **CALL subquery isolation** -- prevents Cartesian products in connect/disconnect
 - All identifiers are **validated and escaped** -- injection-safe by default
 - Type generation is **modular and driver-free** -- smaller output, faster builds
@@ -3083,7 +3072,7 @@ If you're writing Cypher strings by hand and concatenating user input, you have 
 
 ### grafeo-ogm vs. `@neo4j/graphql-ogm` (deprecated)
 
-grafeo-ogm is a drop-in replacement: same constructor shape, same `model().find()` API, same selection set strings. The compiler under the hood is rewritten to use pattern comprehensions instead of `OPTIONAL MATCH` chains (eliminates Cartesian products), and the type generator is a modular emitter pipeline that doesn't need a live Neo4j driver at build time. See the [Migration section](#migration-from-neo4jgraphql-ogm) below.
+grafeo-ogm is a drop-in replacement: same constructor shape, same `model().find()` API, same selection set strings. The compiler under the hood is rewritten (relationship reads use pattern comprehensions, mutations isolate each connect/disconnect in a `CALL` subquery), and the type generator is a modular emitter pipeline that doesn't need a live Neo4j driver at build time. See the [Migration section](#migration-from-neo4jgraphql-ogm) below.
 
 ### grafeo-ogm vs. Prisma (for graph users)
 
@@ -3143,7 +3132,7 @@ Yes — instantiate one OGM per database with `new OGM({ typeDefs, driver, datab
 
 ### What's the performance overhead vs. raw Cypher?
 
-Negligible. grafeo-ogm compiles each query once per shape (selection sets are cached), then sends a parameterized Cypher string + params to the driver. There is no runtime ORM hydration layer in the hot path — results come back from `neo4j-driver`, are converted from Neo4j types (Integer, DateTime, Point), and are returned as plain JS objects. For benchmark-sensitive workloads, the generated Cypher avoids `OPTIONAL MATCH` Cartesian products that the deprecated `@neo4j/graphql-ogm` produced, so it's typically *faster* than the official OGM in real-world queries.
+Negligible. grafeo-ogm compiles each query once per shape (selection sets are cached), then sends a parameterized Cypher string + params to the driver. There is no runtime ORM hydration layer in the hot path — results come back from `neo4j-driver`, are converted from Neo4j types (Integer, DateTime, Point), and are returned as plain JS objects.
 
 ### Is there a CLI / migration tool / studio?
 
@@ -3235,7 +3224,7 @@ Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 ```bash
 # Clone and install
-git clone https://github.com/aleguzman/grafeo-ogm.git
+git clone https://github.com/neomodular/grafeo-ogm.git
 cd grafeo-ogm
 pnpm install
 
