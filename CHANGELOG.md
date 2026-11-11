@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.29.0 (2026-11-10) — security: policy bypasses, `_MATCHES` ReDoS, `mode` filter
+
+> **Minor release with security fixes.** An audit found two node-level security bypasses, a way past the `_MATCHES` ReDoS guard, and a where filter that was silently dropped (which could turn `deleteMany` into a delete of every node of a type). Upgrade if you use policies, `_MATCHES` on user input, relationship fulltext, or a field named `mode`. Each change is listed under "Behavior changes".
+
+### Security
+
+- **`rel: null` / `rel_NOT: null` ignored the target's read policy.** The `EXISTS` / `NOT EXISTS` test counted related nodes the policy hides, so it revealed whether hidden related nodes exist: `charts_NOT: null` returned a tag whose only chart is hidden. It now applies the target's read policy, the same way `_SOME` / `_NONE` / `_ALL` / `_SINGLE` do, including interface and union targets, at any depth and in selectionSet `where` arguments. A hidden node now neither satisfies nor falsifies these filters either. OGMs without policies emit byte-identical Cypher.
+- **Relationship fulltext search ignored the far endpoint.** Only the root node was checked, so text on an edge to a hidden node was searchable through `find` and `count`. A match now has to be on the field's own relationship type, the far endpoint has to carry the target's label, and the target's read policy has to allow it (per member for interface and union targets).
+- **The `_MATCHES` ReDoS guard misread characters outside the Basic Multilingual Plane.** It read UTF-16 code units, while Neo4j's Java regex engine reads code points, so `😀*😀*…y` passed the guard and backtracked exponentially on the server (14 s at six repetitions on Neo4j 5.26). The guard now reads code points. An unpaired surrogate is refused.
+
+### Fixed
+
+- **A where filter on a field named `mode` was silently dropped.** `mode` is also the case-insensitivity switch, and the key was always skipped, so `deleteMany({ where: { mode: 'dark' } })` deleted every node of the type, and a restrictive policy on `mode` matched everything. On a type with a property, `@cypher` field or relationship named `mode`, `mode` now filters on that field, and the generated `<Type>Where` declares it once instead of twice.
+
+### Behavior changes
+
+- **Types with a `mode` field:** `where.mode` now filters on the field, so finds, updates, deletes and policies match fewer nodes than before. On such a type, `mode: 'insensitive'` is a value of the field, not the case-insensitivity switch. Types without a `mode` field are unchanged.
+- **Relationship fulltext (with or without policies):** results no longer include matches on another relationship type, or to a node without the target's label, even if they are in the same index. With policies, edges to hidden nodes no longer match. `FulltextCompiler.compile` takes an optional fourth argument.
+- **`rel: null` / `rel_NOT: null` with policies:** hidden related nodes no longer count.
+- **`_MATCHES` with characters outside the BMP (such as emoji):** patterns are judged by code point. Some patterns that were accepted are now refused (`😀*😀*y`), some that were refused are now accepted (`[😀]*[😁]*`), and an unpaired surrogate is refused.
+
 ## 2.28.0 (2026-11-01) — `_MATCHES` dot-all contains form
 
 > **Minor release.** The `_MATCHES` ReDoS guard accepts the dot-all contains form, and its refusal message is corrected. It is a pure addition: every pattern accepted before is still accepted, and no emitted Cypher changes.
