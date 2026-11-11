@@ -9,13 +9,18 @@ name: Live Neo4j suites
 
 on:
   workflow_call:
+    inputs:
+      neo4j-driver:
+        description: '"lockfile", or an exact neo4j-driver x.y.z to test instead'
+        type: string
+        default: lockfile
 
 permissions:
   contents: read
 
 jobs:
   live:
-    name: live (Neo4j 5.26)
+    name: live (Neo4j 5.26, driver ${{ inputs.neo4j-driver }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -67,6 +72,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Use neo4j-driver ${{ inputs.neo4j-driver }}
+        env:
+          NEO4J_DRIVER: ${{ inputs.neo4j-driver }}
+        run: bash scripts/ci/use-neo4j-driver.sh "$NEO4J_DRIVER"
 
       # In band: the db push suite manages global constraints and indexes.
       - name: Live suites
