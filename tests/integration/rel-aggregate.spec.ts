@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto';
 import neo4j, { Driver, isInt } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
+import { ResultMapper } from '../../src/execution/result-mapper';
 import { permissive, restrictive } from '../../src/policy/types';
 
 const URI = process.env.NEO4J_URI;
@@ -775,7 +776,10 @@ describeLive('<rel>Aggregate selections — live Neo4j (v2.7.0)', () => {
     const numeric = (v: unknown) => (isInt(v) ? v.toNumber() : v);
     const bigint = (v: unknown) =>
       v === null ? null : isInt(v) ? v.toString() : (v as number).toString(10);
-    const temporal = (v: unknown) => (v === null ? null : String(v));
+    // v2.30.0 — through grafeo's mapping, as the comment above says: the
+    // driver's own `toString()` gives another Duration string on driver 6.
+    const temporal = (v: unknown) =>
+      v === null ? null : ResultMapper.convertNeo4jTypes(v);
     const map = (o: unknown, f: (v: unknown) => unknown) =>
       Object.fromEntries(Object.entries(o as Row).map(([k, v]) => [k, f(v)]));
     return {

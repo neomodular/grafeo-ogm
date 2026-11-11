@@ -2,6 +2,64 @@ import neo4j from 'neo4j-driver';
 import { Record as Neo4jRecord } from 'neo4j-driver';
 import { OGMError } from '../errors';
 
+/** A Duration field as either driver hands it out. */
+type DurationField = number | bigint | { toBigInt(): bigint };
+
+const NANOS_PER_SECOND = BigInt(1_000_000_000);
+
+function toBigIntField(value: DurationField): bigint {
+  if (typeof value === 'bigint') return value;
+  // `int()` reads a number as driver 5 does (truncated, NaN → 0).
+  if (typeof value === 'number') return neo4j.int(value).toBigInt();
+  return value.toBigInt();
+}
+
+/**
+ * v2.30.0 — a Duration as the ISO-8601 string neo4j-driver 5's
+ * `Duration.toString()` returns (`P<months>M<days>DT<seconds>S`, e.g.
+ * `P120M0DT0S`, `P0M0DT-0.500000000S`), whatever the driver version.
+ *
+ * neo4j-driver 6 prints a shorter form (`P10YT`, `PT1H`, `P2DT`) that
+ * Neo4j 5.x rejects in `duration()` ("Text cannot be parsed to a
+ * Duration") whenever it ends in `T`, so a Duration read through grafeo
+ * could not be written back or used in a filter. Driver 6 also hands the
+ * fields out as `number` / `bigint` where driver 5 used `Integer`, so the
+ * fields are read through BigInt.
+ *
+ * Mirrors driver 5's `durationToIsoString` /
+ * `formatSecondsAndNanosecondsForDuration`: the seconds part carries the
+ * sign and the nanoseconds are the 9-digit fraction of that signed value
+ * (`seconds = -2, nanoseconds = 5e8` → `-1.500000000`, `-1` → `-0.5…`).
+ */
+export function durationToString(duration: {
+  months: DurationField;
+  days: DurationField;
+  seconds: DurationField;
+  nanoseconds: DurationField;
+}): string {
+  const months = toBigIntField(duration.months);
+  const days = toBigIntField(duration.days);
+  // Both drivers already keep 0 <= nanoseconds < 1e9; normalize anyway.
+  const rawNanos = toBigIntField(duration.nanoseconds);
+  let nanos = rawNanos % NANOS_PER_SECOND;
+  if (nanos < BigInt(0)) nanos += NANOS_PER_SECOND;
+  const seconds =
+    toBigIntField(duration.seconds) + (rawNanos - nanos) / NANOS_PER_SECOND;
+
+  let secondsString: string;
+  let fraction = '';
+  if (nanos > BigInt(0)) {
+    if (seconds < BigInt(0)) {
+      secondsString =
+        seconds === BigInt(-1) ? '-0' : (seconds + BigInt(1)).toString();
+      nanos = NANOS_PER_SECOND - nanos;
+    } else secondsString = seconds.toString();
+    fraction = '.' + nanos.toString().padStart(9, '0');
+  } else secondsString = seconds.toString();
+
+  return `P${months}M${days}DT${secondsString}${fraction}S`;
+}
+
 /**
  * Maps Neo4j query results to plain JavaScript objects,
  * converting Neo4j-specific types (Integer, DateTime, Node, etc.)
@@ -71,14 +129,19 @@ export class ResultMapper {
         ResultMapper.convertNeo4jTypes(item, depth + 1),
       );
 
-    // Neo4j temporal types → ISO string
+    // v2.30.0 — a Duration is formatted here, not by the driver: its
+    // `toString()` changed in neo4j-driver 6 (`P10YT`, `P2DT`), which
+    // Neo4j 5.x cannot parse back with `duration()`.
+    if (neo4j.isDuration(value)) return durationToString(value);
+
+    // Neo4j temporal types → ISO string. Their `toString()` is the same on
+    // neo4j-driver 5 and 6.
     if (
       neo4j.isDateTime(value) ||
       neo4j.isDate(value) ||
       neo4j.isTime(value) ||
       neo4j.isLocalDateTime(value) ||
-      neo4j.isLocalTime(value) ||
-      neo4j.isDuration(value)
+      neo4j.isLocalTime(value)
     )
       return value.toString();
 
