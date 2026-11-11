@@ -134,12 +134,10 @@ describeLive('Write-path regressions (2.4.8) — live Neo4j', () => {
 
     it('a null connect item throws OGMError and links nothing', async () => {
       await expect(
-        ogm
-          .model('ItWrPost')
-          .update({
-            where: { id: id('p') },
-            connect: { tags: [null] },
-          } as never),
+        ogm.model('ItWrPost').update({
+          where: { id: id('p') },
+          connect: { tags: [null] },
+        } as never),
       ).rejects.toThrow(OGMError);
       expect(await tagsOf(id('p'))).toEqual([]);
     });

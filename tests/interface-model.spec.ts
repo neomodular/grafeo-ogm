@@ -202,7 +202,9 @@ describe('InterfaceModel', () => {
       await model.find({ labels: ['Active'] });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)');
+      expect(cypher).toContain(
+        'MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)',
+      );
     });
 
     it('should produce ORDER BY + SKIP + LIMIT with options', async () => {
@@ -409,7 +411,9 @@ describe('InterfaceModel', () => {
       });
 
       const cypher = getCypher(mockSession);
-      expect(cypher).toContain('MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)');
+      expect(cypher).toContain(
+        'MATCH (n:(`User`|`Organization`|`Facility`)&`Active`)',
+      );
       expect(cypher).toContain('RETURN count(n) AS count');
     });
   });
