@@ -10,12 +10,50 @@
 <p align="center"><strong>Type-safe Neo4j queries, without the boilerplate.</strong><br />A type-safe object-graph mapper for Neo4j, driven by GraphQL SDL.</p>
 
 [![npm version](https://img.shields.io/npm/v/grafeo-ogm.svg)](https://www.npmjs.com/package/grafeo-ogm)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)](https://www.typescriptlang.org/)
+[![CI](https://github.com/neomodular/grafeo-ogm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/neomodular/grafeo-ogm/actions/workflows/ci.yml)
+[![Tested on Neo4j 5.26 LTS](https://img.shields.io/badge/tested%20on%20Neo4j-5.26%20LTS-008CC1.svg)](.github/workflows/live.yml)
+[![neo4j-driver 5 | 6](https://img.shields.io/badge/neo4j--driver-5%20%7C%206-008CC1.svg)](https://www.npmjs.com/package/neo4j-driver)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933.svg)](https://nodejs.org/)
-[![Neo4j](https://img.shields.io/badge/Neo4j-5.x-008CC1.svg)](https://neo4j.com/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)](https://www.typescriptlang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Define your graph model once in `.graphql` and get fully typed CRUD operations, optimized Cypher compilation, and TypeScript code generation -- no boilerplate, no Cartesian products, no injection vulnerabilities.
+Describe your graph once in GraphQL SDL, generate TypeScript types from it, and query Neo4j with typed `where` and `select` inputs. Each call compiles to parameterized Cypher, with every label and property name validated and backtick-escaped.
+
+```typescript
+import neo4j from 'neo4j-driver';
+import { OGM } from 'grafeo-ogm';
+import type { ModelMap } from './grafeo.generated'; // from `npx grafeo generate`
+
+const typeDefs = /* GraphQL */ `
+  type Movie @node {
+    title: String!
+    released: Int
+    actors: [Person!]! @relationship(type: "ACTED_IN", direction: IN)
+  }
+  type Person @node { name: String! }
+`;
+const driver = neo4j.driver('neo4j://localhost:7687', neo4j.auth.basic('neo4j', 'password'));
+const ogm = new OGM<ModelMap>({ typeDefs, driver });
+
+const movies = await ogm.model('Movie').find({
+  where: { released_GTE: 1999 }, // a misspelled field or a string here is a type error
+  select: { title: true, actors: { select: { name: true } } },
+});
+```
+
+`movies` is typed `Movie[]`, and the call sends one statement:
+
+```cypher
+MATCH (n:`Movie`)
+WHERE n.`released` >= $param0
+RETURN n { .`title`, actors: [(n)<-[:`ACTED_IN`]-(n0:`Person`) | n0 { .`name` }] }
+```
+
+**Coming from `@neo4j/graphql-ogm`?** grafeo-ogm continues it with the same `new OGM({ typeDefs, driver })` constructor, the same `ogm.model('Name').find()` / `create()` / `update()` / `delete()` calls and the same `selectionSet` strings, so the move starts with changing the import. It also runs on neo4j-driver 6, which `@neo4j/graphql-ogm` cannot: its current releases (5.11.4 on `latest`, 5.12.17 on `lts`) require `neo4j-driver ^5.8.0`. See [Migration from @neo4j/graphql-ogm](#migration-from-neo4jgraphql-ogm) for the few deliberate differences.
+
+```bash
+npm install grafeo-ogm neo4j-driver
+```
 
 > **grafeo** (*/ˈɡra.fe.o/*) -- from Greek *grapho* (write, draw), the root behind "graph." Because your data model should be written once and understood everywhere.
 
