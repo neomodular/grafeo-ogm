@@ -4,6 +4,7 @@ import type {
   PropertyDefinition,
   RelationshipDefinition,
 } from '../../schema/types';
+import { declaresModeField } from '../../utils/where-mode';
 import { isScalar, toPascalCase } from './helpers';
 
 // ---------------------------------------------------------------------------
@@ -135,7 +136,10 @@ function emitWhereType(
   lines.push(`  OR?: InputMaybe<Array<${typeName}Where>>;`);
   lines.push(`  AND?: InputMaybe<Array<${typeName}Where>>;`);
   lines.push(`  NOT?: InputMaybe<${typeName}Where>;`);
-  lines.push(`  mode?: "insensitive" | (string & {});`);
+  // v2.28.1 — on a type with its own `mode` field the key is that field's
+  // filter (emitted with the field), so the switch is not emitted again.
+  if (!declaresModeField({ properties, relationships }))
+    lines.push(`  mode?: "insensitive" | (string & {});`);
 
   // 3. Relationship operator fields
   for (const [, rel] of relationships)

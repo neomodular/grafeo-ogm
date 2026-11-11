@@ -39,6 +39,7 @@ import {
   wrapWhereParam,
 } from '../utils/write-coercion';
 import { lenientStrictMode, StrictMode } from '../utils/strict-mode';
+import { declaresModeField } from '../utils/where-mode';
 
 /**
  * v2.22.1 — what `WhereCompiler.guardCypherNodeRef` needs to filter a
@@ -1170,7 +1171,13 @@ export class WhereCompiler {
     assertWhereDepth(depth);
     if (where == null) return { cypher: '', params: paramsTarget ?? {} };
 
-    const caseInsensitive = where.mode === 'insensitive';
+    // v2.28.1 — `mode` is the case-insensitivity switch only on a type
+    // that declares no field named `mode`. On a type that does, it is that
+    // field's filter like any other key. Pre-2.28.1 the key was always
+    // skipped, so `deleteMany({ where: { mode: 'dark' } })` compiled to an
+    // unfiltered DETACH DELETE and a policy `{ mode: 'light' }` to `true`.
+    const modeIsSwitch = !declaresModeField(nodeDef);
+    const caseInsensitive = modeIsSwitch && where.mode === 'insensitive';
 
     const clauses: string[] = [];
     // Reuse the caller's params accumulator when provided. Otherwise
@@ -1181,7 +1188,7 @@ export class WhereCompiler {
 
     for (const [key, value] of Object.entries(where)) {
       if (value === undefined) continue;
-      if (key === 'mode') continue;
+      if (key === 'mode' && modeIsSwitch) continue;
       assertSafeKey(key, 'where input');
 
       // Logical operators (check before null handling so NOT with null value is handled correctly)

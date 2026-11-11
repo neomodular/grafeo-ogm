@@ -620,6 +620,8 @@ const book = await Book.findUniqueOrThrow({
 - **Plain substring search:** use `{ name_CONTAINS: term, mode: 'insensitive' }`. It needs no escaping and is always safe. `mode: 'insensitive'` lower-cases with Unicode rules; a regex `(?i)` folds ASCII only.
 - **`features.filters.String.MATCHES: false`** turns `_MATCHES` off: any use of it then throws. The flag does not relax the guard.
 
+**`mode: 'insensitive'` and a field named `mode`.** On a type that declares its own field named `mode` (a property, an `@cypher` field or a relationship), the `mode` key of its where input filters on that field, and the case-insensitivity switch is not available on that type (the generated `<Type>Where` declares only the field). Before v2.28.1 the key was always read as the switch and dropped, so `deleteMany({ where: { mode: 'dark' } })` deleted every node of the type and a policy `{ mode: 'light' }` matched everything.
+
 **List fields** (`tags: [String!]`) are compared as a whole list, so only these operators exist for them:
 
 | Operator | Matches when | Example |
