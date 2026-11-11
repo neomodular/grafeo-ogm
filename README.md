@@ -74,6 +74,7 @@ npm install grafeo-ogm neo4j-driver
 - [Vector Search](#vector-search)
 - [Type Generation](#type-generation)
 - [Testing Utilities](#testing-utilities)
+- [How grafeo-ogm stays correct](#how-grafeo-ogm-stays-correct)
 - [Security](#security)
 - [Migration from @neo4j/graphql-ogm](#migration-from-neo4jgraphql-ogm)
 - [Comparisons](#comparisons)
@@ -1630,7 +1631,7 @@ await users.update({ where: { id }, delete: { posts: [{ where: { node: { id: 'p1
 // strict:  OGMError: Unknown parameter "delete" of User.update(). Allowed: "where", "update", … update() has no root "delete": …
 ```
 
-Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`; since 2.22.0 strict mode applies them, see [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)), and `deleteMany({ where, delete })` did not cascade (use `delete()`). (`labels` on `delete()` / `deleteMany()` has its own item, [39](#39-labels-on-delete--deletemany-since-2220).) This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
+Each method reads a fixed set of top-level parameters (the ones in its signature), and before v2.19.0 any other key was ignored. An upstream-style root `delete` or `create` on `update()` did nothing (put them in a relationship field of `update`: `update: { posts: [{ delete: … }] }`; since 2.22.0 strict mode applies them, see [item 43](#43-connectorcreate-and-root-create--connectorcreate--delete-in-update-since-2220)), and `deleteMany({ where, delete })` did not cascade (use `delete()`). (`labels` on `delete()` / `deleteMany()` has its own item, [39](#39-labels-on-delete--deletemany-since-2210).) This applies to every `Model` method (`find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`) and every `InterfaceModel` method. `findFirst` / `findUnique` and the `*OrThrow` variants accept every `find` parameter, as they pass them on to `find`. Keys set to `undefined` are ignored. The generated parameter types never offered these keys, so this affects untyped callers and objects built outside the call. The warning code is `unknown-param`, logged once per OGM instance, type and key set.
 
 #### 35. A node-typed `@cypher` field with a sub-selection (since 2.20.0)
 
@@ -2772,7 +2773,7 @@ The generator runs 16 specialized emitters to produce:
 - **CreateInput / UpdateInput** -- Typed mutation inputs with nested relationship operations
 - **ConnectInput / DisconnectInput** -- Relationship operation inputs
 - **SelectFields** -- Types for the programmatic `select: {}` API
-- **SelectResult** -- Return types narrowed by selection
+- **SelectResult** -- The shape a `select` produces, as a standalone type (`SelectResult<Book, typeof select>`); model methods still return the full node type
 - **ConnectionWhere** -- Edge property filtering types
 - **SortInput** -- Sort options with direction constraints
 - **AggregateSelection** -- Aggregation return types
@@ -2974,7 +2975,7 @@ SelectionSetFactory.select(['id', 'title', { author: ['name'] }]);
 
 ## How grafeo-ogm stays correct
 
-grafeo-ogm has shipped many releases and published a security advisory for every security fix. This is how fixes are found, proven and released.
+grafeo-ogm has shipped many releases, and its security fixes are disclosed in published advisories. This is how fixes are found, proven and released.
 
 **Tested against a real database, not only mocks**
 
@@ -3167,7 +3168,7 @@ Pure query builders (e.g. `cypher-query-builder`) help you compose Cypher fragme
 
 ### Is grafeo-ogm production-ready?
 
-Yes. The library has over 2,100 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, the CLI, and edge cases, plus opt-in **live suites** (`tests/integration/`, run with `NEO4J_URI` set) that execute every fix against a real Neo4j 5.26 and assert on database outcomes. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
+Yes. The library has over 4,000 unit tests covering compilers, mutations, fulltext, transactions, security, scalar type mapping, the CLI, and edge cases, plus opt-in **live suites** (`tests/integration/`, run with `NEO4J_URI` set) that execute every fix against a real Neo4j 5.26 and assert on database outcomes. It targets Neo4j 5.x and follows semver — see [CHANGELOG.md](CHANGELOG.md).
 
 ### Does grafeo-ogm work with Neo4j Aura?
 
