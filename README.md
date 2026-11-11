@@ -640,7 +640,7 @@ const book = await Book.findUniqueOrThrow({
 | `_ALL` | Every related node matches | `{ categories_ALL: { name: 'Tech' } }` |
 | `_SINGLE` | Exactly one related node matches | `{ categories_SINGLE: { name: 'Tech' } }` |
 
-With [Node-Level Security](#node-level-security), quantifiers range over the related nodes the caller may **see**: a related node hidden by its type's `read` policy neither satisfies nor falsifies `_SOME`, `_NONE`, `_ALL` or `_SINGLE`.
+With [Node-Level Security](#node-level-security), quantifiers range over the related nodes the caller may **see**: a related node hidden by its type's `read` policy neither satisfies nor falsifies `_SOME`, `_NONE`, `_ALL`, `_SINGLE`, `rel: null` or `rel_NOT: null` (the null filters since v2.28.1; before, a hidden node counted as a related node there).
 
 **Logical operators:**
 
@@ -2250,7 +2250,7 @@ Policies protect a **type**, wherever it is reached from. When a bound model rea
 
 Reads:
 - **Nested selection**: related nodes are filtered by their type's `read` policy.
-- **Relationship filters** (`_SOME`, `_NONE`, `_ALL`, `_SINGLE`, `…Connection`): these range over the related nodes the caller may see. At any depth, a hidden node neither satisfies nor falsifies the quantifier.
+- **Relationship filters** (`_SOME`, `_NONE`, `_ALL`, `_SINGLE`, `…Connection`, and since v2.28.1 `rel: null` / `rel_NOT: null`): these range over the related nodes the caller may see. At any depth, a hidden node neither satisfies nor falsifies the quantifier.
 - **Interface and union targets**: each related node is checked against the policy of its concrete type (`CASE WHEN n:Chart THEN <Chart policy> WHEN n:Drug THEN <Drug policy> … ELSE false END`).
 
 Writes follow one principle: **a nested write enforces exactly what the equivalent direct write on the target type would.**

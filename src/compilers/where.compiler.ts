@@ -1274,11 +1274,19 @@ export class WhereCompiler {
       // `compileNullCondition`.
       if (value === null) {
         clauses.push(
-          this.compileNullCondition(key, nodeVar, nodeDef, counter, scope, {
-            policyContext,
+          this.compileNullCondition(
+            key,
+            nodeVar,
+            nodeDef,
             counter,
-            params,
-          }),
+            scope,
+            {
+              policyContext,
+              counter,
+              params,
+            },
+            depth,
+          ),
         );
         continue;
       }
@@ -2485,6 +2493,8 @@ export class WhereCompiler {
     scope: CypherFieldScope,
     /** v2.22.1 — see `guardCypherNodeRef`. */
     guard?: CypherNodeGuardArgs,
+    /** v2.28.1 — depth of the where holding `key` (see `MAX_WHERE_DEPTH`). */
+    depth = 0,
   ): string {
     if (nodeDef.relationships.has(key))
       return this.compileRelationshipExistence(
@@ -2493,6 +2503,8 @@ export class WhereCompiler {
         nodeDef,
         counter,
         false,
+        guard,
+        depth,
       );
     if (!nodeDef.properties.has(key))
       for (const suffix of RELATIONSHIP_SUFFIXES) {
@@ -2506,6 +2518,8 @@ export class WhereCompiler {
             nodeDef,
             counter,
             true,
+            guard,
+            depth,
           );
         throw new OGMError(
           `Relationship filter "${key}" cannot be null. Use "${field}: null" ` +
@@ -2556,7 +2570,14 @@ export class WhereCompiler {
   /**
    * `NOT EXISTS` (no related node) / `EXISTS` (at least one) for a
    * relationship null filter. Byte-identical to the pre-2.3.0 `rel: null`
-   * emission for the `NOT EXISTS` case.
+   * emission for the `NOT EXISTS` case when no policy applies.
+   *
+   * v2.28.1 — only a related node the caller may SEE counts: the target's
+   * `read` policy (per member for an interface / union target) sits in the
+   * EXISTS body, as for `_SOME` / `_NONE`, so a hidden related node neither
+   * satisfies `rel_NOT: null` nor falsifies `rel: null`. Pre-2.28.1 the
+   * body had no policy, so `charts_NOT: null` returned a node whose only
+   * related node was hidden, revealing that the hidden node exists.
    */
   private compileRelationshipExistence(
     field: string,
@@ -2564,6 +2585,8 @@ export class WhereCompiler {
     nodeDef: NodeDefinition,
     counter: { count: number },
     exists: boolean,
+    guard?: CypherNodeGuardArgs,
+    depth = 0,
   ): string {
     const relDef = nodeDef.relationships.get(field)!;
     const targetDef = resolveTargetDef(relDef.target, this.schema);
@@ -2586,8 +2609,26 @@ export class WhereCompiler {
       schema: this.schema,
     });
     // v2.6.2 — strict: only member nodes count (`strictMemberRestriction`).
-    const members = this.strictMemberRestriction(targetDef.typeName, relVar);
-    const body = members ? `${pattern} WHERE ${members}` : pattern;
+    // v2.28.1 — with a policy context, the target's read policy (which
+    // `compileTargetBody` falls back to the member restriction for).
+    let visible: string;
+    let preludeFragment = '';
+    if (guard?.policyContext) {
+      const body = this.compileTargetBody(
+        undefined,
+        relVar,
+        targetDef,
+        counter,
+        guard.policyContext,
+        undefined,
+        depth + 1,
+      );
+      visible = body.policy;
+      if (visible) mergeParams(guard.params, body.params);
+      if (body.preludes.length > 0)
+        preludeFragment = ` ${body.preludes.join(' ')}`;
+    } else visible = this.strictMemberRestriction(targetDef.typeName, relVar);
+    const body = `${pattern}${preludeFragment}${visible ? ` WHERE ${visible}` : ''}`;
     return exists ? `EXISTS { MATCH ${body} }` : `NOT EXISTS { MATCH ${body} }`;
   }
 

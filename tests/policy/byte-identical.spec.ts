@@ -520,3 +520,135 @@ type Tag @node { id: ID! @unique }
     });
   });
 });
+
+/**
+ * v2.28.1 — security: `rel: null` / `rel_NOT: null` apply the target's read
+ * policy (per member for an abstract target). Without `policies`, with a
+ * bypass, an override, or no read clause on the target, the Cypher stays
+ * byte for byte what v2.28.0 emitted (goldens captured on efa9b91).
+ */
+describe('byte-identical: relationship null filters', () => {
+  const relSchema = `
+type Tag @node {
+  id: ID! @unique
+  charts: [Chart!]! @relationship(type: "TAGS", direction: OUT)
+  items: [Content!]! @relationship(type: "HAS", direction: OUT)
+  parent: Tag @relationship(type: "CHILD_OF", direction: OUT)
+}
+interface Content { id: ID! }
+type Chart implements Content @node { id: ID! @unique secret: Boolean }
+type Note implements Content @node { id: ID! @unique }
+type User @node { id: ID! @unique }
+`;
+  const where = {
+    charts: null,
+    charts_NOT: null,
+    items_NOT: null,
+    parent_SOME: { charts_NOT: null },
+  };
+  const selectionSet = '{ id parent(where: { items: null }) { id } }';
+  // [find, count]
+  const GOLDEN: Record<'default' | 'strict', string[]> = {
+    default: [
+      'MATCH (n:`Tag`)\nWHERE NOT EXISTS { MATCH (n)-[:`TAGS`]->(r0:`Chart`) } AND EXISTS { MATCH (n)-[:`TAGS`]->(r1:`Chart`) } AND EXISTS { MATCH (n)-[:`HAS`]->(r2) } AND EXISTS { MATCH (n)-[:`CHILD_OF`]->(r3:`Tag`) WHERE EXISTS { MATCH (r3)-[:`TAGS`]->(r4:`Chart`) } }\nRETURN n { .`id`, parent: head([(n)-[:`CHILD_OF`]->(n0:`Tag`) WHERE NOT EXISTS { MATCH (n0)-[:`HAS`]->(r5) } | n0 { .`id` }]) }',
+      'MATCH (n:`Tag`)\nWHERE NOT EXISTS { MATCH (n)-[:`TAGS`]->(r0:`Chart`) } AND EXISTS { MATCH (n)-[:`TAGS`]->(r1:`Chart`) } AND EXISTS { MATCH (n)-[:`HAS`]->(r2) } AND EXISTS { MATCH (n)-[:`CHILD_OF`]->(r3:`Tag`) WHERE EXISTS { MATCH (r3)-[:`TAGS`]->(r4:`Chart`) } }\nRETURN count(n) AS count',
+    ],
+    strict: [
+      'MATCH (n:`Tag`)\nWHERE NOT EXISTS { MATCH (n)-[:`TAGS`]->(r0:`Chart`) } AND EXISTS { MATCH (n)-[:`TAGS`]->(r1:`Chart`) } AND EXISTS { MATCH (n)-[:`HAS`]->(r2) WHERE (r2:`Chart` OR r2:`Note`) } AND EXISTS { MATCH (n)-[:`CHILD_OF`]->(r3:`Tag`) WHERE EXISTS { MATCH (r3)-[:`TAGS`]->(r4:`Chart`) } }\nRETURN n { .`id`, parent: head([(n)-[:`CHILD_OF`]->(n0:`Tag`) WHERE NOT EXISTS { MATCH (n0)-[:`HAS`]->(r5) WHERE (r5:`Chart` OR r5:`Note`) } | n0 { .`id` }]) }',
+      'MATCH (n:`Tag`)\nWHERE NOT EXISTS { MATCH (n)-[:`TAGS`]->(r0:`Chart`) } AND EXISTS { MATCH (n)-[:`TAGS`]->(r1:`Chart`) } AND EXISTS { MATCH (n)-[:`HAS`]->(r2) WHERE (r2:`Chart` OR r2:`Note`) } AND EXISTS { MATCH (n)-[:`CHILD_OF`]->(r3:`Tag`) WHERE EXISTS { MATCH (r3)-[:`TAGS`]->(r4:`Chart`) } }\nRETURN count(n) AS count',
+    ],
+  };
+  const quiet = { warn: () => undefined, debug: () => undefined };
+  const chartPolicy = [
+    permissive({ operations: ['read'], when: () => ({ secret: false }) }),
+  ];
+  type Bound = Pick<OGM, 'model'>;
+  const emit = async (
+    bind: (driver: Driver) => Bound,
+    unsafe?: { bypassPolicies: true },
+  ): Promise<string[]> => {
+    const r: Recorded[] = [];
+    const model = bind(createMockDriver(r)).model('Tag');
+    await model.find({ where, selectionSet, unsafe });
+    await model.count({ where, unsafe });
+    return r.map((x) => x.cypher);
+  };
+
+  describe.each([
+    ['default', undefined],
+    ['strict', true],
+  ] as const)('%s mode', (mode, strict) => {
+    const golden = GOLDEN[mode];
+    const make = (
+      driver: Driver,
+      policies?: ConstructorParameters<typeof OGM>[0]['policies'],
+    ) =>
+      new OGM({
+        typeDefs: relSchema,
+        driver,
+        strict,
+        logger: quiet,
+        policies,
+      });
+
+    it('no policies', async () => {
+      expect(await emit((d) => make(d))).toEqual(golden);
+    });
+
+    it('policies on another type only (no read clause on the target)', async () => {
+      expect(
+        await emit((d) =>
+          make(d, {
+            User: [permissive({ operations: ['read'], when: () => ({}) })],
+          }).withContext({}),
+        ),
+      ).toEqual(golden);
+    });
+
+    it('ogm.unsafe.bypassPolicies() and per-call unsafe', async () => {
+      expect(
+        await emit((d) =>
+          make(d, { Chart: chartPolicy }).unsafe.bypassPolicies(),
+        ),
+      ).toEqual(golden);
+      expect(
+        await emit((d) => make(d, { Chart: chartPolicy }).withContext({}), {
+          bypassPolicies: true,
+        }),
+      ).toEqual(golden);
+    });
+
+    it('an override that short-circuits the target policy', async () => {
+      expect(
+        await emit((d) =>
+          make(d, {
+            Chart: [
+              override({ operations: ['*'], when: () => true }),
+              ...chartPolicy,
+            ],
+          }).withContext({}),
+        ),
+      ).toEqual(golden);
+    });
+
+    it('a read clause on the target guards every existence test', async () => {
+      const [find, count] = await emit((d) =>
+        make(d, { Chart: chartPolicy }).withContext({}),
+      );
+      for (const q of [find, count]) {
+        // charts: null, charts_NOT: null, parent_SOME → charts_NOT: null
+        expect(
+          q.match(/-\[:`TAGS`\]->\((r\d+):`Chart`\) WHERE \(\1\.`secret` = /g),
+        ).toHaveLength(3);
+        // items_NOT: null — the member clause for Chart only
+        expect(q).toMatch(
+          /EXISTS \{ MATCH \(n\)-\[:`HAS`\]->\((r\d+)\) WHERE \(\(\1:`Chart` OR \1:`Note`\) AND \(NOT \1:`Chart` OR \(\1\.`secret` = /,
+        );
+      }
+      // the selectionSet `where` argument
+      expect(find).toMatch(
+        /-\[:`CHILD_OF`\]->\(n0:`Tag`\) WHERE NOT EXISTS \{ MATCH \(n0\)-\[:`HAS`\]->\((r\d+)\) WHERE \(\(\1:`Chart` OR \1:`Note`\) AND \(NOT \1:`Chart` OR /,
+      );
+    });
+  });
+});
