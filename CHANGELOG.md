@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.30.0 (2026-11-11) — neo4j-driver 6: Duration round-trip, tested in CI
+
+> **Minor release.** grafeo-ogm supports `neo4j-driver` 5 and 6, and CI now tests both. On driver 6, a `Duration` read through grafeo could not be written back; it now comes back in the same form on both drivers. Driver-5 users see no change.
+
+### Fixed
+
+- **On neo4j-driver 6, a `Duration` read through grafeo could not be written back.** Results returned the driver's `Duration.toString()`, and driver 6 changed it: a duration of 10 years came back as `P10YT` instead of `P120M0DT0S`, and 2 days as `P2DT`. Neo4j 5.x rejects a duration ending in `T` ("Text cannot be parsed to a Duration"), so using such a value in `create`, `update` or a `where` filter threw. grafeo now formats durations itself, exactly as driver 5 does, whichever driver is installed. All other types (dates, times, Point, Integer, nodes, relationships) already came back the same on both drivers.
+
+### CI
+
+- **Unit tests and the live suites run on neo4j-driver 6** (6.3.0) as well as the lockfile's 5.x, on every push and pull request, and before every npm publish.
+
+### Docs
+
+- **`llms.txt` and `llms-full.txt`** for coding agents: an index and a self-contained reference whose code samples typecheck against the API.
+
+### Behavior changes
+
+- **neo4j-driver 6 users:** `Duration` values come back in driver 5's form (`P120M0DT0S`, `P0M0DT3600S`), not the shorter form driver 6 prints (`P10YT`, `PT1H`). The value is the same; only the text changes.
+
 ## 2.29.0 (2026-11-10) — security: policy bypasses, `_MATCHES` ReDoS, `mode` filter
 
 > **Minor release with security fixes.** An audit found two node-level security bypasses, a way past the `_MATCHES` ReDoS guard, and a where filter that was silently dropped (which could turn `deleteMany` into a delete of every node of a type). Upgrade if you use policies, `_MATCHES` on user input, relationship fulltext, or a field named `mode`. Each change is listed under "Behavior changes".
