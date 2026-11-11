@@ -1,0 +1,66 @@
+# grafeo-ogm
+
+> grafeo-ogm is a type-safe Object-Graph Mapper for Neo4j, written in TypeScript and published on npm as `grafeo-ogm`. You define the graph in GraphQL SDL, generate TypeScript types from it, and call Prisma-style model methods that compile to parameterized Cypher and run through `neo4j-driver`. It is not GrafeoDB (`@grafeo-db/js`), an unrelated graph database written in Rust.
+
+- Install: `npm install grafeo-ogm neo4j-driver graphql`. Peer dependency: `neo4j-driver` 5 or 6. Node.js >= 18, TypeScript 5.0+.
+- Server: Neo4j 5.x (tested on 5.26 LTS; Aura works). APOC is needed for nested sorting and subgraph operations; the GenAI plugin for `searchByPhrase`.
+- Entry points: `new OGM({ typeDefs, driver })`, `ogm.model('Book')`, `ogm.interfaceModel('Entity')`, `ogm.withContext(ctx)`, `ogm.$transaction(fn)`. Types come from `npx grafeo generate` (`ModelMap`, `SelectResult`, …).
+- Lineage: continues `@neo4j/graphql-ogm`, which was removed from `@neo4j/graphql` 6.0.0 (its 5.x LTS line still ships and requires `neo4j-driver` 5). Same `OGM` / `Model` API and `selectionSet` strings, plus more methods, a typed `select`, node-level security and neo4j-driver 6 support.
+- Pass `strict: true` in new code; it becomes the default in 3.0.
+- Version 2.29.x. License: MIT.
+
+## Docs
+
+- [Full reference for coding agents](https://github.com/neomodular/grafeo-ogm/blob/main/llms-full.txt): self-contained API reference with typechecked examples and a list of common mistakes
+- [README](https://github.com/neomodular/grafeo-ogm#readme): the complete user guide
+- [Quick Start](https://github.com/neomodular/grafeo-ogm#quick-start): install, schema, type generation, first queries
+- [Schema Definition](https://github.com/neomodular/grafeo-ogm#schema-definition): supported directives and scalar types
+- [Query API](https://github.com/neomodular/grafeo-ogm#query-api): find methods, where operators, `select` vs `selectionSet`, sorting and pagination
+- [WHERE Operators](https://github.com/neomodular/grafeo-ogm#where-operators): every filter suffix, `mode: 'insensitive'`, relationship quantifiers, the `_MATCHES` guard
+- [Mutation API](https://github.com/neomodular/grafeo-ogm#mutation-api): create, createMany, update, updateMany, delete, deleteMany, upsert, setLabels, nested mutations
+- [Strict mode](https://github.com/neomodular/grafeo-ogm#strict-mode): every input shape `strict: true` changes, with before/after behaviour
+- [Node-Level Security](https://github.com/neomodular/grafeo-ogm#node-level-security): `policies`, `withContext`, permissive / restrictive / override, `explainPolicies`
+- [Transactions](https://github.com/neomodular/grafeo-ogm#transactions): `$transaction` callback and array forms, transaction metadata
+- [Vector Search](https://github.com/neomodular/grafeo-ogm#vector-search): `@vector`, `searchByVector`, `searchByPhrase`
+- [Type Generation](https://github.com/neomodular/grafeo-ogm#type-generation): `generateTypes()` options and what gets generated
+- [CLI](https://github.com/neomodular/grafeo-ogm#cli): `grafeo init`, `generate`, `db push`, `db seed`
+- [Testing Utilities](https://github.com/neomodular/grafeo-ogm#testing-utilities): compile-only OGM, `compile()`, `CypherAssert`, `Neo4jRecordFactory`, `SelectionSetFactory`
+- [Migration from @neo4j/graphql-ogm](https://github.com/neomodular/grafeo-ogm#migration-from-neo4jgraphql-ogm): steps and the deliberate differences
+- [API Reference](https://github.com/neomodular/grafeo-ogm#api-reference): OGM, Model, InterfaceModel and generateTypes tables
+
+## Examples
+
+- [Basic CRUD](https://github.com/neomodular/grafeo-ogm/blob/main/examples/01-basic-crud.ts): find, create, update, delete
+- [Prisma-like queries](https://github.com/neomodular/grafeo-ogm/blob/main/examples/02-prisma-like-queries.ts): findFirst, findUnique, *OrThrow, createMany, updateMany, deleteMany, upsert
+- [Typed select](https://github.com/neomodular/grafeo-ogm/blob/main/examples/03-typed-select.ts): `select` vs `selectionSet`, nested selection
+- [Where filters](https://github.com/neomodular/grafeo-ogm/blob/main/examples/04-where-filters.ts): comparison, string, logical, null and relationship filters
+- [Nested mutations](https://github.com/neomodular/grafeo-ogm/blob/main/examples/05-nested-mutations.ts): create / connect / disconnect with edge properties, cascade delete
+- [Transactions](https://github.com/neomodular/grafeo-ogm/blob/main/examples/07-transactions.ts): `$transaction` callback and sequential forms
+- [Interface models](https://github.com/neomodular/grafeo-ogm/blob/main/examples/09-interface-models.ts): `interfaceModel()` and `__typename`
+- [Code generation](https://github.com/neomodular/grafeo-ogm/blob/main/examples/13-code-generation.ts): `generateTypes()`
+- [Testing utilities](https://github.com/neomodular/grafeo-ogm/blob/main/examples/14-testing-utilities.ts): unit tests without a database
+- [Example schema](https://github.com/neomodular/grafeo-ogm/blob/main/examples/schema.graphql): the SDL the examples use
+
+## Project
+
+- [CHANGELOG](https://github.com/neomodular/grafeo-ogm/blob/main/CHANGELOG.md): every release, with "Behavior changes" and "Strict mode" sections
+- [Security policy](https://github.com/neomodular/grafeo-ogm/blob/main/SECURITY.md): how to report a vulnerability
+- [Security advisories](https://github.com/neomodular/grafeo-ogm/security/advisories): published advisories
+- [npm package](https://www.npmjs.com/package/grafeo-ogm): `grafeo-ogm`
+
+## Optional
+
+- [Fulltext Search](https://github.com/neomodular/grafeo-ogm#fulltext-search): `@fulltext` indexes and `AND` / `OR` / `NOT` composition
+- [Computed Fields with @cypher](https://github.com/neomodular/grafeo-ogm#computed-fields-with-cypher): `@cypher` in select, where and sort, and its limits
+- [Subgraph Operations](https://github.com/neomodular/grafeo-ogm#subgraph-operations): APOC-based `cloneSubgraph` / `deleteSubgraph`
+- [Relationship aggregate selections](https://github.com/neomodular/grafeo-ogm#relationship-aggregate-selections): `<relationship>Aggregate` fields
+- [Security](https://github.com/neomodular/grafeo-ogm#security): parameterization, identifier validation, the `_MATCHES` ReDoS guard
+- [How grafeo-ogm stays correct](https://github.com/neomodular/grafeo-ogm#how-grafeo-ogm-stays-correct): live Neo4j test suites and compiler invariants
+- [FAQ](https://github.com/neomodular/grafeo-ogm#faq): Aura, GraphQL servers, multi-database, performance
+- [Fulltext search example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/06-fulltext-search.ts): phrase and score queries
+- [Raw Cypher example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/08-raw-cypher.ts): `$queryRaw`, `$executeRaw`
+- [Multi-label example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/10-multi-label.ts): runtime `labels` and `setLabels()`
+- [Aggregation example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/11-aggregation.ts): `count()` and `aggregate()`
+- [Error handling example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/12-error-handling.ts): `OGMError`, `RecordNotFoundError`
+- [Policy explain example](https://github.com/neomodular/grafeo-ogm/blob/main/examples/15-policy-explain.ts): `explainPolicies()`
+- [Contributing](https://github.com/neomodular/grafeo-ogm/blob/main/CONTRIBUTING.md): development setup

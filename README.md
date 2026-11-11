@@ -3290,7 +3290,7 @@ Returns `GenerateTypesResult`:
 | `durationMs` | `number` | Generation duration in milliseconds |
 | `warnings` | `GeneratorWarning[]` | Non-fatal warnings encountered |
 
-For detailed usage examples, see the [`examples/`](./examples/) directory.
+For detailed usage examples, see the [`examples/`](./examples/) directory. Coding agents and LLM tools can start from [`llms.txt`](./llms.txt) (an index) or [`llms-full.txt`](./llms-full.txt) (a self-contained API reference).
 
 ---
 

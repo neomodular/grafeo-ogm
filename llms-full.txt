@@ -1,0 +1,893 @@
+# grafeo-ogm — full reference for coding agents
+
+> grafeo-ogm is a type-safe Object-Graph Mapper (OGM) for **Neo4j**, written in TypeScript and published on npm as `grafeo-ogm`. You describe the graph in GraphQL SDL, generate TypeScript types from it, and call Prisma-style model methods (`find`, `create`, `update`, `upsert`, …) that compile to parameterized Cypher and run through the official `neo4j-driver`.
+>
+> **It is not GrafeoDB.** GrafeoDB (`@grafeo-db/js`) is an unrelated graph database written in Rust. grafeo-ogm is not a database: it is a client library that talks to a Neo4j server. Do not mix their APIs, packages or docs.
+
+- Package: `grafeo-ogm` (npm). Repository: https://github.com/neomodular/grafeo-ogm. License: MIT.
+- This file describes version 2.29.x. Node.js >= 18, TypeScript 5.0+.
+- Peer dependency: `neo4j-driver` `^5.0.0 || ^6.0.0` (both majors are supported). `prettier` ^3 is an optional peer (formats generated types).
+- Server: Neo4j 5.x (CI runs against 5.26 LTS; Aura 5.27 works). Some features need APOC or the GenAI plugin (see "Server requirements").
+- Lineage: `@neo4j/graphql-ogm` was removed from `@neo4j/graphql` in 6.0.0. Its 5.x LTS line still ships patch releases and requires `neo4j-driver` 5. grafeo-ogm is a community continuation that keeps its `OGM` / `Model` API (`new OGM({ typeDefs, driver })`, `ogm.model('X').find()`, `selectionSet` strings) and adds more methods, a typed `select`, node-level security and neo4j-driver 6 support.
+
+This file is self-contained. The README (https://github.com/neomodular/grafeo-ogm#readme) has the long form of every section.
+
+---
+
+## 1. Install
+
+```bash
+npm install grafeo-ogm neo4j-driver graphql
+# or: pnpm add grafeo-ogm neo4j-driver graphql
+```
+
+Imports:
+
+- `grafeo-ogm` — everything: `OGM`, `generateTypes`, `defineConfig`, policies, errors, and the testing helpers.
+- `grafeo-ogm/testing` — the testing helpers only (`createCompileOnlyOgm`, `compile`, `CypherAssert`, …).
+- The CLI binary is `grafeo` (`npx grafeo <command>`), installed with the package.
+
+---
+
+## 2. Running example schema
+
+Every snippet below uses this schema (`schema.graphql`):
+
+```graphql
+interface Entity {
+  id: ID!
+  name: String!
+}
+
+type Author implements Entity @node {
+  id: ID! @id @unique
+  name: String!
+  books: [Book!]! @relationship(type: "WRITTEN_BY", direction: IN, properties: "WrittenBy")
+}
+
+type Publisher implements Entity @node {
+  id: ID! @id @unique
+  name: String!
+  website: String
+}
+
+enum BookStatus {
+  DRAFT
+  PUBLISHED
+}
+
+type Book @node
+  @fulltext(indexes: [{ name: "BookSearch", fields: ["title", "description"] }])
+  @vector(indexes: [
+    { indexName: "book_embedding_idx", queryName: "similarBooks", embeddingProperty: "embedding", provider: "OpenAI" }
+  ]) {
+  id: ID! @id @unique
+  title: String!
+  isbn: String @unique
+  description: String
+  price: Float
+  tags: [String!]
+  status: BookStatus @default(value: DRAFT)
+  ownerId: String
+  published: DateTime
+  embedding: [Float!]
+  titleLower: String @cypher(statement: "RETURN toLower(this.title) AS result", columnName: "result")
+  author: Author @relationship(type: "WRITTEN_BY", direction: OUT, properties: "WrittenBy")
+  categories: [Category!]! @relationship(type: "IN_CATEGORY", direction: OUT)
+}
+
+type Category @node {
+  id: ID! @id @unique
+  name: String!
+}
+
+type WrittenBy @relationshipProperties {
+  role: String
+  since: Int
+}
+```
+
+### Supported directives
+
+| Directive | On | Meaning |
+|---|---|---|
+| `@node` | type | A Neo4j node type. Optional `labels: [...]` for multi-label nodes. |
+| `@relationship(type, direction, properties?)` | field | A relationship. `direction` must be exactly `IN` or `OUT`. `properties` names a `@relationshipProperties` type. |
+| `@relationshipProperties` | type | Edge properties. |
+| `@declareRelationship` | interface field | A relationship declared on an interface; `type` / `direction` / `properties` come from the implementors' `@relationship`, which must all agree. |
+| `@id` | field | Generates a UUID on create. **Creates no constraint**; add `@unique` for one. |
+| `@unique` | field | Unique constraint (created by `grafeo db push` or `assertIndexesAndConstraints({ options: { create: true } })`). |
+| `@default(value: …)` | field | Default on create (scalar, enum or list). A required field with a default is optional in the generated `CreateInput`. |
+| `@cypher(statement, columnName?)` | field | Computed field; `this` is the matched node. Scalar results work in `select` / `selectionSet`, `where` and `options.sort`. |
+| `@fulltext(indexes: [{ name, fields }])` | type | Fulltext indexes (also on `@relationshipProperties` types). `indexName` is accepted as an alias of `name`. |
+| `@vector(indexes: [{ indexName, queryName, embeddingProperty, provider? }])` | type | Vector indexes. `provider` enables `searchByPhrase`. |
+
+Scalars: `String`, `Int`, `Float`, `Boolean`, `ID`, `BigInt`, `DateTime`, `Date`, `Time`, `LocalTime`, `LocalDateTime`, `Duration`, `Point`, `CartesianPoint`. Enums, interfaces and unions are supported.
+
+Schema rules that trip agents up:
+
+- Directives go **after** `implements`: `type User implements Entity @node { … }`. `type User @node implements Entity` is invalid GraphQL.
+- An interface implementor does not need to carry the interface name as a label (since 2.5.0); `InterfaceModel` matches by the implementors' labels.
+- `@cypher` statements are interpolated verbatim into Cypher. They are trusted code: never build `typeDefs` from runtime input.
+- `typeDefs` must be an SDL **string** (not a `DocumentNode` or an array). Do not declare `type Query` / `Mutation` / `Subscription` in it.
+
+---
+
+## 3. Code generation and the typed OGM
+
+Generate types from the SDL (no database connection needed):
+
+```bash
+npx grafeo generate                  # writes ./grafeo.generated.ts from ./schema.graphql
+npx grafeo generate --watch          # regenerate on change
+npx grafeo generate --verify         # CI: exit 1 if the committed file is stale
+```
+
+Or programmatically:
+
+```ts
+import fs from 'fs';
+import { generateTypes } from 'grafeo-ogm';
+
+const result = await generateTypes({
+  typeDefs: fs.readFileSync('./schema.graphql', 'utf-8'),
+  outFile: './grafeo.generated.ts',
+  strict: true, // same value as your OGM's `strict`
+  // config: { packageName, stringMatchesFilter, formatOutput, prettierConfig, header }
+});
+console.log(result.typeCount, result.warnings);
+```
+
+The generated file exports, per node type: the node type (`Book`), `BookWhere`, `BookCreateInput`, `BookUpdateInput`, `BookConnectInput`, `BookDisconnectInput`, `BookDeleteInput`, `BookSelectFields`, `BookSort`, `BookFulltextInput`, vector input types, aggregate types, plus `SelectResult`, `ModelMap` and `InterfaceModelMap`. Pass `strict` to `generateTypes` (or set it in `grafeo.config.ts`) with the same value as your OGM.
+
+### Setup used by the snippets
+
+Every later snippet that has no imports of its own assumes this module (as `./setup`):
+
+```ts
+// setup.ts
+import fs from 'fs';
+import neo4j from 'neo4j-driver';
+import { OGM } from 'grafeo-ogm';
+import type { ModelMap, InterfaceModelMap } from './grafeo.generated';
+
+export const driver = neo4j.driver(
+  process.env.NEO4J_URI ?? 'neo4j://localhost:7687',
+  neo4j.auth.basic('neo4j', process.env.NEO4J_PASSWORD ?? 'password'),
+);
+export const typeDefs = fs.readFileSync('./schema.graphql', 'utf-8');
+
+export const ogm = new OGM<ModelMap, InterfaceModelMap>({
+  typeDefs,
+  driver,
+  strict: true, // recommended for new code; the default in 3.0
+});
+
+export const Book = ogm.model('Book');
+export const Author = ogm.model('Author');
+export const Category = ogm.model('Category');
+```
+
+`ogm.model('Book')` is typed from `ModelMap`: `where` is checked against `BookWhere`, `input` against `BookCreateInput`, `select` against `BookSelectFields`, `options.sort` against `BookSort`, `fulltext` against `BookFulltextInput`. Without the generic the OGM still works, untyped.
+
+### `OGM` constructor options
+
+| Option | Notes |
+|---|---|
+| `typeDefs: string` | Required. SDL string. |
+| `driver: Driver` | Required. A `neo4j-driver` 5 or 6 driver. grafeo-ogm never closes it; call `driver.close()` yourself. |
+| `database?: string` | Database every OGM-opened session targets. |
+| `logger?: { debug(msg, ...args); warn?(msg, ...args) }` | Receives warnings (default-mode strict warnings, empty `OR`, policy bypasses) and debug output. |
+| `strict?: boolean` | Default `false` in 2.x, `true` in 3.0. See section 13. |
+| `features?: { filters?: { String?: { MATCHES?: boolean } }; strictWhere?: boolean }` | `MATCHES: false` removes `_MATCHES`. `strictWhere: true` throws on unknown where field names. |
+| `policies?`, `policyDefaults?` | Node-level security (section 12). |
+
+### `OGM` instance methods
+
+| Method | Notes |
+|---|---|
+| `model(name)` | Typed `Model` for a node type (cached). |
+| `interfaceModel(name)` | Read-only `InterfaceModel` for an interface. |
+| `withContext(ctx)` | Returns an OGM-like wrapper whose models enforce `policies` for `ctx`. |
+| `unsafe.bypassPolicies()` | An OGM copy with policies disabled (logged). |
+| `$transaction(fn, { metadata? })` / `$transaction([fn, …])` | Atomic transaction; each `fn` receives `ctx = { transaction }`. |
+| `$queryRaw<T>(cypher, params?)` | Raw read; returns mapped rows `T[]`. Own auto-commit session. |
+| `$executeRaw(cypher, params?)` | Raw write; returns `{ recordsAffected }`. Own auto-commit session. |
+| `assertIndexesAndConstraints({ options: { create: true } })` | Creates unique constraints and fulltext indexes. **Does nothing without `create: true`.** Never creates vector indexes. |
+| `$cloneSubgraph(...)` / `$deleteSubgraph(...)` | APOC subgraph operations (also exported as `cloneSubgraph` / `deleteSubgraph`). |
+| `init()` | No-op, kept for `@neo4j/graphql-ogm` compatibility. |
+| `close()` | Clears caches. Does not close the driver. |
+
+Set `Executor.debug = true` (`import { Executor } from 'grafeo-ogm'`) to log every Cypher statement and its params through `logger.debug` (stderr without a logger).
+
+---
+
+## 4. Reading
+
+```ts
+import { Book } from './setup';
+import { BookStatus, SortDirection } from './grafeo.generated';
+
+// find → Book[]
+const books = await Book.find({
+  where: { title_CONTAINS: 'Graph', price_LT: 50 },
+  select: { id: true, title: true, author: { select: { name: true } } },
+  options: { sort: [{ title: SortDirection.Asc }], limit: 10, offset: 0 },
+});
+
+// findFirst → Book | null   (options: sort / offset only, no limit)
+const first = await Book.findFirst({
+  where: { status: BookStatus.Published },
+  options: { sort: [{ published: SortDirection.Desc }] },
+});
+
+// findUnique → Book | null   (where on an @id / @unique field)
+const one = await Book.findUnique({ where: { isbn: '978-1491930892' } });
+
+// *OrThrow → Book, or throws RecordNotFoundError
+const sure = await Book.findUniqueOrThrow({ where: { id: 'book-1' } });
+const firstOrFail = await Book.findFirstOrThrow({ where: { title: 'Exact Title' } });
+```
+
+Parameters accepted by `find`: `where`, `select` or `selectionSet`, `options` (`sort`, `limit`, `offset`), `fulltext`, `labels`, `context`, `unsafe`. `findFirst` / `findFirstOrThrow` take the same minus `options.limit`. `findUnique` / `findUniqueOrThrow` take `where` (required), `select` / `selectionSet`, `labels`, `context`, `unsafe`.
+
+With no `select` / `selectionSet`, a read returns every stored scalar property of the node (no relationships, no `@cypher` fields).
+
+### `select` vs `selectionSet` (mutually exclusive — passing both throws)
+
+```ts
+import { Book, Author } from './setup';
+
+// Typed select (recommended)
+const typed = await Book.find({
+  select: {
+    id: true,
+    title: true,
+    author: true, // a relationship set to `true` returns its scalar fields
+    categories: {
+      where: { name_STARTS_WITH: 'Tech' }, // filter related nodes
+      orderBy: [{ name: 'ASC' }],          // nested sort (needs APOC)
+      select: { name: true },
+    },
+  },
+});
+
+// GraphQL selection-set string (the @neo4j/graphql-ogm style)
+const legacy = await Book.find({
+  selectionSet: `{
+    id
+    t: title
+    categories(where: { name_STARTS_WITH: "Tech" }, options: { limit: 3 }) { name }
+    author { name }
+  }`,
+});
+
+// Connections with edge properties
+const authors = await Author.find({
+  select: {
+    name: true,
+    booksConnection: {
+      where: { edge: { role: 'Editor' } },
+      select: {
+        totalCount: true,
+        edges: { node: { select: { title: true } }, properties: { select: { role: true, since: true } } },
+      },
+    },
+    booksAggregate: { select: { count: true } },
+  },
+});
+```
+
+`select` checks field names at compile time, but **does not narrow the return type**: `find` still returns `Book[]` (the full node type). To type the selected shape, use the generated `SelectResult`:
+
+```ts
+import { Book } from './setup';
+import type { Book as BookNode, SelectResult } from './grafeo.generated';
+
+const bookSelect = { id: true, title: true, author: { select: { name: true } } } as const;
+type BookRow = SelectResult<BookNode, typeof bookSelect>; // { id; title; author: { name } | null }
+
+const rows = (await Book.find({ select: bookSelect })) as BookRow[];
+```
+
+Declare the select object `as const` (or inline it) so `true` stays the literal type `SelectResult` expects.
+
+Union / interface targets get `__typename` projected automatically.
+
+### `where` operators
+
+Scalar fields (`field` alone means equality):
+
+| Suffix | Cypher | Example |
+|---|---|---|
+| *(none)* | `=` | `{ title: 'Dune' }` |
+| `_NOT` | `<>` | `{ title_NOT: 'x' }` |
+| `_IN` / `_NOT_IN` | `IN` / `NOT IN` | `{ id_IN: ['a', 'b'] }` |
+| `_GT` `_GTE` `_LT` `_LTE` | `>` `>=` `<` `<=` | `{ price_GTE: 10 }` |
+| `_CONTAINS` / `_NOT_CONTAINS` | `CONTAINS` | `{ title_CONTAINS: 'graph' }` |
+| `_STARTS_WITH` / `_NOT_STARTS_WITH` | `STARTS WITH` | `{ title_STARTS_WITH: 'A' }` |
+| `_ENDS_WITH` / `_NOT_ENDS_WITH` | `ENDS WITH` | `{ isbn_ENDS_WITH: '2' }` |
+| `_MATCHES` | `=~` (full-match regex, guarded; see section 14) | `{ isbn_MATCHES: '^978-[0-9]+$' }` |
+
+- Case-insensitive string comparison: add `mode: 'insensitive'` to the same where object: `{ title_CONTAINS: 'graph', mode: 'insensitive' }` (lower-cases both sides; string fields only).
+- Null: `{ isbn: null }` → `IS NULL`; `{ isbn_NOT: null }` → `IS NOT NULL`. Any other operator with `null` throws `OGMError`.
+- List fields (`tags: [String!]`) compare as a whole list: equality, `_NOT`, `_IN` (list of lists), `_NOT_IN` only.
+- Logical: `AND: [...]`, `OR: [...]`, `NOT: {...}`. **`OR: []` matches nothing; `AND: []` matches everything.**
+- Relationships: `rel_SOME` (or the bare `rel` key for a to-many), `rel_NONE`, `rel_ALL`, `rel_SINGLE` take the target's where. A to-one relationship takes the target's where under its bare key. `{ author: null }` / `{ author_NOT: null }` test existence.
+- Connections: `relConnection_SOME` / `_NONE` / `_ALL` / `_SINGLE: { node: {...}, edge: {...} }` filter on node and edge properties.
+- Unions: key the where by member type: `{ items_SOME: { Doc: { rank: 2 } } }`.
+- Scalar `@cypher` fields take the same operators: `{ titleLower_STARTS_WITH: 'the' }`.
+- `Duration` range filters compare at the current instant.
+
+```ts
+import { Book, Author } from './setup';
+import { BookStatus } from './grafeo.generated';
+
+await Book.find({
+  where: {
+    OR: [{ title_CONTAINS: 'graph', mode: 'insensitive' }, { tags: ['neo4j'] }],
+    NOT: { status: BookStatus.Draft },
+    categories_SOME: { name: 'Technology' },
+    author: { name_STARTS_WITH: 'J' },
+    titleLower_STARTS_WITH: 'g',
+  },
+});
+
+await Author.find({
+  where: { booksConnection_SOME: { edge: { role: 'Editor' }, node: { price_LT: 20 } } },
+});
+```
+
+### Sorting and pagination
+
+`options.sort` is an array; **each entry has exactly one key** (precedence = array position):
+
+```ts
+import { Book } from './setup';
+import { SortDirection, type BookSort } from './grafeo.generated';
+
+const sort: BookSort[] = [{ title: SortDirection.Asc }, { published: SortDirection.Desc }];
+await Book.find({ options: { sort, limit: 20, offset: 40 } });
+
+// @ts-expect-error — two keys in one sort entry are rejected (and throw at runtime)
+await Book.find({ options: { sort: [{ title: SortDirection.Asc, published: SortDirection.Desc }] } });
+```
+
+Generated enums are TypeScript string enums: `SortDirection.Asc` / `SortDirection.Desc` for `options.sort`, and `BookStatus.Published` for an SDL enum. The runtime accepts the strings `'ASC'` / `'PUBLISHED'`, but with generated types a string literal there is a type error. (The nested `orderBy` in `select` is typed `'ASC' | 'DESC'` and takes the strings.)
+
+Add a unique field (`id`) as the last sort key when paging on a non-unique key. Nested `orderBy` (relationship lists, connection edges) and `selectionSet` `sort` compile to `apoc.coll.sortMulti` and need APOC.
+
+---
+
+## 5. Writing
+
+### create → `{ info, books }`
+
+```ts
+import { Book } from './setup';
+
+const created = await Book.create({
+  input: [
+    {
+      title: 'Graph Databases',
+      isbn: '978-1491930892',
+      author: { connect: { where: { node: { name: 'Jim Webber' } }, edge: { role: 'Primary' } } },
+      categories: { create: [{ node: { name: 'Technology' } }] },
+    },
+  ],
+  select: { books: { id: true, title: true }, info: { nodesCreated: true } },
+});
+console.log(created.info.nodesCreated, created.books[0].id);
+```
+
+`input` is always an array. `@id` fields are generated and `@default` values applied. The response key is the plural of the type (`books`); `info` has `nodesCreated`, `nodesDeleted`, `relationshipsCreated`, `relationshipsDeleted`.
+
+### createMany → `{ count }` (scalars only)
+
+```ts
+import { Book } from './setup';
+
+const { count } = await Book.createMany({
+  data: [{ title: 'Book A', isbn: '111' }, { title: 'Book B', isbn: '222' }],
+  skipDuplicates: true, // MERGE on the @id / @unique fields every item supplies
+});
+```
+
+Relationship fields in `createMany` items are rejected; use `create()` for nested writes.
+
+### update → `{ info, books }`
+
+```ts
+import { Book } from './setup';
+
+await Book.update({
+  where: { id: 'book-1' },
+  update: { title: 'Updated Title', price: 39.5 },
+  connect: { categories: [{ where: { node: { name: 'Science' } } }] },
+  disconnect: { categories: [{ where: { node: { name: 'Fiction' } } }] },
+});
+
+// Nested ops inside `update`, per relationship field: one item per operation group
+await Book.update({
+  where: { id: 'book-1' },
+  update: {
+    categories: [{ disconnect: [{}], create: [{ node: { name: 'New' } }] }], // replace the set
+    author: { update: { node: { name: 'J. Webber' } } },
+  },
+});
+```
+
+- A connect whose `where` matches nothing is a no-op; the update still applies.
+- A disconnect with `{}` removes every relationship of that type.
+- Order inside one nested item (2.x default): `delete`, `disconnect`, `connect`, `create`, `update` (so an item's `update` also touches nodes its own `connect` / `create` just linked). `strict: true` uses the `@neo4j/graphql` order: `delete`, `disconnect`, `update`, `connect`, `create`.
+- Root order (2.x default): `update` body, then root `disconnect`, then root `connect`. Strict mode runs the root `disconnect` first.
+- Unknown keys throw `OGMError` at every depth.
+- Interface / union relationships: key nested input by member type (`pets: { Dog: { create: [...] } }`).
+
+### updateMany → `{ count }` (scalars only, no connect / disconnect)
+
+```ts
+import { Book } from './setup';
+import { BookStatus } from './grafeo.generated';
+
+const { count } = await Book.updateMany({
+  where: { published_LT: '2020-01-01T00:00:00Z' },
+  data: { status: BookStatus.Published }, // the parameter is `data`, not `update`
+});
+```
+
+### delete → `{ nodesDeleted, relationshipsDeleted }`, deleteMany → `{ count }`
+
+```ts
+import { Book } from './setup';
+
+await Book.delete({ where: { id: 'book-1' } });
+
+// Cascade: delete related nodes matching each item's where ({} = all related)
+await Book.delete({
+  where: { id: 'book-2' },
+  delete: { categories: [{ where: { node: { name: 'Temp' } } }] },
+});
+
+const { count } = await Book.deleteMany({ where: { title_CONTAINS: 'Draft' } });
+```
+
+Nodes are deleted with `DETACH DELETE`. A multi-level cascade (a `delete` inside a cascade item) throws.
+
+### upsert → node (scalars only)
+
+```ts
+import { Book } from './setup';
+
+const book = await Book.upsert({
+  where: { isbn: '978-1491930892' }, // ONLY @id / @unique fields: it is the MERGE key
+  create: { title: 'Graph Databases', isbn: '978-1491930892' },
+  update: { title: 'Graph Databases, 2nd Edition' },
+  select: { id: true, title: true },
+});
+```
+
+A non-unique key, an operator (`title_CONTAINS`), `AND` / `OR` or a `null` in `where` throws; relationship fields in `create` / `update` throw. For a non-unique match, use `findFirst` then `create` / `update`.
+
+### setLabels → `void`, and runtime labels
+
+```ts
+import { Book } from './setup';
+
+await Book.setLabels({ where: { id: 'book-1' }, addLabels: ['Featured'], removeLabels: ['Draft'] });
+
+const featured = await Book.find({ labels: ['Featured'] }); // MATCH (n:`Book`:`Featured`)
+await Book.create({ input: [{ title: 'New' }], labels: ['Featured'] });
+```
+
+`labels` is accepted by `find*`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `upsert` and the vector searches. It is not part of the `delete` / `deleteMany` signatures in 2.x (strict mode applies an untyped `labels` there; default mode ignores it and warns). For static multi-label types use `@node(labels: ["Book", "Product"])`.
+
+---
+
+## 6. count and aggregate
+
+```ts
+import { Book } from './setup';
+import { BookStatus } from './grafeo.generated';
+
+const total = await Book.count();
+const published = await Book.count({ where: { status: BookStatus.Published } });
+
+const stats = await Book.aggregate({
+  where: { status: BookStatus.Published },
+  aggregate: { count: true, price: true },
+});
+// { count: 42, price: { min: 9.99, max: 59.99, average: 24.5 } }
+```
+
+Relationship aggregates are selections: `select: { categoriesAggregate: { select: { count: true } } }`, or `categoriesAggregate { count }` in a `selectionSet`. `<rel>Aggregate` **where** filters (`where: { postsAggregate: { count_GT: 1 } }`) are not supported.
+
+---
+
+## 7. Transactions
+
+Every model method takes `context` **inside its params object**. A second positional argument is ignored, and the call then runs outside the transaction.
+
+```ts
+import { ogm, Book, Author, driver } from './setup';
+
+// Callback form: commit on success, roll back on throw
+await ogm.$transaction(async (ctx) => {
+  await Book.create({ input: [{ title: 'Book A' }], context: ctx });
+  await Book.update({ where: { title: 'Book A' }, update: { price: 10 }, context: ctx });
+});
+
+// Array form: results in order
+const [books, authors] = await ogm.$transaction([
+  (ctx) => Book.find({ select: { id: true }, context: ctx }),
+  (ctx) => Author.find({ select: { id: true }, context: ctx }),
+]);
+
+// Transaction metadata (visible in SHOW TRANSACTIONS)
+await ogm.$transaction(async (ctx) => { await Book.count({ context: ctx }); }, { metadata: { job: 'import' } });
+
+// Your own driver transaction or session
+const session = driver.session();
+try {
+  await session.executeWrite((tx) => Book.create({ input: [{ title: 'C' }], context: { transaction: tx } }));
+  const tx = session.beginTransaction();
+  await Book.delete({ where: { title: 'C' }, context: { transaction: tx } });
+  await tx.commit();
+} finally {
+  await session.close();
+}
+```
+
+`context` accepts `{ transaction }`, `{ session }` (auto-commit on that session), `{ executionContext: transaction }` (legacy name) and `{ metadata }`. `$queryRaw` / `$executeRaw` take no `context`: they always run in their own session, outside any `$transaction`. Inside a transaction, use `ctx.transaction.run(cypher, params)` for raw Cypher.
+
+---
+
+## 8. Interface models (read-only)
+
+```ts
+import { ogm } from './setup';
+
+const Entity = ogm.interfaceModel('Entity');
+const entities = await Entity.find({ where: { name_CONTAINS: 'Acme' }, selectionSet: '{ id name }' });
+// [{ id: '1', name: 'Acme', __typename: 'Publisher' }, ...]
+const n = await Entity.count();
+```
+
+Methods: `find`, `findFirst`, `findUnique`, `findFirstOrThrow`, `findUniqueOrThrow`, `count`, `aggregate`. Results always carry `__typename`. Mutations are not available: write through the concrete model (`ogm.model('Author')`).
+
+---
+
+## 9. Fulltext search
+
+Requires a `@fulltext` index on the type and the index in the database (`grafeo db push`, or `ogm.assertIndexesAndConstraints({ options: { create: true } })`).
+
+```ts
+import { Book } from './setup';
+
+await Book.find({ fulltext: { BookSearch: { phrase: 'graph databases' } }, select: { id: true, title: true } });
+await Book.find({ fulltext: { BookSearch: { phrase: 'graph', score: 1.0 } }, where: { price_LT: 10 } });
+await Book.find({
+  fulltext: {
+    AND: [
+      { OR: [{ BookSearch: { phrase: 'graph' } }, { BookSearch: { phrase: 'database' } }] },
+      { NOT: { BookSearch: { phrase: 'draft' } } },
+    ],
+  },
+});
+```
+
+- One index per leaf: to search two indexes, combine them with `AND` / `OR`.
+- One operator (`AND` / `OR` / `NOT`) per object; nest them to combine.
+- Index names are typed: a misspelled index name is a type error.
+- Phrases are Lucene-escaped.
+
+---
+
+## 10. Vector search
+
+`searchByVector` and `searchByPhrase` return `Array<{ node, score }>`. `k` is clamped to `[1, 1000]`. Create the vector index with `grafeo db push` (dimensions come from `vectorIndexes` in `grafeo.config.ts`) or with `CREATE VECTOR INDEX` yourself; `assertIndexesAndConstraints` does not create vector indexes.
+
+```ts
+import { Book } from './setup';
+import { BookStatus } from './grafeo.generated';
+
+declare const embedding: number[]; // from your own embedding model
+
+const similar = await Book.searchByVector({
+  indexName: 'book_embedding_idx',
+  vector: embedding,
+  k: 10,
+  where: { status: BookStatus.Published },
+  select: { id: true, title: true },
+});
+similar.forEach(({ node, score }) => console.log(node.title, score));
+
+// Server-side encoding: needs `provider` on the @vector index and the Neo4j GenAI plugin
+const byPhrase = await Book.searchByPhrase({
+  indexName: 'book_embedding_idx',
+  phrase: 'distributed consensus',
+  k: 5,
+  providerConfig: { token: process.env.OPENAI_API_KEY },
+});
+```
+
+Not supported: relationship vector indexes, automatic embedding on write.
+
+---
+
+## 11. Raw Cypher
+
+```ts
+import neo4j from 'neo4j-driver';
+import { ogm } from './setup';
+
+const rows = await ogm.$queryRaw<{ title: string }>(
+  'MATCH (b:Book) WHERE b.price < $max RETURN b.title AS title LIMIT $n',
+  { max: 20, n: neo4j.int(5) },
+);
+const { recordsAffected } = await ogm.$executeRaw('MATCH (b:Book {id: $id}) DETACH DELETE b', { id: 'book-1' });
+```
+
+Raw Cypher bypasses node-level security and runs outside `$transaction` (section 7). Always pass values as parameters.
+
+---
+
+## 12. Node-level security (policies)
+
+Policies are per type and per operation (`read`, `create`, `update`, `delete`, `aggregate`, `count`, or `'*'`). They compile into the Cypher of every read and write that reaches the type: root queries, nested selections, relationship filters, connect / disconnect (`read`), nested creates (`create`), nested updates (`update`) and cascade deletes (`delete`).
+
+```ts
+import { OGM, override, permissive, restrictive, PolicyDeniedError, type PoliciesByModel } from 'grafeo-ogm';
+import { BookStatus, type ModelMap } from './grafeo.generated';
+import { driver, typeDefs } from './setup';
+
+// A `type` alias, not an `interface`: the context must be assignable to Record<string, unknown>.
+type RequestCtx = { userId: string; roles: string[] };
+
+const policies: PoliciesByModel<ModelMap, RequestCtx> = {
+  Book: [
+    // When true, every other Book policy is skipped for this ctx
+    override({ operations: ['*'], when: (c: RequestCtx) => c.roles.includes('admin'), name: 'admin' }),
+    // Permissives OR together: any match grants
+    permissive({ operations: ['read', 'update', 'delete'], when: (c: RequestCtx) => ({ ownerId: c.userId }), name: 'owner' }),
+    permissive({ operations: ['read'], when: () => ({ status: BookStatus.Published }), name: 'public' }),
+    // For `create` a permissive only has to apply; its where-partial is not checked against the input
+    permissive({ operations: ['create'], when: () => ({}), name: 'anyone-can-create' }),
+    // Read-side restrictive: ANDed into the WHERE (where-partial or boolean)
+    restrictive({ operations: ['read'], when: () => ({ title_NOT: null }), name: 'has-title' }),
+    // Write-side restrictive (WITH CHECK on create / update input): must return true to allow
+    restrictive({
+      operations: ['create', 'update'],
+      when: (c: RequestCtx, input) => input.ownerId === undefined || input.ownerId === c.userId,
+      name: 'own-owner-id',
+    }),
+  ],
+};
+
+const secured = new OGM<ModelMap>({
+  typeDefs,
+  driver,
+  strict: true,
+  // OGMConfig types policy callbacks with the generic PolicyContext; this cast keeps RequestCtx in the callbacks
+  policies: policies as PoliciesByModel<ModelMap>,
+  policyDefaults: { onDeny: 'empty' }, // or 'throw' → PolicyDeniedError
+});
+
+// Per request: bind the context, then use models from the wrapper
+const scoped = secured.withContext<RequestCtx>({ userId: 'u1', roles: [] });
+const visible = await scoped.model('Book').find({ where: { price_LT: 30 } });
+
+try {
+  await scoped.model('Book').create({ input: [{ title: 'Mine', ownerId: 'someone-else' }] });
+} catch (e) {
+  if (e instanceof PolicyDeniedError) console.warn('denied');
+}
+
+// System access (migrations, seeds): explicit and logged
+await secured.unsafe.bypassPolicies().model('Book').count();
+```
+
+Rules:
+
+- **Policies apply only to models from `ogm.withContext(ctx)`.** A bare `ogm.model('Book')` on an OGM with `policies` applies none (it warns in 2.x and throws under `strict: true`). Use `ogm.unsafe.bypassPolicies()` for intentional system access.
+- An operation no policy of the type lists is not restricted. Once any policy lists it, at least one applying permissive (or an override) must grant it; otherwise it is denied: reads match nothing (`onDeny: 'empty'`) or throw `PolicyDeniedError` (`'throw'`). A create that has `create` policies but no applying permissive always throws `PolicyDeniedError`.
+- A restrictive's `operations` must be all read-side (`read`, `delete`, `aggregate`, `count`) or all write-side (`create`, `update`); mixed arrays throw at construction.
+- `appliesWhen: (ctx) => boolean` on a permissive / restrictive turns it on or off per context.
+- Interface policies AND with each implementor's (restrictives) and OR with them (permissives).
+- Mutation responses are filtered by the root type's `read` policy.
+- Not enforced: `$queryRaw`, `$executeRaw`, and the bodies of `@cypher` fields.
+- Audit metadata (`modelType`, `operation`, `policiesEvaluated`, a key-only `ctxFingerprint`) is attached to each query's transaction unless `policyDefaults.auditMetadata: false`; inside an already-open transaction it cannot be attached (a warning is logged).
+- `scoped.model('Book').explainPolicies({ where, select })` reports, per candidate node, which named clause hid it. It returns hidden nodes: expose it only on admin paths.
+- An OGM without `policies` emits byte-identical Cypher to one that never heard of policies.
+
+---
+
+## 13. Strict mode
+
+`new OGM({ ..., strict: true })`. In 2.x it is off by default; 3.0 turns it on. With it off, about 50 surprising input shapes keep their old behaviour and log one `warn` per OGM instance and shape through `logger`, ending in "Enable `strict: true` (default in 3.0) to …". With it on, those shapes throw `OGMError` or compile to what the input means. Examples of what strict mode changes:
+
+- Unknown keys in connect / disconnect items, edge properties and nested write inputs throw (default: ignored, which can widen a connect to every node).
+- Unknown fields in a `selectionSet` / `select` throw; unknown top-level method parameters throw.
+- `upsert` with more than one unique key in `where`, `mode: 'insensitive'` with `_IN`, fulltext `score` inside `AND` / `OR` / `NOT`, and `@include` / `@skip` in a `selectionSet` get corrected handling.
+- Nested op order follows `@neo4j/graphql` (`delete`, `disconnect`, `update`, `connect`, `create`), root `disconnect` runs before the `update` body.
+- `@node(labels: [...])` replaces the type name as the label set; list `@cypher` fields collect every row.
+- `connectOrCreate` and root `create` / `connectOrCreate` / `delete` in `update()` are applied (default: ignored with a warning).
+- A bare `ogm.model()` on an OGM with `policies` throws.
+
+Use `strict: true` in new code. Keep `generateTypes` / `grafeo.config.ts` `strict` equal to the OGM's. The full list is the README "Strict mode" section.
+
+---
+
+## 14. The `_MATCHES` ReDoS guard
+
+Every `_MATCHES` pattern is checked at compile time and must be provably linear-time; anything else throws `OGMError` (no bypass). `=~` is a full match.
+
+- Accepted: literals, escapes, character classes, `.`, `\d` `\w` `\s`, quantifiers on single characters, anchors, non-quantified groups, inline flags `i` `m` `s` `d`, one `.*`, and the contains form `'(?s).*term.*'` / `'(?is).*term.*'` (the dot-all flag group must come first).
+- Refused: alternation `a|b`, quantified groups `(ab)+`, lookaround, backreferences, competing quantifiers such as `a*a*`, `.*a.*b.*`, and `(?i).*term.*` without `s`.
+- For a substring search use `{ field_CONTAINS: term, mode: 'insensitive' }` instead: no escaping needed.
+- When interpolating user input into a pattern, escape every metacharacter: `term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')`.
+- `features.filters.String.MATCHES: false` disables the operator; `generateTypes({ config: { stringMatchesFilter: false } })` removes it from the types.
+- Test your patterns with `isSafeRegexPattern(pattern)` / `assertSafeRegexPattern(pattern, context)` (exported from `grafeo-ogm` and `grafeo-ogm/testing`).
+
+---
+
+## 15. Testing without a database
+
+```ts
+import { createCompileOnlyOgm, compile, normalizeCompiled, CypherAssert, isSafeRegexPattern } from 'grafeo-ogm/testing';
+import type { ModelMap, InterfaceModelMap } from './grafeo.generated';
+import { typeDefs } from './setup';
+
+// Same config as production, minus driver / database
+const testOgm = createCompileOnlyOgm<ModelMap, InterfaceModelMap>({ typeDefs, strict: true });
+
+const q = await compile(testOgm.model('Book')).find({
+  where: { title_CONTAINS: 'graph', mode: 'insensitive' },
+});
+// q: { cypher, params, metadata?, accessMode?, warnings }
+expect(q.cypher).toContain('toLower(n.`title`) CONTAINS toLower($param0)');
+expect(q.params).toEqual({ param0: 'graph' });
+CypherAssert.assertContainsClause(q.cypher, 'WHERE', 'toLower');
+expect(normalizeCompiled(q)).toMatchSnapshot();
+
+// compile rejects with whatever the real call would throw before reaching the database
+await expect(compile(testOgm.model('Book')).find({ where: { title_MATCHES: '(a+)+' } })).rejects.toThrow(
+  /Unsafe `_MATCHES` pattern/,
+);
+expect(isSafeRegexPattern('(?is).*term.*')).toBe(true);
+```
+
+- `compile(model)` works on `testOgm.model(…)`, `testOgm.interfaceModel(…)`, `testOgm.withContext(ctx).model(…)` and `testOgm.unsafe.bypassPolicies().model(…)`, for every single-statement method (`find*`, `count`, `aggregate`, `create`, `createMany`, `update`, `updateMany`, `delete`, `deleteMany`, `upsert`, `setLabels`, `searchByVector`, `searchByPhrase`, `explainPolicies`), with the real parameter types.
+- `context` takes only `metadata` there; a model method called directly on a compile-only OGM rejects, as do raw Cypher, `$transaction` and `assertIndexesAndConstraints`.
+- The Cypher text is not a semver contract: assert on fragments (`toContain`, `CypherAssert`), treat snapshots as diffs to review on upgrade.
+- Other helpers: `CypherAssert.assertStructurallyEqual / assertContainsClause / assertNotContainsClause / assertParams`, `Neo4jRecordFactory.create / integer / dateTime / node` (mock driver values), `SelectionSetFactory.gql / select`.
+
+---
+
+## 16. Errors
+
+```ts
+import { OGMError, RecordNotFoundError, PolicyDeniedError } from 'grafeo-ogm';
+import { Book } from './setup';
+
+try {
+  await Book.findUniqueOrThrow({ where: { id: 'missing' } });
+} catch (e) {
+  if (e instanceof RecordNotFoundError) console.log(e.model, e.where);
+  else if (e instanceof PolicyDeniedError) console.log('policy denied');
+  else if (e instanceof OGMError) console.log('invalid input or unsupported shape:', e.message, e.cause);
+  else throw e; // driver / server errors (Neo4jError) pass through
+}
+```
+
+- `OGMError` — base class: invalid input, unknown keys / fields, refused `_MATCHES`, strict-mode rejections, missing APOC (`cause` holds the Neo4j error).
+- `RecordNotFoundError extends OGMError` — from `findFirstOrThrow` / `findUniqueOrThrow`; has `model` and `where`.
+- `PolicyDeniedError` — a policy denied the operation (write restrictives, create default-deny, `onDeny: 'throw'`).
+- `SubgraphOperationError extends OGMError` — from `cloneSubgraph` / `deleteSubgraph`.
+
+---
+
+## 17. CLI (`npx grafeo …`)
+
+All commands read `grafeo.config.ts` (or `.js` / `.json`); flags override it.
+
+```ts
+// grafeo.config.ts
+import { defineConfig } from 'grafeo-ogm';
+
+export default defineConfig({
+  schema: './schema.graphql',
+  out: './grafeo.generated.ts',
+  database: { uri: process.env.NEO4J_URI, username: process.env.NEO4J_USERNAME },
+  seed: './seed.ts',
+  vectorIndexes: { book_embedding_idx: { dimensions: 1536, similarity: 'cosine' } },
+  strict: true,
+});
+```
+
+| Command | Purpose |
+|---|---|
+| `grafeo init [--yes] [--fresh] [--seed] [--force]` | Scaffold or detect a setup; writes `grafeo.config.ts` and a `generate` npm script. Non-destructive. |
+| `grafeo generate [--watch] [--verify] [--schema] [--out]` | Generate types (`--verify`: CI staleness gate). |
+| `grafeo db push [--dry-run] [--check] [--force-drop --yes] [--strict]` | Sync SDL-declared unique constraints, fulltext and vector indexes with the database. Additive and idempotent; never touches data; drops only grafeo-named orphans with `--force-drop`. `--check`: CI drift gate. |
+| `grafeo db seed` | Runs the default export of your seed script with a connected OGM, then closes the driver. |
+
+Connection: CLI flag (`--uri`, `--username`, `--database`) > config `database` > env (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`). The password is never a CLI flag. Config and seed files run as trusted code.
+
+```ts
+// seed.ts — use upsert so re-running converges
+import type { OGM } from 'grafeo-ogm';
+
+export default async function seed(ogm: OGM) {
+  await ogm.model('Book').upsert({
+    where: { isbn: '111' },
+    create: { title: 'Dune', isbn: '111' },
+    update: { title: 'Dune' },
+  });
+}
+```
+
+---
+
+## 18. Server requirements
+
+| Feature | Needs |
+|---|---|
+| Everything else | Neo4j 5.x (5.26 LTS, Aura 5.27, or later) |
+| Nested `orderBy`, `selectionSet` `options.sort`, connection `sort` | APOC |
+| `cloneSubgraph` / `deleteSubgraph` | APOC |
+| `searchByVector` | Neo4j 5.11+ |
+| `searchByPhrase` | Neo4j 5.11+ with the GenAI plugin |
+
+Without APOC those queries throw an `OGMError` naming the feature.
+
+Integers: use the driver's default configuration (or `disableLosslessIntegers: true`). With `useBigInt: true`, every integer comes back as a `bigint`, which does not match the generated `number` types.
+
+---
+
+## 19. Common mistakes
+
+1. **Confusing grafeo-ogm with GrafeoDB.** grafeo-ogm is the Neo4j OGM (`grafeo-ogm` on npm, `import { OGM } from 'grafeo-ogm'`). GrafeoDB (`@grafeo-db/js`) is a different, Rust-based database.
+2. **Expecting `select` to narrow the result type.** `find({ select })` returns the full node type. Use `SelectResult<Node, typeof select>` with an `as const` select object.
+3. **Passing `select` and `selectionSet` together.** It throws. Pick one.
+4. **Passing `context` as a second argument.** `Book.find({ where }, { transaction })` ignores the second argument and runs outside the transaction. Write `Book.find({ where, context: ctx })`.
+5. **Using `update` instead of `data` in `updateMany`.** `updateMany({ where, data })`; `update({ where, update, connect, disconnect })`.
+6. **Building `OR` from a possibly empty list.** `OR: []` matches nothing (deliberately, unlike `@neo4j/graphql-ogm`, where it dropped the filter and could wipe a label). `AND: []` matches everything. Omit the key when there is no filter.
+7. **A field named `mode`.** On a type that declares its own `mode` field, `where.mode` filters on that field and the `mode: 'insensitive'` switch is unavailable for that type.
+8. **Expecting `assertIndexesAndConstraints()` to check or create anything.** Without `{ options: { create: true } }` it does nothing. It never creates vector indexes; use `grafeo db push`.
+9. **Assuming `@id` is unique in the database.** `@id` only generates a UUID. Add `@unique` for a constraint.
+10. **Two keys in one sort entry.** `sort: [{ title: SortDirection.Asc, price: SortDirection.Desc }]` is a type error and throws. Use one entry per key.
+11. **String literals for generated enums.** With generated types, `options.sort` takes `SortDirection.Asc` / `SortDirection.Desc`, and SDL enum fields take the enum member (`BookStatus.Published`), not `'ASC'` / `'PUBLISHED'`.
+12. **Non-unique keys in `upsert.where`, or nested writes in `upsert` / `createMany` / `updateMany`.** They throw; those methods are scalar-only.
+13. **Forgetting `withContext` with policies.** A bare `ogm.model()` applies no policy. Raw Cypher never does.
+14. **Regex for substring search.** `_MATCHES: '(?i).*term.*'` is refused. Use `_CONTAINS` + `mode: 'insensitive'`, or the dot-all form `'(?is).*term.*'` with escaped input.
+15. **Calling a mutation on an `InterfaceModel`.** Interface models are read-only and have no `create` / `update` / `delete` methods; write through the concrete model.
+16. **Two fulltext indexes in one leaf, or two operators in one object.** Combine with `AND` / `OR`, and nest operators.
+17. **`findFirst({ options: { limit } })`.** `findFirst` has no `limit`; it already returns one node.
+18. **`$queryRaw` inside `$transaction`.** It runs in its own session; use `ctx.transaction.run(...)`.
+19. **Writing `type X @node implements I`.** Directives come after `implements`.
+20. **`@relationship(direction: "OUT")` or `INBOUND`.** `direction` is the enum value `IN` or `OUT`, unquoted.
+21. **Relying on 2.x default-mode quirks in new code.** Turn on `strict: true` and fix what it reports.
+22. **Expecting Cypher text to be stable across releases in snapshot tests.** It is not part of semver; assert on fragments.
+
+---
+
+## 20. Migrating from `@neo4j/graphql-ogm`
+
+1. `npm uninstall @neo4j/graphql-ogm && npm install grafeo-ogm`.
+2. Change `import { OGM } from '@neo4j/graphql-ogm'` to `import { OGM } from 'grafeo-ogm'`.
+3. Replace `generate({ ogm, outFile })` with `generateTypes({ typeDefs, outFile })` or `grafeo generate`, then fix what no longer compiles.
+4. Same: `new OGM({ typeDefs, driver, database })`, `ogm.model('X')`, `find` / `create` / `update` / `delete` / `aggregate` with `where`, `options`, `fulltext`, inputs and `selectionSet`, `<rel>Aggregate` selections.
+5. Different: `typeDefs` must be a string; `resolvers`, `debug`, `validate`, `args` and `rootValue` are not read; `context` takes `{ transaction }`, `{ session }` or `{ executionContext: transaction }`; `OR: []` matches nothing; `assertIndexesAndConstraints` without `create` does nothing (upstream checked and threw); nested op order inside an update item differs unless `strict: true`.
+
+---
+
+## 21. Links
+
+- README: https://github.com/neomodular/grafeo-ogm#readme
+- Strict mode list: https://github.com/neomodular/grafeo-ogm#strict-mode
+- Node-level security: https://github.com/neomodular/grafeo-ogm#node-level-security
+- CHANGELOG: https://github.com/neomodular/grafeo-ogm/blob/main/CHANGELOG.md
+- Security policy: https://github.com/neomodular/grafeo-ogm/blob/main/SECURITY.md
+- Examples: https://github.com/neomodular/grafeo-ogm/tree/main/examples
+- Issues: https://github.com/neomodular/grafeo-ogm/issues
