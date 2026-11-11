@@ -204,6 +204,53 @@ describe('assertSafeRegexPattern — `_MATCHES` ReDoS guard', () => {
       expect(() => check('[\\011]*\\s*')).toThrow(OGMError);
       expect(() => check('\\0')).toThrow(OGMError);
     });
+
+    // v2.28.1 — Java reads code points: a character outside the BMP is one
+    // atom, and a quantifier repeats it whole. Pre-2.28.1 its high
+    // surrogate looked like a required atom fencing the quantified ones.
+    describe('characters outside the BMP are one code point', () => {
+      const E = '\u{1F600}'; // 😀
+      const F = '\u{1F601}'; // 😁
+      it.each([
+        (E + '*').repeat(2) + 'y',
+        (E + '*').repeat(6) + 'y',
+        `${E}+${E}+`,
+        `${E}*[${E}-\u{1F64F}]*`,
+        `[${E}${F}]*${F}*`,
+        `[\u{1F600}-\u{1F64F}]+${F}+`,
+        `(?s)${E}*.*${E}*x`,
+      ])('refuses %j', (pattern) => {
+        expect(() => check(pattern)).toThrow(/contend/);
+      });
+
+      it.each([
+        `^${E}+$`,
+        `${E}*${F}*y`,
+        `${E}*x*${E}*`.replace(/x\*/, 'x'),
+        `[${E}]*[${F}]*`,
+        `[\u{1F600}-\u{1F602}]+x+`,
+        `(?is).*${E}.*`,
+        `a*${E}a*`,
+      ])('accepts %j', (pattern) => {
+        expect(() => check(pattern)).not.toThrow();
+      });
+
+      it.each(['\uD83D*a', 'a\uDE00*', '[\uD83D]', '[a-\uD83D]', `${E}\uD83D`])(
+        'refuses an unpaired surrogate %j',
+        (pattern) => {
+          expect(() => check(pattern)).toThrow(/unpaired UTF-16 surrogate/);
+        },
+      );
+
+      it('still refuses the escape forms of a supplementary character', () => {
+        for (const p of ['\\uD83D\\uDE00*', '\\x{1F600}*', '[\\x{1F600}]*'])
+          expect(() => check(p)).toThrow(/unsupported escape/);
+      });
+
+      it('refuses an inverted supplementary range', () => {
+        expect(() => check(`[${F}-${E}]`)).toThrow(/inverted range/);
+      });
+    });
   });
 
   describe('inline flags — supported, and sound under case-folding', () => {

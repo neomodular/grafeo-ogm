@@ -311,6 +311,12 @@ export function mergeParams(
  * refused. DOTALL is honoured only when the pattern OPENS with a zero-width
  * flag group containing `s` and no flag group anywhere turns a flag off
  * (`-`) — anything else is treated as non-DOTALL (fail-closed).
+ *
+ * v2.28.1 — CODE POINTS. Java reads the pattern and the subject by code
+ * point, so every literal and class member is parsed as one code point
+ * (`codePointAtOrRefuse`), never as UTF-16 code units: a character outside
+ * the BMP is one atom, and an unpaired surrogate is refused. The escape
+ * forms (`😀`, `\x{…}`) stay refused as unsupported escapes.
  */
 
 /** Longest `_MATCHES` pattern accepted — a shape-independent backstop. */
@@ -627,8 +633,32 @@ function parseAtomOrRefuse(
   if (c === '.') return { charset: BROAD_CHARSET, next: i + 1 };
   if (c === '[') return parseClassOrRefuse(p, i, refuse);
   if (c === '\\') return parseEscapeOrRefuse(p, i, refuse);
-  // Ordinary literal character.
-  return { charset: ranges([c.charCodeAt(0), c.charCodeAt(0)]), next: i + 1 };
+  // Ordinary literal character — one code point (v2.28.1).
+  const { cp, len } = codePointAtOrRefuse(p, i, refuse);
+  return { charset: ranges([cp, cp]), next: i + len };
+}
+
+/**
+ * v2.28.1 — the code point at `p[i]` and its length in UTF-16 code units.
+ *
+ * Java's regex engine reads the pattern (and the subject) by code point, so
+ * a character outside the Basic Multilingual Plane (an emoji) is ONE atom
+ * that a quantifier repeats as a whole: `😀*😀*y` is `x*x*y` to the server.
+ * Pre-2.28.1 the guard read UTF-16 code units, so the high surrogate of
+ * each emoji looked like a required atom between the quantified ones and
+ * fenced them apart: `'😀*'.repeat(6) + 'y'` was accepted and backtracked
+ * exponentially (14 s on Neo4j 5.26). An unpaired surrogate is refused: it
+ * cannot be modelled as either a code point or a code unit soundly.
+ */
+function codePointAtOrRefuse(
+  p: string,
+  i: number,
+  refuse: (why: string) => never,
+): { cp: number; len: number } {
+  const cp = p.codePointAt(i)!;
+  if (cp >= 0xd800 && cp <= 0xdfff)
+    refuse('an unpaired UTF-16 surrogate is not supported');
+  return { cp, len: cp > 0xffff ? 2 : 1 };
 }
 
 /** Parse a `\`-escape at index `i` (points at the backslash). */
@@ -748,8 +778,10 @@ function parseClassOrRefuse(
       else return refuse(`unsupported escape \`\\${e}\` in character class`);
       i += 2;
     } else {
-      low = c.charCodeAt(0);
-      i++;
+      // v2.28.1 — a member is one code point (see `codePointAtOrRefuse`).
+      const { cp, len } = codePointAtOrRefuse(p, i, refuse);
+      low = cp;
+      i += len;
     }
 
     // Optional range `low-high` (a `-` not immediately before the closing `]`).
@@ -762,8 +794,9 @@ function parseClassOrRefuse(
         else return refuse('unsupported range endpoint in character class');
         i += 3;
       } else {
-        high = hc.charCodeAt(0);
-        i += 2;
+        const { cp, len } = codePointAtOrRefuse(p, i + 1, refuse);
+        high = cp;
+        i += 1 + len;
       }
       if (high < low) refuse('inverted range in character class');
       rs.push([low, high]);
