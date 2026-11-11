@@ -2972,7 +2972,41 @@ SelectionSetFactory.select(['id', 'title', { author: ['name'] }]);
 
 ---
 
+## How grafeo-ogm stays correct
+
+grafeo-ogm has shipped many releases and published a security advisory for every security fix. This is how fixes are found, proven and released.
+
+**Tested against a real database, not only mocks**
+
+- Every pull request, every push to `main` and every npm publish runs the live suites (`tests/integration/`: 100 suites, 1,100+ tests) against Neo4j 5.26 with APOC and GenAI ([`live.yml`](./.github/workflows/live.yml)). The publish job in [`release.yml`](./.github/workflows/release.yml) cannot start until that run is green.
+- Each live suite is opt-in on an environment variable, so a missing variable could quietly skip it. [`assert-live-suites-ran.cjs`](./scripts/ci/assert-live-suites-ran.cjs) fails the job if any live test was skipped or any spec file is missing from the report.
+- Seven property-based suites (`tests/integration/properties/`, fast-check, fixed seed) run randomly generated reads and writes on the server and check the invariants below, plus scalar round-trips, aggregate counts, and that an allow-all policy set behaves exactly like no policies.
+
+**Invariants every change must keep**
+
+- Generated Cypher runs on Neo4j 5.x (5.26 LTS, Aura): you get a result or an `OGMError`, never a server syntax error.
+- A write returns each updated node exactly once, whatever the nested operations match, and does not half-commit when a nested match finds nothing.
+- A write changes only what it names: matched roots, nodes reached by nested operations, new nodes and the named relationships.
+- A type's [node-level security](#node-level-security) policy applies on every path that reaches it: root, nested selection, relationship filters, connect / disconnect, nested create / update and cascade delete.
+- Write input the runtime does not support throws `OGMError` instead of being silently dropped.
+
+**Security practice**
+
+- Values are always Cypher parameters; identifiers and labels are validated and backtick-escaped; `_MATCHES` patterns must pass a fail-closed ReDoS guard. See [Security](#security).
+- An OGM without `policies` emits byte-identical Cypher, pinned by a regression test, so the policy layer costs nothing when unused.
+- A bug fix starts with a failing test against a live Neo4j 5.26 and is shown to fail on the code before the fix.
+- Security fixes are disclosed in public [GitHub security advisories](https://github.com/neomodular/grafeo-ogm/security/advisories) (13 published so far) and in the [CHANGELOG](./CHANGELOG.md). To report one privately, see [SECURITY.md](./SECURITY.md).
+
+**Versioning**
+
+- Semantic versioning, with every release in the [CHANGELOG](./CHANGELOG.md). A fix that changes behaviour callers may rely on ships as a minor release with a "Behavior changes" section, never as a patch.
+- Since 2.9.0, when a fix would change results that existing code may rely on, the default keeps the old behaviour and logs a one-time warning; the corrected behaviour is opt-in with [`strict: true`](#strict-mode), which becomes the default in 3.0. Security fixes, and fixes for input that was silently dropped or rejected by the server, are not held behind the switch.
+
+---
+
 ## Security
+
+See also: [How grafeo-ogm stays correct](#how-grafeo-ogm-stays-correct) and [SECURITY.md](./SECURITY.md) for reporting a vulnerability.
 
 grafeo-ogm implements 8 layered security controls. Every user-provided value passes through validation before it reaches the Cypher string.
 
