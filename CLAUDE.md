@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-grafeo-ogm is a type-safe Object-Graph Mapper for Neo4j that uses GraphQL SDL as the schema definition language. It compiles high-level CRUD operations into parameterized Cypher queries with full TypeScript type safety via code generation. It is a community continuation of the deprecated `@neo4j/graphql-ogm`, maintaining full backwards compatibility while adding Prisma-inspired query methods and runtime multi-label support.
+grafeo-ogm is a type-safe Object-Graph Mapper for Neo4j that uses GraphQL SDL as the schema definition language. It compiles high-level CRUD operations into parameterized Cypher queries with full TypeScript type safety via code generation. It continues `@neo4j/graphql-ogm`, which was removed from `@neo4j/graphql` 6.0.0 (its 5.x LTS line still ships, tied to `neo4j-driver` 5). It keeps the same `OGM` / `Model` API, with deliberate differences listed in the README Migration section, and adds Prisma-inspired query methods, runtime multi-label support and `neo4j-driver` 6 support. When describing upstream, say "removed from v6" or "discontinued after v5", not "deprecated" or "abandoned".
 
 ## Commands
 
