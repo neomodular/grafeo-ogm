@@ -1,0 +1,240 @@
+# Fixture schema for scripts/docs/typecheck-examples.mjs. It covers the
+# types and fields the README / llms-full.txt examples use. The first part is
+# the books schema most examples share; the second part holds the types the
+# "Strict mode" items and a few other sections illustrate with.
+
+interface Entity {
+  id: ID!
+  name: String!
+}
+
+type Author implements Entity @node {
+  id: ID! @id @unique
+  name: String!
+  email: String @unique
+  books: [Book!]! @relationship(type: "WRITTEN_BY", direction: IN, properties: "WrittenBy")
+  posts: [Post!]! @relationship(type: "WROTE", direction: OUT, properties: "Authored")
+  friends: [Author!]! @relationship(type: "FRIENDS_WITH", direction: OUT)
+}
+
+type Publisher implements Entity @node {
+  id: ID! @id @unique
+  name: String!
+  website: String
+}
+
+enum BookStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+type Book @node
+  @fulltext(indexes: [
+    { name: "BookSearch", fields: ["title", "description"] }
+    { name: "BlurbSearch", fields: ["blurb"] }
+  ])
+  @vector(indexes: [
+    { indexName: "book_embedding_idx", queryName: "similarBooks", embeddingProperty: "embedding", provider: "OpenAI" }
+  ]) {
+  id: ID! @id @unique
+  title: String!
+  isbn: String @unique
+  description: String
+  blurb: String
+  price: Float
+  tags: [String!]
+  status: BookStatus @default(value: DRAFT)
+  ownerId: String
+  published: DateTime
+  embedding: [Float!]
+  titleLower: String @cypher(statement: "RETURN toLower(this.title) AS result", columnName: "result")
+  insensitiveTitle: String @cypher(statement: "RETURN toLower(this.title) AS result", columnName: "result")
+  reviewCount: Int @cypher(statement: "MATCH (this)-[:HAS_REVIEW]->(r) RETURN count(r) AS count", columnName: "count")
+  averageRating: Float @cypher(statement: "MATCH (this)-[:HAS_REVIEW]->(r) RETURN avg(r.rating) AS avg", columnName: "avg")
+  author: Author @relationship(type: "WRITTEN_BY", direction: OUT, properties: "WrittenBy")
+  categories: [Category!]! @relationship(type: "IN_CATEGORY", direction: OUT, properties: "InCategory")
+  reviews: [Review!]! @relationship(type: "HAS_REVIEW", direction: OUT, properties: "HasReview")
+  chapters: [ChapterType!]! @relationship(type: "HAS_CHAPTER", direction: OUT)
+}
+
+type Category @node {
+  id: ID! @id @unique
+  name: String!
+}
+
+type Review @node {
+  id: ID! @id @unique
+  stars: Int
+  body: String
+}
+
+type StandardChapter @node {
+  id: ID! @id @unique
+  title: String
+}
+
+type RangeChapter @node {
+  id: ID! @id @unique
+  title: String
+  fromPage: Int
+  toPage: Int
+}
+
+union ChapterType = StandardChapter | RangeChapter
+
+type WrittenBy @relationshipProperties {
+  role: String
+  since: Int
+}
+
+type InCategory @relationshipProperties {
+  isPrimary: Boolean
+}
+
+type HasReview @relationshipProperties {
+  createdAt: DateTime
+  rating: Int
+}
+
+type Article @node @vector(indexes: [
+  { indexName: "article_content_idx", queryName: "similarArticles", embeddingProperty: "embedding", provider: "OpenAI" }
+  { indexName: "article_title_idx", queryName: "similarTitles", embeddingProperty: "titleEmbedding" }
+]) {
+  id: ID! @id
+  title: String!
+  content: String!
+  embedding: [Float!]!
+  titleEmbedding: [Float!]!
+  published: Boolean!
+}
+
+# --- Types the "Strict mode" items illustrate with --------------------------
+
+type User @node {
+  id: ID! @id @unique
+  name: String
+  email: String @unique
+  n: Int
+  double: Int @cypher(statement: "RETURN this.n * 2 AS d", columnName: "d")
+  tags: [String] @cypher(statement: "MATCH (this)-[:TAGGED]->(t) RETURN t.name AS tags ORDER BY t.pos", columnName: "tags")
+  topPost: Post @cypher(statement: "MATCH (this)-[:WROTE]->(p:Post) RETURN p ORDER BY p.rank DESC LIMIT 1", columnName: "p")
+  postCount: Int @cypher(statement: "MATCH (this)-[:WROTE]->(p:Post) RETURN count(p) AS c", columnName: "c")
+  posts: [Post!]! @relationship(type: "WROTE", direction: OUT, properties: "Authored")
+  pets: [Pet!]! @relationship(type: "HAS", direction: OUT)
+  toys: [Toy!]! @relationship(type: "HAS", direction: OUT)
+  resources: [Resource!]! @relationship(type: "HAS", direction: OUT)
+  vaults: [Vault!]! @relationship(type: "HAS", direction: OUT)
+  teams: [Team!]! @relationship(type: "MEMBER_OF", direction: OUT, properties: "Membership")
+  items: [Item!]! @relationship(type: "OWNS", direction: OUT)
+  friends: [User!]! @relationship(type: "FRIENDS_WITH", direction: OUT)
+}
+
+type Authored @relationshipProperties {
+  role: String
+  weight: Float
+}
+
+type Membership @relationshipProperties {
+  role: String! @default(value: "member")
+}
+
+type Post @node {
+  id: ID! @id @unique
+  slug: String @unique
+  title: String
+  published: Boolean
+  views: Int
+  rank: Int
+  label: String @cypher(statement: "RETURN 'post:' + this.title AS v", columnName: "v")
+  author: Author @relationship(type: "WROTE", direction: IN, properties: "Authored")
+  tags: [Tag!]! @relationship(type: "TAGGED", direction: OUT)
+}
+
+type Doc implements Resource @node {
+  id: ID! @id @unique
+  body: String
+  rank: Int
+  label: String @cypher(statement: "RETURN 'doc:' + this.body AS v", columnName: "v")
+}
+
+type Image implements Resource @node {
+  id: ID! @id @unique
+  url: String
+}
+
+interface Resource {
+  id: ID!
+}
+
+union Item = Post | Doc
+
+type Vault @node {
+  id: ID! @id @unique
+}
+
+interface Pet {
+  name: String
+}
+
+type Dog implements Pet @node {
+  name: String
+}
+
+type Cat implements Pet @node {
+  name: String
+}
+
+type Toy @node {
+  id: ID! @id @unique
+  name: String @unique
+}
+
+type Team @node {
+  id: ID! @id @unique
+  name: String
+}
+
+type Tag @node {
+  id: ID! @id @unique
+  name: String @unique
+  charts: [Chart!]! @relationship(type: "TAGGED", direction: IN)
+}
+
+type Chart @node {
+  id: ID! @id @unique
+  tags: [Tag!]! @relationship(type: "TAGGED", direction: OUT)
+}
+
+type Plan @node {
+  id: ID! @id @unique
+  name: String
+  owners: [User!]! @relationship(type: "OWNED_BY", direction: OUT)
+}
+
+type Video @node {
+  id: ID! @id @unique
+  tags: [Tag!]! @relationship(type: "LABELED", direction: IN)
+}
+
+union Media = Post | Video
+
+type Feed @node {
+  id: ID! @id @unique
+  items: [Media!]! @relationship(type: "SHOWS", direction: OUT)
+}
+
+type Person @node(labels: ["Human"]) {
+  id: ID! @id @unique
+  name: String
+}
+
+type Task @node {
+  id: ID! @id @unique
+  ttl: Duration
+}
+
+type Event @node {
+  id: ID! @id @unique
+  day: Date
+}

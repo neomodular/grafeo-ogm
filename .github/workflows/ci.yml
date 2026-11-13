@@ -48,6 +48,12 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      # README / llms-full.txt TypeScript examples against src/ and the
+      # generator. Driver-independent: one leg is enough.
+      - name: Type-check documentation examples
+        if: matrix.node-version == 22 && matrix.neo4j-driver == 'lockfile'
+        run: pnpm run docs:typecheck
+
       - name: Test
         run: pnpm run test
 
