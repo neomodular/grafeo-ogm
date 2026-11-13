@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.31.0 (2026-11-13) — typed policy context
+
+> **Minor release, types only.** You can now type the context your policies receive. Code with two generics or none compiles unchanged, and the emitted Cypher does not change.
+
+### Added
+
+- **`OGM` takes a third generic for the policy context**: `new OGM<ModelMap, InterfaceModelMap, RequestCtx>({ … })`. Policy callbacks written inline in `policies` (`override`, `permissive`, `restrictive`, including `appliesWhen`, `cypher.fragment` / `cypher.params` and write-side `(ctx, input)`) receive `RequestCtx` without a cast or an explicit generic, and `withContext()` checks its argument against it (`ogm.withContext({ nope: 1 })` is a type error). The OGM returned by `unsafe.bypassPolicies()` keeps it, and `createCompileOnlyOgm` takes the same third generic. A policy built outside the config can be typed with `permissive<RequestCtx>(…)` (likewise `override` / `restrictive`); a policy written for another context type is rejected.
+- **Contexts declared as an `interface` are accepted.** The policy types and constructors (`Policy`, `PoliciesByModel`, `OverridePolicy`, `PermissivePolicy`, `RestrictivePolicy`, `override`, `permissive`, `restrictive`, …) now constrain their context parameter to `object` instead of `PolicyContext` (`Record<string, unknown>`), which an interface does not satisfy. On an OGM without the third generic, `withContext()` now accepts any object, including an interface-typed value. `PolicyContext` itself is unchanged and stays the default.
+
+`ConstructorParameters<typeof OGM>[0]['policies']` still types callbacks with `PolicyContext`, as before.
+
 ## 2.30.0 (2026-11-11) — neo4j-driver 6: Duration round-trip, tested in CI
 
 > **Minor release.** grafeo-ogm supports `neo4j-driver` 5 and 6, and CI now tests both. On driver 6, a `Duration` read through grafeo could not be written back; it now comes back in the same form on both drivers. Driver-5 users see no change.

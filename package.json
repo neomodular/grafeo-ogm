@@ -1,6 +1,6 @@
 {
   "name": "grafeo-ogm",
-  "version": "2.30.0",
+  "version": "2.31.0",
   "description": "Type-safe Neo4j ORM / OGM for TypeScript. Define your graph in GraphQL SDL and get typed, Prisma-style CRUD compiled to parameterized Cypher, plus code generation. Continues the OGM removed from @neo4j/graphql v6, and supports neo4j-driver 5 and 6.",
   "license": "MIT",
   "author": "Alejandro Guzman",
