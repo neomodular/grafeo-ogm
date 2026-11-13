@@ -19,7 +19,8 @@ import { isInt } from 'neo4j-driver';
 import { OGMError } from '../errors';
 import { driverOf } from '../execution/driver-registry';
 import type { OGMLogger } from '../execution/executor';
-import { OGM, type OGMConfig } from '../ogm';
+import { OGM, type ConfigContext, type OGMConfig } from '../ogm';
+import type { PolicyContext } from '../policy/types';
 import { warnOnEveryCall } from '../utils/strict-mode';
 
 /** The statement a model call sends, as captured by {@link compile}. */
@@ -43,7 +44,8 @@ export interface CompiledQuery {
 /** Config of {@link createCompileOnlyOgm}: an `OGMConfig` without `driver` / `database`. */
 export type CompileOnlyOgmConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
-> = Omit<OGMConfig<M>, 'driver' | 'database'>;
+  C extends object = PolicyContext,
+> = Omit<OGMConfig<M, C>, 'driver' | 'database'>;
 
 /** Thrown by the compile-only driver when a statement is sent; caught by `compile()`. */
 class CompiledStatement extends OGMError {
@@ -124,7 +126,9 @@ const OGM_OUT_OF_SCOPE = [
 export function createCompileOnlyOgm<
   M extends Record<string, unknown> = Record<string, unknown>,
   I extends Record<string, unknown> = Record<string, unknown>,
->(config: CompileOnlyOgmConfig<M>): OGM<M, I> {
+  // v2.31.0 — typed policy context, as on `OGM`.
+  C extends object = PolicyContext,
+>(config: CompileOnlyOgmConfig<M, ConfigContext<C>>): OGM<M, I, C> {
   for (const key of ['driver', 'database'] as const)
     if ((config as Record<string, unknown>)[key] !== undefined)
       throw new OGMError(
@@ -140,11 +144,11 @@ export function createCompileOnlyOgm<
     },
   };
   warnOnEveryCall(logger);
-  const ogm = new OGM<M, I>({
+  const ogm = new OGM<M, I, C>({
     ...config,
     logger,
     driver: compileOnlyDriver(state),
-  } as OGMConfig<M>);
+  } as OGMConfig<M, ConfigContext<C>>);
   // Own enumerable properties, so `unsafe.bypassPolicies()` clones (which
   // copy the instance) reject them too.
   for (const name of OGM_OUT_OF_SCOPE)

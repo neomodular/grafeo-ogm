@@ -2,6 +2,12 @@ import { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
 import { permissive } from '../../src/policy/types';
 
+// v2.31.0 — typed policy context: callbacks get `c.uid` without a cast.
+type AnyMap = Record<string, unknown>;
+interface UidCtx {
+  uid: string;
+}
+
 const schema = `
 type Book @node {
   id: ID! @id @unique
@@ -44,14 +50,14 @@ function createMockDriver(records: Recorded[] = []): Driver {
 describe('Plan cache / structural Cypher stability', () => {
   it('same ctx-shape with different values produces structurally identical Cypher', async () => {
     const recorded: Recorded[] = [];
-    const ogm = new OGM({
+    const ogm = new OGM<AnyMap, AnyMap, UidCtx>({
       typeDefs: schema,
       driver: createMockDriver(recorded),
       policies: {
         Book: [
           permissive({
             operations: ['read'],
-            when: (c) => ({ ownerId: (c as { uid: string }).uid }),
+            when: (c) => ({ ownerId: c.uid }),
           }),
         ],
       },
@@ -63,14 +69,14 @@ describe('Plan cache / structural Cypher stability', () => {
 
   it('different param values do not affect the emitted Cypher', async () => {
     const recorded: Recorded[] = [];
-    const ogm = new OGM({
+    const ogm = new OGM<AnyMap, AnyMap, UidCtx>({
       typeDefs: schema,
       driver: createMockDriver(recorded),
       policies: {
         Book: [
           permissive({
             operations: ['read'],
-            when: (c) => ({ ownerId: (c as { uid: string }).uid }),
+            when: (c) => ({ ownerId: c.uid }),
           }),
         ],
       },

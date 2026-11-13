@@ -2,6 +2,12 @@ import { Driver } from 'neo4j-driver';
 import { OGM } from '../../src/ogm';
 import { override, permissive, restrictive } from '../../src/policy/types';
 
+// v2.31.0 — typed policy context: callbacks get `c.uid` without a cast.
+type AnyMap = Record<string, unknown>;
+interface UidCtx {
+  uid: string;
+}
+
 const schema = `
 type Book @node {
   id: ID! @id @unique
@@ -48,14 +54,14 @@ function createMockDriver(records: Recorded[] = []): Driver {
 describe('Model.find — policy integration', () => {
   it('emits a permissive predicate in WHERE', async () => {
     const recorded: Recorded[] = [];
-    const ogm = new OGM({
+    const ogm = new OGM<AnyMap, AnyMap, UidCtx>({
       typeDefs: schema,
       driver: createMockDriver(recorded),
       policies: {
         Book: [
           permissive({
             operations: ['read'],
-            when: (c) => ({ ownerId: (c as { uid: string }).uid }),
+            when: (c) => ({ ownerId: c.uid }),
           }),
         ],
       },
@@ -66,14 +72,14 @@ describe('Model.find — policy integration', () => {
 
   it('AND-combines permissive with user where', async () => {
     const recorded: Recorded[] = [];
-    const ogm = new OGM({
+    const ogm = new OGM<AnyMap, AnyMap, UidCtx>({
       typeDefs: schema,
       driver: createMockDriver(recorded),
       policies: {
         Book: [
           permissive({
             operations: ['read'],
-            when: (c) => ({ ownerId: (c as { uid: string }).uid }),
+            when: (c) => ({ ownerId: c.uid }),
           }),
         ],
       },

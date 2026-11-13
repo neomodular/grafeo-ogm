@@ -243,7 +243,7 @@ function warnCountPermissives(
 
 export interface OGMConfig<
   M extends Record<string, unknown> = Record<string, unknown>,
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
 > {
   typeDefs: string;
   driver: Driver;
@@ -295,6 +295,39 @@ export interface OGMConfig<
   policyDefaults?: PolicyDefaults;
 }
 
+/**
+ * v2.31.0 — `OGMConfig<M, C>` as the `OGM` constructor parameter, with `C`
+ * excluded from inference: the context type comes ONLY from the explicit
+ * third generic (`new OGM<ModelMap, InterfaceModelMap, RequestCtx>(…)`),
+ * else it is `PolicyContext`, exactly as before — the policies written in
+ * the config never decide it, so their inline `(c) => …` parameters are
+ * typed from the declaration, not the other way round. Written as the deferred
+ * indexed-access idiom rather than the `NoInfer` intrinsic, which needs
+ * TypeScript 5.4 in consumers' emitted declarations.
+ */
+type NoInferContext<C> = [C][C extends unknown ? 0 : never];
+
+/**
+ * v2.31.0 — the context type the `OGM` constructor (and
+ * `createCompileOnlyOgm`) types `policies` with: the explicit third
+ * generic, never inferred (see `NoInferContext`). A bare `object` maps to
+ * `PolicyContext`: that is what `TContext` erases to in
+ * `ConstructorParameters<typeof OGM>`, which must keep typing `policies`
+ * callbacks with `PolicyContext` as it did before the generic existed.
+ */
+export type ConfigContext<C> =
+  object extends NoInferContext<C> ? PolicyContext : NoInferContext<C>;
+
+/**
+ * v2.31.0 — upper bound of `withContext`'s argument. An OGM with a typed
+ * context (third generic) checks `ctx` against it. An OGM without one
+ * (`TContext` is the default `PolicyContext`) accepts any object — also a
+ * value typed by an `interface`, which `Record<string, unknown>` rejects.
+ */
+type WithContextBound<TContext> = PolicyContext extends TContext
+  ? object
+  : TContext;
+
 /** Options for `OGM.$transaction` (v2.4.8). */
 export interface TransactionOptions {
   /**
@@ -307,8 +340,9 @@ export interface TransactionOptions {
 export class OGM<
   TModelMap extends Record<string, unknown> = Record<string, unknown>,
   TInterfaceModelMap extends Record<string, unknown> = Record<string, unknown>,
+  TContext extends object = PolicyContext,
 > {
-  private config: OGMConfig<TModelMap>;
+  private config: OGMConfig<TModelMap, ConfigContext<TContext>>;
   private schema!: SchemaMetadata;
   private models: Map<string, Model<unknown>> = new Map();
   private interfaceModels: Map<string, InterfaceModel<unknown>> = new Map();
@@ -320,7 +354,7 @@ export class OGM<
   /** Marker for `unsafe.bypassPolicies()` clones. */
   private globalBypass = false;
 
-  constructor(config: OGMConfig<TModelMap>) {
+  constructor(config: OGMConfig<TModelMap, ConfigContext<TContext>>) {
     if (
       config.database !== undefined &&
       (typeof config.database !== 'string' || config.database.length === 0)
@@ -484,10 +518,11 @@ export class OGM<
   }
 
   /** Internal cloning hook used by `unsafe.bypassPolicies()`. */
-  private cloneAsBypassed(): OGM<TModelMap, TInterfaceModelMap> {
+  private cloneAsBypassed(): OGM<TModelMap, TInterfaceModelMap, TContext> {
     const clone = Object.create(OGM.prototype) as OGM<
       TModelMap,
-      TInterfaceModelMap
+      TInterfaceModelMap,
+      TContext
     >;
     Object.assign(clone, this);
     (clone as unknown as { models: Map<string, unknown> }).models = new Map();
@@ -506,8 +541,12 @@ export class OGM<
    *
    * Discard the returned wrapper after the request finishes — it must
    * NOT outlive the ctx.
+   *
+   * v2.31.0 — `ctx` is checked against the OGM's third generic
+   * (`OGM<ModelMap, InterfaceModelMap, RequestCtx>`). Without it, any
+   * object is accepted, including a value typed by an `interface`.
    */
-  withContext<C extends PolicyContext>(
+  withContext<C extends WithContextBound<TContext> = TContext>(
     ctx: C,
   ): OGMWithContext<TModelMap, TInterfaceModelMap, C> {
     if (typeof ctx !== 'object' || ctx === null)
@@ -540,7 +579,7 @@ export class OGM<
      * disabled. Logs a warning on every call. Discard immediately after
      * the bypass operation completes.
      */
-    bypassPolicies: (): OGM<TModelMap, TInterfaceModelMap> => {
+    bypassPolicies: (): OGM<TModelMap, TInterfaceModelMap, TContext> => {
       if (this.config.logger?.warn)
         this.config.logger.warn('[OGM] unsafe.bypassPolicies invoked');
       return this.cloneAsBypassed();
@@ -966,7 +1005,7 @@ export class OGM<
 export class OGMWithContext<
   TModelMap extends Record<string, unknown> = Record<string, unknown>,
   TInterfaceModelMap extends Record<string, unknown> = Record<string, unknown>,
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
 > {
   private readonly schema: SchemaMetadata;
   private readonly driver: Driver;

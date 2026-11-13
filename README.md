@@ -2192,19 +2192,18 @@ Node-Level Security (NLS) is a per-request filter layer that compiles into the e
 #### Declaration
 
 ```typescript
-import { OGM, override, permissive, restrictive, type PolicyContext } from 'grafeo-ogm';
+import { OGM, override, permissive, restrictive } from 'grafeo-ogm';
 
-// A `type`, not an `interface`: withContext() takes a Record<string, unknown>.
-type RequestCtx = {
+// Any object type works, `interface` or `type`.
+interface RequestCtx {
   userId: string;
   capabilities: string[];
   tierIds: string[];
-};
-// Policy callbacks receive the context as PolicyContext (Record<string, unknown>);
-// narrow it to your own shape in one place.
-const req = (c: PolicyContext) => c as RequestCtx;
+}
 
-const ogm = new OGM<ModelMap>({
+// The third generic (v2.31.0+) types the context: `c` is RequestCtx in
+// every policy callback below, and withContext() checks its argument.
+const ogm = new OGM<ModelMap, InterfaceModelMap, RequestCtx>({
   typeDefs,
   driver,
   policies: {
@@ -2214,14 +2213,14 @@ const ogm = new OGM<ModelMap>({
       // identical to a no-policy query. Zero runtime cost for admins.
       override({
         operations: ['*'],
-        when: (c) => req(c).capabilities.includes('admin'),
+        when: (c) => c.capabilities.includes('admin'),
         name: 'admin-bypass',
       }),
 
       // OR-grant. Multiple permissives compose with OR — any match grants.
       permissive({
         operations: ['read'],
-        when: (c) => ({ ownerId: req(c).userId }),
+        when: (c) => ({ ownerId: c.userId }),
         name: 'owner-can-read',
       }),
 
@@ -2231,7 +2230,7 @@ const ogm = new OGM<ModelMap>({
       // `false` for a hard deny).
       restrictive({
         operations: ['read'],
-        when: (c) => ({ tierIds_IN: req(c).tierIds }),
+        when: (c) => ({ tierIds_IN: c.tierIds }),
         name: 'tier-isolation',
       }),
 
@@ -2244,7 +2243,7 @@ const ogm = new OGM<ModelMap>({
       restrictive({
         operations: ['create', 'update'],
         when: (c, input) =>
-          (input as { ownerId?: string }).ownerId === req(c).userId,
+          (input as { ownerId?: string }).ownerId === c.userId,
         name: 'cannot-set-other-owner',
       }),
     ],
@@ -2261,6 +2260,8 @@ async function visibleBooks(ctx: RequestCtx) {
   return Books.find({ where: { published_GT: '2024-01-01' } });
 }
 ```
+
+Policies written inline in `policies` infer the context from the third generic. A policy built elsewhere takes it explicitly: `const ownBooks = permissive<RequestCtx>({ … })`. Without the third generic, callbacks receive `PolicyContext` (`Record<string, unknown>`), as before v2.31.0.
 
 > **Policies apply only through `withContext`.** A model from a bare `ogm.model('Book')` / `ogm.interfaceModel(...)` carries no context, so it applies **no** policy: not the type's own, and not those of the types it reaches through relationships, nested writes or connects. Use `ogm.withContext(ctx).model(...)` for every request, and `ogm.unsafe.bypassPolicies().model(...)` when you mean system access (migrations, seeds, admin jobs). Since v2.24.0 a bare lookup on an OGM with `policies` warns once per OGM and type in 2.x and throws `OGMError` under `strict: true` (see [strict item 50](#50-a-bare-ogmmodel-on-an-ogm-configured-with-policies-since-2240)).
 

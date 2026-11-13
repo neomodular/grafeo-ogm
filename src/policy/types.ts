@@ -8,9 +8,16 @@
 import { OGMError } from '../errors';
 
 /**
- * Generic policy context. Users extend this with their own typed shape
- * (e.g. `{ userId: string; capabilities: string[] }`). The OGM never
- * inspects ctx beyond passing it to policy callbacks.
+ * Generic policy context — the DEFAULT context type when none is given.
+ * The OGM never inspects ctx beyond passing it to policy callbacks.
+ *
+ * v2.31.0 — type your own context with the third `OGM` generic
+ * (`new OGM<ModelMap, InterfaceModelMap, RequestCtx>(…)`): policy
+ * callbacks written inline in `policies` then receive `RequestCtx`, and
+ * `withContext()` checks its argument against it. Every policy type and
+ * constructor now constrains its context parameter to `object` instead of
+ * `PolicyContext`, so a context declared as an `interface` (which has no
+ * implicit index signature) is accepted. This alias itself is unchanged.
  */
 export type PolicyContext = Record<string, unknown>;
 
@@ -34,7 +41,7 @@ export type OperationOrWildcard = Operation | '*';
  * are dropped. The compiled Cypher is byte-identical to a no-policy
  * query. Cannot reference node properties — only ctx.
  */
-export interface OverridePolicy<C extends PolicyContext = PolicyContext> {
+export interface OverridePolicy<C extends object = PolicyContext> {
   readonly kind: 'override';
   readonly operations: ReadonlyArray<OperationOrWildcard>;
   readonly when: (ctx: C) => boolean;
@@ -51,7 +58,7 @@ export interface OverridePolicy<C extends PolicyContext = PolicyContext> {
  * need raw fragments (with parameterized values).
  */
 export interface PermissivePolicy<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
 > {
   readonly kind: 'permissive';
@@ -91,7 +98,7 @@ export type WriteOperation = 'create' | 'update';
  * read).
  */
 export interface ReadRestrictivePolicy<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
 > {
   readonly kind: 'restrictive';
@@ -120,7 +127,7 @@ export interface ReadRestrictivePolicy<
  * targets.
  */
 export interface WriteRestrictivePolicy<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   I extends Record<string, unknown> = Record<string, unknown>,
 > {
   readonly kind: 'restrictive';
@@ -150,12 +157,12 @@ export interface WriteRestrictivePolicy<
  * signature inferred from the literal `operations` tuple.
  */
 export type RestrictivePolicy<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
   I extends Record<string, unknown> = Record<string, unknown>,
 > = ReadRestrictivePolicy<C, W> | WriteRestrictivePolicy<C, I>;
 
-export type Policy<C extends PolicyContext = PolicyContext> =
+export type Policy<C extends object = PolicyContext> =
   | OverridePolicy<C>
   | PermissivePolicy<C>
   | RestrictivePolicy<C>;
@@ -171,7 +178,7 @@ export type Policy<C extends PolicyContext = PolicyContext> =
  */
 export type PoliciesByModel<
   M extends Record<string, unknown> = Record<string, unknown>,
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
 > = {
   [K in keyof M & string]?: ReadonlyArray<Policy<C>>;
 } & {
@@ -225,7 +232,7 @@ function assertOperationTokens(
       );
 }
 
-export function override<C extends PolicyContext = PolicyContext>(
+export function override<C extends object = PolicyContext>(
   spec: Omit<OverridePolicy<C>, 'kind'>,
 ): OverridePolicy<C> {
   assertOperationsValid(spec.operations, 'override');
@@ -238,7 +245,7 @@ export function override<C extends PolicyContext = PolicyContext>(
 }
 
 export function permissive<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
 >(spec: Omit<PermissivePolicy<C, W>, 'kind'>): PermissivePolicy<C, W> {
   assertOperationsValid(spec.operations, 'permissive');
@@ -299,17 +306,17 @@ function classifyRestrictiveOps(
 // `(ctx, input) => boolean` and read-side restrictives type-check
 // `(ctx) => W | boolean`.
 export function restrictive<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   I extends Record<string, unknown> = Record<string, unknown>,
 >(
   spec: Omit<WriteRestrictivePolicy<C, I>, 'kind'>,
 ): WriteRestrictivePolicy<C, I>;
 export function restrictive<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
 >(spec: Omit<ReadRestrictivePolicy<C, W>, 'kind'>): ReadRestrictivePolicy<C, W>;
 export function restrictive<
-  C extends PolicyContext = PolicyContext,
+  C extends object = PolicyContext,
   W extends Record<string, unknown> = Record<string, unknown>,
   I extends Record<string, unknown> = Record<string, unknown>,
 >(
@@ -361,7 +368,7 @@ export function restrictive<
 // flavor; these guards just observe which.
 // ---------------------------------------------------------------------------
 
-export function isReadRestrictive<C extends PolicyContext>(
+export function isReadRestrictive<C extends object>(
   p: RestrictivePolicy<C>,
 ): p is ReadRestrictivePolicy<C> {
   for (const op of p.operations)
@@ -369,7 +376,7 @@ export function isReadRestrictive<C extends PolicyContext>(
   return true;
 }
 
-export function isWriteRestrictive<C extends PolicyContext>(
+export function isWriteRestrictive<C extends object>(
   p: RestrictivePolicy<C>,
 ): p is WriteRestrictivePolicy<C> {
   for (const op of p.operations)
@@ -382,7 +389,7 @@ export function isWriteRestrictive<C extends PolicyContext>(
  * override short-circuit and `appliesWhen` filtering. Consumed by the
  * compilers to AND-stitch into the WHERE clause.
  */
-export interface ResolvedPolicies<C extends PolicyContext = PolicyContext> {
+export interface ResolvedPolicies<C extends object = PolicyContext> {
   /** True → emit nothing; query is byte-identical to a no-policy query. */
   overridden: boolean;
   permissives: ReadonlyArray<PermissivePolicy<C>>;
@@ -422,7 +429,7 @@ export const NO_ROOT_POLICY: ResolvedPolicies = Object.freeze({
  * evaluated because an override fired are reported too. Consumed by the
  * explain path (`Model.explainPolicies`).
  */
-export interface DetailedPolicy<C extends PolicyContext = PolicyContext> {
+export interface DetailedPolicy<C extends object = PolicyContext> {
   readonly policy: Policy<C>;
   readonly kind: Policy<C>['kind'];
   /** Type or interface whose registry entry declared this policy. */
@@ -507,7 +514,7 @@ export interface PolicyExplanation<T = Record<string, unknown>> {
  * in registration order — the type's own policies first, then each
  * implemented interface's.
  */
-export interface DetailedResolution<C extends PolicyContext = PolicyContext> {
+export interface DetailedResolution<C extends object = PolicyContext> {
   /** Fallback-aware name of the override that fired, else `null`. */
   readonly overriddenBy: string | null;
   readonly entries: ReadonlyArray<DetailedPolicy<C>>;
@@ -518,7 +525,7 @@ export interface DetailedResolution<C extends PolicyContext = PolicyContext> {
  * `Model` / `InterfaceModel` and threaded into `WhereCompiler` /
  * `SelectionCompiler`.
  */
-export interface PolicyContextBundle<C extends PolicyContext = PolicyContext> {
+export interface PolicyContextBundle<C extends object = PolicyContext> {
   ctx: C;
   resolved: ResolvedPolicies<C>;
   operation: Operation;

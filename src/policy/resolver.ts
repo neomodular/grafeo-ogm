@@ -20,7 +20,7 @@ import type {
  * (type, op, ctx)" is decided. Both compilers and the model wrappers use
  * the same resolver instance, so behavior stays consistent.
  */
-export class PolicyResolver<C extends PolicyContext = PolicyContext> {
+export class PolicyResolver<C extends object = PolicyContext> {
   private readonly registry: ReadonlyMap<string, ReadonlyArray<Policy<C>>>;
   private readonly schema: SchemaMetadata;
 
@@ -158,7 +158,7 @@ export class PolicyResolver<C extends PolicyContext = PolicyContext> {
  * the SAME detailed object it reports on, so the compiled fragments stay
  * positionally aligned with the reported entries.
  */
-export function projectResolution<C extends PolicyContext>(
+export function projectResolution<C extends object>(
   detailed: DetailedResolution<C>,
 ): ResolvedPolicies<C> {
   if (detailed.overriddenBy !== null) {
