@@ -541,16 +541,18 @@ Interface types can be queried polymorphically via `ogm.interfaceModel('Entity')
 ### Enums
 
 ```graphql
-enum Status {
+enum BookStatus {
   DRAFT
   PUBLISHED
   ARCHIVED
 }
 
 type Book @node {
-  status: Status
+  status: BookStatus
 }
 ```
+
+The generated types declare each SDL enum as a TypeScript string enum, so filters and inputs take its members: `where: { status: BookStatus.Published }`. `options.sort` works the same way, through the generated `SortDirection` enum (`SortDirection.Asc`, `SortDirection.Desc`); a nested `orderBy` in `select` takes the strings `'ASC'` / `'DESC'`. The runtime takes the plain strings everywhere, which is what an untyped caller sends.
 
 ### Fulltext Indexes
 
@@ -584,34 +586,36 @@ A relationship index search (`fulltext: { author: { AuthorRoleSearch: { phrase }
 ### Find Methods
 
 ```typescript
+import { SortDirection } from './grafeo.generated';
+
 const Book = ogm.model('Book');
 
 // find — returns all matching nodes
 const books = await Book.find({
   where: { title_CONTAINS: 'Graph' },
   select: { id: true, title: true },
-  options: { sort: [{ title: 'ASC' }], limit: 10, offset: 0 },
+  options: { sort: [{ title: SortDirection.Asc }], limit: 10, offset: 0 },
 });
 
 // findFirst — returns first match or null
-const book = await Book.findFirst({
+const first = await Book.findFirst({
   where: { title_CONTAINS: 'Graph' },
   select: { id: true, title: true },
 });
 
 // findUnique — find by unique identifier or null
-const book = await Book.findUnique({
+const byIsbn = await Book.findUnique({
   where: { isbn: '978-1491930892' },
   select: { id: true, title: true },
 });
 
 // findFirstOrThrow — throws RecordNotFoundError if no match
-const book = await Book.findFirstOrThrow({
+const exact = await Book.findFirstOrThrow({
   where: { title: 'Exact Title' },
 });
 
 // findUniqueOrThrow — throws RecordNotFoundError if not found
-const book = await Book.findUniqueOrThrow({
+const byId = await Book.findUniqueOrThrow({
   where: { id: 'book-1' },
 });
 ```
@@ -680,13 +684,15 @@ With [Node-Level Security](#node-level-security), quantifiers range over the rel
 **Logical operators:**
 
 ```typescript
+import { BookStatus } from './grafeo.generated';
+
 await Book.find({
   where: {
     OR: [
       { title_CONTAINS: 'Graph' },
       { title_CONTAINS: 'Neo4j' },
     ],
-    NOT: { status: 'ARCHIVED' },
+    NOT: { status: BookStatus.Archived },
   },
 });
 ```
@@ -736,7 +742,9 @@ await User.find({ where: { itemsConnection_NONE: { node: { Doc: { rank: 2 } } } 
 await User.find({
   select: { items: { where: { Doc: { rank: 2 }, Post: { title: 'a' } }, select: { id: true } } },
 });
-// also accepted: the @neo4j/graphql member-keyed connection shape
+// also accepted at runtime: the @neo4j/graphql member-keyed connection shape
+// (the generated types offer only the `node: { Doc: … }` shape above)
+// @ts-expect-error — not in the generated UserItemsConnectionWhere
 await User.find({ where: { itemsConnection_SOME: { Doc: { node: { rank: 2 } } } } });
 ```
 
@@ -759,7 +767,7 @@ const books = await Book.find({
 });
 
 // Simple relationship: true returns all scalar fields
-const books = await Book.find({
+const withAuthors = await Book.find({
   select: { id: true, author: true },
 });
 ```
@@ -901,10 +909,12 @@ Explicitly requesting `__typename: true` (or including it in a `selectionSet`) i
 ### Sorting and Pagination
 
 ```typescript
+import { BookStatus, SortDirection } from './grafeo.generated';
+
 const books = await Book.find({
-  where: { status: 'PUBLISHED' },
+  where: { status: BookStatus.Published },
   options: {
-    sort: [{ title: 'ASC' }, { published: 'DESC' }],
+    sort: [{ title: SortDirection.Asc }, { published: SortDirection.Desc }],
     limit: 20,
     offset: 40,
   },
@@ -918,10 +928,11 @@ object:
 
 ```typescript
 // ✅ correct — precedence is unambiguous
-sort: [{ title: 'ASC' }, { published: 'DESC' }];
+await Book.find({ options: { sort: [{ title: SortDirection.Asc }, { published: SortDirection.Desc }] } });
 
 // ❌ rejected — compile error, and throws at runtime
-sort: [{ title: 'ASC', published: 'DESC' }];
+// @ts-expect-error — two keys in one sort entry
+await Book.find({ options: { sort: [{ title: SortDirection.Asc, published: SortDirection.Desc }] } });
 ```
 
 Why not just honour both keys? Because object key order is not a reliable
@@ -934,11 +945,12 @@ Building a sort list conditionally works the same way — push entries rather
 than assembling one object:
 
 ```typescript
-const sort: BookSort[] = [];
-if (byTitle) sort.push({ title: 'ASC' });
-if (byDate) sort.push({ published: 'DESC' });
-
-await Book.find({ options: { sort } });
+function sortBooks(byTitle: boolean, byDate: boolean) {
+  const sort: BookSort[] = [];
+  if (byTitle) sort.push({ title: SortDirection.Asc });
+  if (byDate) sort.push({ published: SortDirection.Desc });
+  return Book.find({ options: { sort } });
+}
 ```
 
 ---
@@ -991,13 +1003,13 @@ const result = await Book.update({
     categories: [{ where: { node: { name: 'Science' } } }],
   },
   disconnect: {
-    categories: { where: { node: { name: 'Fiction' } } },
+    categories: [{ where: { node: { name: 'Fiction' } } }],
   },
 });
 ```
 
 - **Connect** links every target matching its `where`. A `where` that matches nothing is a no-op: the update still applies and the node is still returned (as in `@neo4j/graphql`).
-- **Disconnect** with `{}` / `null` removes every relationship of that type — under [Node-Level Security](#node-level-security), only to targets the context can **read**.
+- **Disconnect** with `[{}]` / `null` removes every relationship of that type — under [Node-Level Security](#node-level-security), only to targets the context can **read**.
 - Every connect and disconnect returns the updated node exactly once, however many relationships it touched.
 - A key that is neither a property nor a relationship of the type throws `OGMError` (`Unknown field …`) instead of being written as a stray property — at every depth.
 
@@ -1145,6 +1157,7 @@ Generated types are the same in both modes, except that root operation types are
 A key the item is not compiled from is ignored, so a typo leaves the item with no filter.
 
 ```typescript
+// @ts-expect-error — `wehre` is a typo (the generated types reject it; untyped callers get this)
 await users.update({ where: { id }, connect: { pets: [{ wehre: { node: { id: petId } } }] } });
 // default: links EVERY Pet (and warns) · strict: OGMError: Unknown key(s) "wehre" in a connect item on "pets"
 ```
@@ -1154,6 +1167,7 @@ Allowed keys: `where`, `edge`, `overwrite`, `connect` (connect) and `where`, `di
 #### 2. Unknown edge-property keys
 
 ```typescript
+// @ts-expect-error — `rolee` is a typo
 await users.update({ where: { id }, connect: { posts: [{ where: { node: { id: postId } }, edge: { rolee: 'author' } }] } });
 // default: stores a stray `rolee` property on the relationship (and warns) · strict: OGMError: Unknown field "rolee" in the edge input …
 ```
@@ -1196,8 +1210,8 @@ await users.upsert({ where: { email }, create: {}, update: {}, labels: ['Vip'] }
 #### 6. Fulltext `score` inside `OR` / `AND` / `NOT`
 
 ```typescript
-await books.find({ fulltext: { OR: [{ BookTitle: { phrase: 'dune', score: 2 } }, { BookBody: { phrase: 'dune' } }] } });
-// default: the branch score is ignored (and warns) · strict: only BookTitle hits scoring ≥ 2 are kept from that branch
+await books.find({ fulltext: { OR: [{ BookSearch: { phrase: 'dune', score: 2 } }, { BlurbSearch: { phrase: 'dune' } }] } });
+// default: the branch score is ignored (and warns) · strict: only BookSearch hits scoring ≥ 2 are kept from that branch
 ```
 
 #### 7. `@include` / `@skip` in a `selectionSet`
@@ -1329,6 +1343,7 @@ await users.find({ selectionSet: '{ id name { first } posts postsConnection }' }
 // strict: OGMError: Field "name" in selectionSet on type "User" is a scalar field (String) and takes no sub-selection: select it as "name".
 // strict: OGMError: Field "posts" in selectionSet on type "User" is a relationship to Post and needs a sub-selection, e.g. "posts { … }".
 
+// @ts-expect-error — both shapes are wrong (`name` takes `true`; `selct` is a typo)
 await users.find({ select: { name: { select: {} }, posts: { selct: { id: true } } } });
 // default: both are left out of the result (and warns)
 // strict: OGMError: Field "name" in select on type "User" is a scalar field (String): select it with `name: true`.
@@ -1340,6 +1355,7 @@ Since v2.23.0 the same check covers a typed connection select, which was dropped
 
 ```typescript
 await users.find({
+  // @ts-expect-error — `edges` takes `node` directly, not `select`
   select: { postsConnection: { select: { edges: { select: { node: { select: { title: true } } } } } } },
 });
 // default: { postsConnection: { edges: [{}, …] } } — node and properties are left out (and warns)
@@ -1437,6 +1453,7 @@ By default each of these keeps its v2.8.0 value. The first time each kind is see
 // the user wrote posts A and B ("old")
 await users.update({
   where: { id },
+  // @ts-expect-error — `wher` is a typo
   update: { posts: [{ wher: { node: { id: 'A' } }, update: { node: { title: 'new' } } }] },
 });
 // default: A and B are both renamed — "wher" is ignored, so the update has no filter (and warns)
@@ -1588,6 +1605,7 @@ ogm.model('Query');
 
 ```typescript
 const keep = undefined; // e.g. an unset optional variable
+// @ts-expect-error — the generated types reject an `undefined` item
 await authors.update({ where: { id }, disconnect: { posts: [{ where: { node: { title: 'p1' } } }, keep] } });
 // default: every post of the author is unlinked, not only p1 (and warns)
 // strict:  OGMError — nothing is unlinked
@@ -1598,6 +1616,7 @@ A `null` or `undefined` item inside a disconnect array compiles to the blanket f
 #### 32. An unknown relationship in a connect / disconnect map (since 2.19.0)
 
 ```typescript
+// @ts-expect-error — `post` is not a relationship of User (`posts` is)
 await users.update({ where: { id }, connect: { post: [{ where: { node: { id: 'p1' } } }] } });
 // default: links nothing, reports success (and warns)
 // strict:  OGMError: Unknown relationship "post" in the connect input of User: it is not a relationship field of the type. …
@@ -1616,6 +1635,7 @@ type User @node {
 ```
 
 ```typescript
+// @ts-expect-error — the generated UserUpdateInput leaves @cypher fields out
 await users.update({ where: { id }, update: { double: 98 } });
 // default: SET n.double = 98 — a stored property no read returns (and warns)
 // strict:  OGMError: Field "double" in the update input of User is a @cypher field: it is computed when read and cannot be written. …
@@ -1691,6 +1711,7 @@ A union has no fields of its own, so 2.x projected a `@cypher` field selected on
 #### 39. `labels` on `delete()` / `deleteMany()` (since 2.21.0)
 
 ```typescript
+// @ts-expect-error — `labels` is not in the delete() signature in 2.x (see below)
 await users.delete({ where: { id_IN: ids }, labels: ['Archived'] });
 // default: MATCH (n:User) — every node in ids is deleted, archived or not (and warns)
 // strict:  MATCH (n:User:Archived) — only the archived ones, as find() / update() match them
@@ -1715,7 +1736,8 @@ An index needs a `name` (or `indexName`) and at least one field name. 2.x silent
 #### 41. A disconnect item that is not an object (since 2.21.0)
 
 ```typescript
-await authors.update({ where: { id }, disconnect: { posts: ['p1'] } }); // an id instead of { where: { node: { id: 'p1' } } }
+// @ts-expect-error — an id instead of { where: { node: { id: 'p1' } } }
+await authors.update({ where: { id }, disconnect: { posts: ['p1'] } });
 // default: every post of the author is unlinked, not only p1 (and warns)
 // strict:  OGMError: A disconnect item on "posts" is a string. … — nothing is unlinked
 ```
@@ -1727,6 +1749,7 @@ Since v2.23.0 this also covers a falsy `disconnect` in a nested update item (`up
 #### 42. A JS `Date` in a where filter on a `Date`, `LocalDateTime` or `Time` field (since 2.21.0)
 
 ```typescript
+// @ts-expect-error — the generated type of a Date field is an ISO string
 await events.find({ where: { day: new Date('2024-01-15T10:30:00Z') } });
 // default: [] — the Date is sent as an empty map and never matches (and warns)
 // strict:  OGMError: A JS Date cannot be compared with Date field "Event.day" in a where filter: …
@@ -1747,8 +1770,8 @@ await users.update({
       }],
     }],
   },
-  create: { tags: [{ node: { name: 'new' } }] },                 // = update: { tags: [{ create: [...] }] }
-  connectOrCreate: { tags: [{ where: { node: { name: 'go' } }, onCreate: { node: {} } }] },
+  create: { toys: [{ node: { name: 'new' } }] },                 // = update: { toys: [{ create: [...] }] }
+  connectOrCreate: { toys: [{ where: { node: { name: 'ball' } }, onCreate: { node: {} } }] },
   delete: { posts: [{ where: { node: { slug: 'old' } } }] },     // = update: { posts: [{ delete: [...] }] }
 });
 // default: only the post update body runs — connectOrCreate and the root ops are ignored (and warn)
@@ -1783,6 +1806,7 @@ It runs after the field input's `create` and `connect`, with the same `MERGE`, `
 #### 44. A nested delete that is `true`, `false`, `0` or `''` (since 2.25.0)
 
 ```typescript
+// @ts-expect-error — the generated types take a list of delete items
 await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, delete: true }] } });
 // default: EVERY post of the author is deleted, not only p1 (and warns)
 // strict:  OGMError: A nested delete on "posts" is true. … — nothing is deleted
@@ -1793,6 +1817,7 @@ await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: '
 #### 45. A nested create that is not an object (since 2.25.0)
 
 ```typescript
+// @ts-expect-error — the generated types take a list of create items
 await authors.update({ where: { id }, update: { posts: [{ create: true }] } });
 // default: creates a Post with no fields set — only its @id and @default values (and warns)
 // strict:  OGMError: A nested create on "posts" is a boolean. … — nothing is written
@@ -1803,6 +1828,7 @@ A nested create item that is `true`, a number, `''`, `[]` or `{ node: true }` ca
 #### 46. Other nested write values that are not objects (since 2.25.0)
 
 ```typescript
+// @ts-expect-error — the generated types take { node: { … } }
 await authors.update({ where: { id }, update: { posts: [{ where: { node: { id: 'p1' } }, update: true }] } });
 // default: p1 is not updated, the call reports success (and warns)
 // strict:  OGMError: A nested update on "posts" is a boolean (true). It must be an object such as { node: { … } }.
@@ -1819,6 +1845,7 @@ Default mode still skips them and warns; strict mode throws, before anything run
 **Root ops (since 2.26.0).** The same holds one level up, for a root write op that is not an object: the `update`, `connect` and `disconnect` of `update()`, the `data` of `updateMany()`, the `create` and `update` of `upsert()`, and the cascade `delete` of `delete()`:
 
 ```typescript
+// @ts-expect-error — the generated types take an object keyed by relationship field
 await users.update({ where: { id }, update: { name: 'n' }, connect: false });
 // default: name is set, the connect is skipped (and warns)
 // strict:  OGMError: The root "connect" of User.update() is a boolean (false). It must be an object keyed by relationship field, such as { posts: … }.
@@ -1844,7 +1871,7 @@ The same applies to a nested relationship sort (`friends(options: { sort: [{ top
 
 ```typescript
 await users.find({
-  options: { sort: [{ name: 'ASC' }], limit: 20 },
+  options: { sort: [{ name: SortDirection.Asc }], limit: 20 },
   selectionSet: '{ id postCount }', // postCount is a @cypher field
 });
 // default: postCount is computed for every matched user, then sorted and paged
@@ -1913,7 +1940,7 @@ const affordable = await Book.find({
 });
 
 // Logical composition
-const results = await Book.find({
+const either = await Book.find({
   fulltext: {
     OR: [
       { BookSearch: { phrase: 'graph' } },
@@ -1926,10 +1953,12 @@ const results = await Book.find({
 **Typed index names (v1.3.0+).** The generated `<Node>FulltextInput` type now carries the list of valid index names as literal-keyed optional fields. Typos surface as TypeScript errors and IDEs autocomplete the available indexes.
 
 ```typescript
-// Before v1.3.0 — any string key compiled, typos only failed at runtime
-await Book.find({ fulltext: { BokSearch: { phrase: 'graph' } } }); // silently accepted at type-check
+// v1.3.0+ — `BokSearch` is a compile-time error (before v1.3.0 any string key
+// compiled, and the typo only failed at runtime)
+// @ts-expect-error — no index named BokSearch on Book
+await Book.find({ fulltext: { BokSearch: { phrase: 'graph' } } });
 
-// v1.3.0+ — `BokSearch` is a compile-time error; `BookSearch` autocompletes
+// `BookSearch` autocompletes
 await Book.find({ fulltext: { BookSearch: { phrase: 'graph' } } });
 ```
 
@@ -1939,18 +1968,23 @@ The runtime compiler is unchanged; this is a purely ergonomic type-level improve
 
 ```typescript
 // ✅ correct — both indexes are searched
-fulltext: {
-  AND: [
-    { BookSearch: { phrase: 'graph' } },
-    { BlurbSearch: { phrase: 'neo4j' } },
-  ],
-}
+await Book.find({
+  fulltext: {
+    AND: [
+      { BookSearch: { phrase: 'graph' } },
+      { BlurbSearch: { phrase: 'neo4j' } },
+    ],
+  },
+});
 
 // ❌ rejected — compile error, and throws at runtime
-fulltext: {
-  BookSearch: { phrase: 'graph' },
-  BlurbSearch: { phrase: 'neo4j' },
-}
+await Book.find({
+  // @ts-expect-error — two indexes in one leaf
+  fulltext: {
+    BookSearch: { phrase: 'graph' },
+    BlurbSearch: { phrase: 'neo4j' },
+  },
+});
 ```
 
 Before v2.0.0 the second form compiled to a search of `BookSearch` **only**; `BlurbSearch` and its phrase were dropped with no error, so the query returned a strictly *wider* result set than intended. `AND` compiles to correlated subqueries, `OR` to a `UNION` with `max(score)` deduplication.
@@ -1959,18 +1993,23 @@ Before v2.0.0 the second form compiled to a search of `BookSearch` **only**; `Bl
 
 ```typescript
 // ✅ correct — nest to combine
-fulltext: {
-  AND: [
-    { OR: [{ BookSearch: { phrase: 'graph' } }, { BookSearch: { phrase: 'db' } }] },
-    { NOT: { BlurbSearch: { phrase: 'draft' } } },
-  ],
-}
+await Book.find({
+  fulltext: {
+    AND: [
+      { OR: [{ BookSearch: { phrase: 'graph' } }, { BookSearch: { phrase: 'db' } }] },
+      { NOT: { BlurbSearch: { phrase: 'draft' } } },
+    ],
+  },
+});
 
 // ❌ rejected — two operators in one object
-fulltext: {
-  OR: [{ BookSearch: { phrase: 'graph' } }],
-  AND: [{ BlurbSearch: { phrase: 'neo4j' } }],
-}
+await Book.find({
+  // @ts-expect-error — OR and AND in one object
+  fulltext: {
+    OR: [{ BookSearch: { phrase: 'graph' } }],
+    AND: [{ BlurbSearch: { phrase: 'neo4j' } }],
+  },
+});
 ```
 
 The compiler reads `OR`, then `AND`, then `NOT`, and stops at the first one it finds. Before v2.0.0 the rest were dropped silently — and because `AND` is checked before `NOT`, writing `{ NOT: …, AND: … }` compiled the `AND` alone and **discarded the exclusion entirely**. Mixing an operator with a bare index key (`{ OR: [...], BookSearch: {...} }`) is rejected at runtime; TypeScript can't express that one.
@@ -2082,7 +2121,7 @@ const books = await Book.find({
 });
 
 // Or via the legacy selectionSet API:
-const books = await Book.find({
+const viaSelectionSet = await Book.find({
   selectionSet: '{ id title insensitiveTitle reviewCount averageRating }',
 });
 ```
@@ -2128,7 +2167,7 @@ Before v2.25.0 the object was compared with the node itself and never matched. T
 ```typescript
 await Book.find({
   where: { insensitiveTitle_STARTS_WITH: 'g' },
-  options: { sort: [{ insensitiveTitle: 'ASC' }] },
+  options: { sort: [{ insensitiveTitle: SortDirection.Asc }] },
   select: { id: true, title: true, reviewCount: true },
 });
 ```
@@ -2153,13 +2192,17 @@ Node-Level Security (NLS) is a per-request filter layer that compiles into the e
 #### Declaration
 
 ```typescript
-import { OGM, override, permissive, restrictive } from 'grafeo-ogm';
+import { OGM, override, permissive, restrictive, type PolicyContext } from 'grafeo-ogm';
 
-interface RequestCtx {
+// A `type`, not an `interface`: withContext() takes a Record<string, unknown>.
+type RequestCtx = {
   userId: string;
   capabilities: string[];
   tierIds: string[];
-}
+};
+// Policy callbacks receive the context as PolicyContext (Record<string, unknown>);
+// narrow it to your own shape in one place.
+const req = (c: PolicyContext) => c as RequestCtx;
 
 const ogm = new OGM<ModelMap>({
   typeDefs,
@@ -2171,14 +2214,14 @@ const ogm = new OGM<ModelMap>({
       // identical to a no-policy query. Zero runtime cost for admins.
       override({
         operations: ['*'],
-        when: (c: RequestCtx) => c.capabilities.includes('admin'),
+        when: (c) => req(c).capabilities.includes('admin'),
         name: 'admin-bypass',
       }),
 
       // OR-grant. Multiple permissives compose with OR — any match grants.
       permissive({
         operations: ['read'],
-        when: (c: RequestCtx) => ({ ownerId: c.userId }),
+        when: (c) => ({ ownerId: req(c).userId }),
         name: 'owner-can-read',
       }),
 
@@ -2188,7 +2231,7 @@ const ogm = new OGM<ModelMap>({
       // `false` for a hard deny).
       restrictive({
         operations: ['read'],
-        when: (c: RequestCtx) => ({ tierIds_IN: c.tierIds }),
+        when: (c) => ({ tierIds_IN: req(c).tierIds }),
         name: 'tier-isolation',
       }),
 
@@ -2201,7 +2244,7 @@ const ogm = new OGM<ModelMap>({
       restrictive({
         operations: ['create', 'update'],
         when: (c, input) =>
-          (input as { ownerId?: string }).ownerId === c.userId,
+          (input as { ownerId?: string }).ownerId === req(c).userId,
         name: 'cannot-set-other-owner',
       }),
     ],
@@ -2213,8 +2256,10 @@ const ogm = new OGM<ModelMap>({
 });
 
 // Per request:
-const Books = ogm.withContext({ userId, capabilities, tierIds }).model('Book');
-const visible = await Books.find({ where: { published_GT: '2024-01-01' } });
+async function visibleBooks(ctx: RequestCtx) {
+  const Books = ogm.withContext(ctx).model('Book');
+  return Books.find({ where: { published_GT: '2024-01-01' } });
+}
 ```
 
 > **Policies apply only through `withContext`.** A model from a bare `ogm.model('Book')` / `ogm.interfaceModel(...)` carries no context, so it applies **no** policy: not the type's own, and not those of the types it reaches through relationships, nested writes or connects. Use `ogm.withContext(ctx).model(...)` for every request, and `ogm.unsafe.bypassPolicies().model(...)` when you mean system access (migrations, seeds, admin jobs). Since v2.24.0 a bare lookup on an OGM with `policies` warns once per OGM and type in 2.x and throws `OGMError` under `strict: true` (see [strict item 50](#50-a-bare-ogmmodel-on-an-ogm-configured-with-policies-since-2240)).
@@ -2232,7 +2277,9 @@ RETURN n { .id, .title, .ownerId, .tierIds, ... }
 Combine permissives to express "owner OR member of an allowed tier":
 
 ```typescript
-policies: {
+import { permissive, type PoliciesByModel } from 'grafeo-ogm';
+
+const policies: PoliciesByModel<ModelMap> = {
   Book: [
     permissive({
       operations: ['read'],
@@ -2246,7 +2293,7 @@ policies: {
       name: 'tier-can-read',
     }),
   ],
-}
+};
 ```
 
 Both permissives OR together — a row passes if either branch matches.
@@ -2256,7 +2303,9 @@ Both permissives OR together — a row passes if either branch matches.
 Policies on an interface AND with policies on every implementing concrete type. Concrete types can only narrow restrictives, never broaden — predictable. `OR` composition for permissives lets concrete types add allow paths their interface didn't anticipate.
 
 ```typescript
-policies: {
+import { permissive, restrictive, type PoliciesByModel } from 'grafeo-ogm';
+
+const policies: PoliciesByModel<ModelMap> = {
   Resource: [
     // Tenant isolation applies to every type that implements Resource.
     restrictive({ operations: ['read'], when: (c) => ({ tenantId: c.tenantId }) }),
@@ -2266,7 +2315,7 @@ policies: {
     // Resource-level permissives.
     permissive({ operations: ['read'], when: (c) => ({ authorId: c.userId }) }),
   ],
-}
+};
 ```
 
 #### Counting
@@ -2324,6 +2373,8 @@ A label no declared type carries is unaffected, and so are a policy-free OGM and
 #### Escape hatches
 
 ```typescript
+const Books = ogm.withContext(ctx).model('Book');
+
 // Disable policies for a single call. Logged via logger.warn.
 await Books.find({ where: { id: 'b1' }, unsafe: { bypassPolicies: true } });
 
@@ -2338,14 +2389,15 @@ Both paths emit byte-identical Cypher to a no-policy OGM.
 When `policies` is configured, every OGM-emitted query attaches transaction metadata:
 
 ```typescript
-{
+// The metadata of a policy-bound Book read:
+const metadata = {
   ogmPolicySetVersion: '1.7.0',
   ctxFingerprint: '<sha256 of sorted ctx KEYS — never values>',
   modelType: 'Book',
   operation: 'read',
   policiesEvaluated: ['owner-can-read', 'tier-isolation'],
   bypassed: false,
-}
+};
 ```
 
 Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is intentionally key-only — no ctx values are leaked.
@@ -2359,6 +2411,7 @@ Disable via `policyDefaults: { auditMetadata: false }`. The fingerprint is inten
 When a policy-bound read hides a node, `find` can only show *that* the node disappeared. `explainPolicies` shows *which* named clause decided it. It evaluates every `read` policy for the type separately, for each candidate node, without short-circuiting. Both `when:` and `cypher:` clauses are covered, and nodes the policies reject are returned too.
 
 ```typescript
+const candidateIds = ['chart-8617', 'chart-8618'];
 const report = await ogm
   .withContext(ctx)
   .model('Chart')
@@ -2492,7 +2545,7 @@ const Book = ogm.model('Book');
 
 // Simple count
 const total = await Book.count();
-const published = await Book.count({ where: { status: 'PUBLISHED' } });
+const published = await Book.count({ where: { status: BookStatus.Published } });
 
 // Field aggregation (min, max, average)
 const priceStats = await Book.aggregate({
@@ -2502,7 +2555,7 @@ const priceStats = await Book.aggregate({
 
 // With where filter
 const publishedStats = await Book.aggregate({
-  where: { status: 'PUBLISHED' },
+  where: { status: BookStatus.Published },
   aggregate: { count: true, price: true },
 });
 ```
@@ -2643,6 +2696,8 @@ Use this when you want Neo4j to encode the phrase for you. This requires two thi
 API credentials never appear in the schema. Pass them at query time via `providerConfig`:
 
 ```typescript
+const Article = ogm.model('Article');
+
 const results = await Article.searchByPhrase({
   indexName: 'article_content_idx',
   phrase: 'distributed consensus algorithms',
@@ -2757,6 +2812,8 @@ const Book = ogm.model('Book');
 If you install grafeo-ogm under an npm alias:
 
 ```typescript
+import { generateTypes } from 'grafeo-ogm';
+
 await generateTypes({
   typeDefs,
   outFile: './src/generated/ogm-types.ts',
@@ -2891,6 +2948,9 @@ Param names are left as they are: they are numbered deterministically per
 call.
 
 ```typescript
+import { compile, normalizeCompiled } from 'grafeo-ogm/testing';
+
+const where = { title_CONTAINS: 'graph' };
 expect(normalizeCompiled(await compile(ogm.model('Book')).find({ where }))).toMatchSnapshot();
 ```
 
@@ -3077,12 +3137,9 @@ npm install grafeo-ogm
 
 ### Step 2: Update imports
 
-```typescript
-// Before
-import { OGM } from '@neo4j/graphql-ogm';
-
-// After
-import { OGM } from 'grafeo-ogm';
+```diff
+- import { OGM } from '@neo4j/graphql-ogm';
++ import { OGM } from 'grafeo-ogm';
 ```
 
 ### Step 3: Update type generation
