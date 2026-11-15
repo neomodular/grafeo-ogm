@@ -11,8 +11,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "grafeo-ogm": ["../dist"],
-      "grafeo-ogm/testing": ["../dist/testing"]
+      "grafeo-ogm": ["../dist/cjs"],
+      "grafeo-ogm/testing": ["../dist/cjs/testing"]
     }
   },
   "include": ["./**/*.ts"]

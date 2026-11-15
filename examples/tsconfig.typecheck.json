@@ -1,0 +1,14 @@
+{
+  // Type-checks every example against src/ (no build needed):
+  //   pnpm run examples:typecheck
+  // examples/tsconfig.json stays the editor config for the built package.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "grafeo-ogm": ["../src/index.ts"],
+      "grafeo-ogm/testing": ["../src/testing/index.ts"]
+    }
+  },
+  "include": ["./**/*.ts"]
+}

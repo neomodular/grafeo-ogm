@@ -12,11 +12,26 @@
  */
 
 import { OGM, permissive, restrictive } from 'grafeo-ogm';
+import {
+  SortDirection,
+  type InterfaceModelMap,
+  type ModelMap,
+} from './grafeo.generated';
 import { cleanup, createOGM, typeDefs } from './shared/setup';
+
+/**
+ * The per-request context the policies read. Passing it as the third OGM
+ * generic types every inline policy callback (`ctx` below) and checks each
+ * `withContext()` argument against it.
+ */
+interface RequestCtx {
+  readerId: string;
+  categoryName?: string;
+}
 
 async function main() {
   const { ogm: baseOgm, driver } = createOGM();
-  const ogm = new OGM({
+  const ogm = new OGM<ModelMap, InterfaceModelMap, RequestCtx>({
     typeDefs,
     driver,
     logger: console,
@@ -81,7 +96,7 @@ async function main() {
     const report = await Books.explainPolicies({
       where: { id_IN: ids },
       select: { id: true, title: true },
-      options: { sort: [{ title: 'ASC' }] },
+      options: { sort: [{ title: SortDirection.Asc }] },
     });
     for (const r of report) {
       const passed = r.policies
