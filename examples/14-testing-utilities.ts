@@ -34,7 +34,8 @@ function main() {
   console.log('Structural equality: passed');
 
   // assertContainsClause() — check for a specific clause
-  const cypher = 'MATCH (n:Book) WHERE n.price > $param0 RETURN n { .id, .title }';
+  const cypher =
+    'MATCH (n:Book) WHERE n.price > $param0 RETURN n { .id, .title }';
   CypherAssert.assertContainsClause(cypher, 'WHERE', 'n.price');
   CypherAssert.assertContainsClause(cypher, 'RETURN', '.title');
   console.log('Contains clause: passed');
@@ -103,10 +104,7 @@ function main() {
   const deepSelect = SelectionSetFactory.gql([
     'id',
     {
-      author: [
-        'name',
-        { books: ['id', 'title'] },
-      ],
+      author: ['name', { books: ['id', 'title'] }],
     },
   ]);
   console.log('Deep selection:', deepSelect);

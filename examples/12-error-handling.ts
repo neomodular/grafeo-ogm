@@ -72,7 +72,10 @@ async function main() {
     } catch (err) {
       console.log('\nIs Error?', err instanceof Error); // true
       console.log('Is OGMError?', err instanceof OGMError); // true
-      console.log('Is RecordNotFoundError?', err instanceof RecordNotFoundError); // true
+      console.log(
+        'Is RecordNotFoundError?',
+        err instanceof RecordNotFoundError,
+      ); // true
     }
   } finally {
     await cleanup(ogm, driver);

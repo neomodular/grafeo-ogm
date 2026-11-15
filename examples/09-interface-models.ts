@@ -6,6 +6,7 @@
  * Mutations must use the concrete model.
  */
 
+import { SortDirection } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 import { OGMError } from 'grafeo-ogm';
 
@@ -39,7 +40,7 @@ async function main() {
 
     // --- findFirst on interface ---
     const first = await Entity.findFirst({
-      options: { sort: [{ name: 'ASC' }] },
+      options: { sort: [{ name: SortDirection.Asc }] },
     });
     console.log('First entity:', first);
 

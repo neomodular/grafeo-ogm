@@ -4,6 +4,7 @@
  * Demonstrates count() and aggregate() with min/max/avg.
  */
 
+import { BookStatus } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 
 async function main() {
@@ -16,10 +17,10 @@ async function main() {
     // Seed data
     await Book.createMany({
       data: [
-        { title: 'Book A', price: 9.99, status: 'PUBLISHED' },
-        { title: 'Book B', price: 14.99, status: 'PUBLISHED' },
-        { title: 'Book C', price: 24.99, status: 'DRAFT' },
-        { title: 'Book D', price: 39.99, status: 'PUBLISHED' },
+        { title: 'Book A', price: 9.99, status: BookStatus.Published },
+        { title: 'Book B', price: 14.99, status: BookStatus.Published },
+        { title: 'Book C', price: 24.99, status: BookStatus.Draft },
+        { title: 'Book D', price: 39.99, status: BookStatus.Published },
       ],
     });
 
@@ -29,7 +30,7 @@ async function main() {
 
     // count with where filter
     const publishedCount = await Book.count({
-      where: { status: 'PUBLISHED' },
+      where: { status: BookStatus.Published },
     });
     console.log('Published books:', publishedCount);
 
@@ -56,7 +57,7 @@ async function main() {
 
     // --- Aggregate with where filter ---
     const publishedPrices = await Book.aggregate({
-      where: { status: 'PUBLISHED' },
+      where: { status: BookStatus.Published },
       aggregate: { count: true, price: true },
     });
     console.log('Published prices:', publishedPrices);

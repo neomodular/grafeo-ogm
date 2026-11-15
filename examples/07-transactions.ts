@@ -66,7 +66,8 @@ async function main() {
         throw new Error('Something went wrong');
       });
     } catch (err) {
-      console.log('Transaction rolled back:', (err as Error).message);
+      if (err instanceof Error)
+        console.log('Transaction rolled back:', err.message);
       // 'Will Be Rolled Back' author was NOT persisted
     }
 

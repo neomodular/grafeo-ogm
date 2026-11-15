@@ -4,6 +4,7 @@
  * Demonstrates the four fundamental operations: find, create, update, delete.
  */
 
+import { SortDirection } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 
 async function main() {
@@ -33,7 +34,7 @@ async function main() {
     // Find with sorting, limit, and offset
     const paginated = await Author.find({
       options: {
-        sort: [{ name: 'ASC' }],
+        sort: [{ name: SortDirection.Asc }],
         limit: 10,
         offset: 0,
       },

@@ -5,6 +5,7 @@
  * edge properties, and cascade delete.
  */
 
+import { BookStatus } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 
 async function main() {
@@ -30,7 +31,7 @@ async function main() {
           title: 'Brave New World',
           isbn: '978-0060850524',
           price: 14.99,
-          status: 'PUBLISHED',
+          status: BookStatus.Published,
           author: {
             connect: {
               where: { node: { name: 'Aldous Huxley' } },

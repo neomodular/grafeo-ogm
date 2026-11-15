@@ -4,6 +4,7 @@
  * Demonstrates comparison, string, logical, null, and relationship filters.
  */
 
+import { BookStatus } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 
 async function main() {
@@ -41,7 +42,7 @@ async function main() {
 
     // --- IN operator ---
     const specificStatuses = await Book.find({
-      where: { status_IN: ['PUBLISHED', 'DRAFT'] },
+      where: { status_IN: [BookStatus.Published, BookStatus.Draft] },
     });
     console.log('Published or Draft:', specificStatuses);
 
@@ -56,7 +57,9 @@ async function main() {
       where: {
         OR: [
           { price_LT: 10 },
-          { AND: [{ status: 'PUBLISHED' }, { title_CONTAINS: 'New' }] },
+          {
+            AND: [{ status: BookStatus.Published }, { title_CONTAINS: 'New' }],
+          },
         ],
       },
     });
@@ -64,7 +67,7 @@ async function main() {
 
     const notDraft = await Book.find({
       where: {
-        NOT: { status: 'DRAFT' },
+        NOT: { status: BookStatus.Draft },
       },
     });
     console.log('Not draft:', notDraft);

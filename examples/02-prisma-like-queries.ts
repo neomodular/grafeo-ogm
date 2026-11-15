@@ -5,6 +5,7 @@
  * createMany, updateMany, deleteMany, and upsert.
  */
 
+import { BookStatus, SortDirection } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 import { RecordNotFoundError } from 'grafeo-ogm';
 
@@ -26,7 +27,7 @@ async function main() {
 
     // --- findFirst ---
     const cheapest = await Book.findFirst({
-      options: { sort: [{ price: 'ASC' }] },
+      options: { sort: [{ price: SortDirection.Asc }] },
     });
     console.log('Cheapest book:', cheapest);
 
@@ -65,13 +66,13 @@ async function main() {
     // --- updateMany ---
     const updateManyResult = await Book.updateMany({
       where: { price_LT: 11 },
-      data: { status: 'PUBLISHED' },
+      data: { status: BookStatus.Published },
     });
     console.log('Updated count:', updateManyResult.count);
 
     // --- deleteMany ---
     const deleteManyResult = await Book.deleteMany({
-      where: { status: 'DRAFT' },
+      where: { status: BookStatus.Draft },
     });
     console.log('Deleted count:', deleteManyResult.count);
   } finally {

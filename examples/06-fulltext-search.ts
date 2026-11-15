@@ -32,7 +32,8 @@ async function main() {
         },
         {
           title: 'War and Peace',
-          description: 'A novel about Russian society during the Napoleonic era',
+          description:
+            'A novel about Russian society during the Napoleonic era',
           price: 15.99,
         },
         {

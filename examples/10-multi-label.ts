@@ -5,6 +5,7 @@
  * on queries and mutations, and the `setLabels()` method.
  */
 
+import { BookStatus } from './grafeo.generated';
 import { createOGM, cleanup } from './shared/setup';
 
 async function main() {
@@ -16,8 +17,8 @@ async function main() {
     // Seed data
     await Book.createMany({
       data: [
-        { title: 'Featured Book', price: 19.99, status: 'PUBLISHED' },
-        { title: 'Regular Book', price: 9.99, status: 'PUBLISHED' },
+        { title: 'Featured Book', price: 19.99, status: BookStatus.Published },
+        { title: 'Regular Book', price: 9.99, status: BookStatus.Published },
       ],
     });
 
