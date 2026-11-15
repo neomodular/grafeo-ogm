@@ -637,44 +637,51 @@ Raw Cypher bypasses node-level security and runs outside `$transaction` (section
 Policies are per type and per operation (`read`, `create`, `update`, `delete`, `aggregate`, `count`, or `'*'`). They compile into the Cypher of every read and write that reaches the type: root queries, nested selections, relationship filters, connect / disconnect (`read`), nested creates (`create`), nested updates (`update`) and cascade deletes (`delete`).
 
 ```ts
-import { OGM, override, permissive, restrictive, PolicyDeniedError, type PoliciesByModel } from 'grafeo-ogm';
-import { BookStatus, type ModelMap } from './grafeo.generated';
+import { OGM, override, permissive, restrictive, PolicyDeniedError } from 'grafeo-ogm';
+import { BookStatus, type ModelMap, type InterfaceModelMap } from './grafeo.generated';
 import { driver, typeDefs } from './setup';
 
-// A `type` alias, not an `interface`: the context must be assignable to Record<string, unknown>.
-type RequestCtx = { userId: string; roles: string[] };
+// Any object type works, `interface` or `type`.
+interface RequestCtx {
+  userId: string;
+  roles: string[];
+}
 
-const policies: PoliciesByModel<ModelMap, RequestCtx> = {
-  Book: [
-    // When true, every other Book policy is skipped for this ctx
-    override({ operations: ['*'], when: (c: RequestCtx) => c.roles.includes('admin'), name: 'admin' }),
-    // Permissives OR together: any match grants
-    permissive({ operations: ['read', 'update', 'delete'], when: (c: RequestCtx) => ({ ownerId: c.userId }), name: 'owner' }),
-    permissive({ operations: ['read'], when: () => ({ status: BookStatus.Published }), name: 'public' }),
-    // For `create` a permissive only has to apply; its where-partial is not checked against the input
-    permissive({ operations: ['create'], when: () => ({}), name: 'anyone-can-create' }),
-    // Read-side restrictive: ANDed into the WHERE (where-partial or boolean)
-    restrictive({ operations: ['read'], when: () => ({ title_NOT: null }), name: 'has-title' }),
-    // Write-side restrictive (WITH CHECK on create / update input): must return true to allow
-    restrictive({
-      operations: ['create', 'update'],
-      when: (c: RequestCtx, input) => input.ownerId === undefined || input.ownerId === c.userId,
-      name: 'own-owner-id',
-    }),
-  ],
-};
-
-const secured = new OGM<ModelMap>({
+// The third generic (v2.31.0+) types the context: `c` is RequestCtx in every
+// inline policy callback, and withContext() checks its argument against it.
+const secured = new OGM<ModelMap, InterfaceModelMap, RequestCtx>({
   typeDefs,
   driver,
   strict: true,
-  // OGMConfig types policy callbacks with the generic PolicyContext; this cast keeps RequestCtx in the callbacks
-  policies: policies as PoliciesByModel<ModelMap>,
+  policies: {
+    Book: [
+      // When true, every other Book policy is skipped for this ctx
+      override({ operations: ['*'], when: (c) => c.roles.includes('admin'), name: 'admin' }),
+      // Permissives OR together: any match grants
+      permissive({ operations: ['read', 'update', 'delete'], when: (c) => ({ ownerId: c.userId }), name: 'owner' }),
+      permissive({ operations: ['read'], when: () => ({ status: BookStatus.Published }), name: 'public' }),
+      // For `create` a permissive only has to apply; its where-partial is not checked against the input
+      permissive({ operations: ['create'], when: () => ({}), name: 'anyone-can-create' }),
+      // Read-side restrictive: ANDed into the WHERE (where-partial or boolean)
+      restrictive({ operations: ['read'], when: () => ({ title_NOT: null }), name: 'has-title' }),
+      // Write-side restrictive (WITH CHECK on create / update input): must return true to allow
+      restrictive({
+        operations: ['create', 'update'],
+        when: (c, input) => input.ownerId === undefined || input.ownerId === c.userId,
+        name: 'own-owner-id',
+      }),
+    ],
+  },
   policyDefaults: { onDeny: 'empty' }, // or 'throw' → PolicyDeniedError
 });
 
+// A policy built outside the config takes the context type explicitly
+const ownBooks = permissive<RequestCtx>({ operations: ['read'], when: (c) => ({ ownerId: c.userId }) });
+
 // Per request: bind the context, then use models from the wrapper
-const scoped = secured.withContext<RequestCtx>({ userId: 'u1', roles: [] });
+const scoped = secured.withContext({ userId: 'u1', roles: [] });
+// @ts-expect-error: `roles` is missing, so the context doesn't match RequestCtx
+secured.withContext({ userId: 'u1' });
 const visible = await scoped.model('Book').find({ where: { price_LT: 30 } });
 
 try {

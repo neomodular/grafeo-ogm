@@ -4,7 +4,7 @@
 
 - Install: `npm install grafeo-ogm neo4j-driver graphql`. Peer dependency: `neo4j-driver` 5 or 6. Node.js >= 18, TypeScript 5.0+.
 - Server: Neo4j 5.x (tested on 5.26 LTS; Aura works). APOC is needed for nested sorting and subgraph operations; the GenAI plugin for `searchByPhrase`.
-- Entry points: `new OGM({ typeDefs, driver })`, `ogm.model('Book')`, `ogm.interfaceModel('Entity')`, `ogm.withContext(ctx)`, `ogm.$transaction(fn)`. Types come from `npx grafeo generate` (`ModelMap`, `SelectResult`, …).
+- Entry points: `new OGM({ typeDefs, driver })` (typed: `new OGM<ModelMap, InterfaceModelMap, RequestCtx>`, the third generic types the policy context), `ogm.model('Book')`, `ogm.interfaceModel('Entity')`, `ogm.withContext(ctx)`, `ogm.$transaction(fn)`. Types come from `npx grafeo generate` (`ModelMap`, `SelectResult`, …).
 - Lineage: continues `@neo4j/graphql-ogm`, which was removed from `@neo4j/graphql` 6.0.0 (its 5.x LTS line still ships and requires `neo4j-driver` 5). Same `OGM` / `Model` API and `selectionSet` strings, plus more methods, a typed `select`, node-level security and neo4j-driver 6 support.
 - Pass `strict: true` in new code; it becomes the default in 3.0.
 - Version 2.29.x. License: MIT.
