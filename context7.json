@@ -34,5 +34,7 @@
     "Pass either `select` (typed object) or `selectionSet` (GraphQL string) to a query method, never both.",
     "With `policies`, run every request through `ogm.withContext(ctx).model(...)`; a bare `ogm.model(...)` applies no policy. Type the context with a third generic: `new OGM<ModelMap, InterfaceModelMap, RequestCtx>(...)`.",
     "For new code pass `strict: true`: it turns on the corrected behaviour for a handful of surprising input shapes (warnings become `OGMError`s) and becomes the default in 3.0."
-  ]
+  ],
+  "url": "https://context7.com/neomodular/grafeo-ogm",
+  "public_key": "pk_XNJ2q8Pmuc2BSOqWuuHKg"
 }
