@@ -1,0 +1,38 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "grafeo-ogm",
+  "description": "Type-safe Object-Graph Mapper for Neo4j (TypeScript) that uses GraphQL SDL as the schema. Continues @neo4j/graphql-ogm, which was removed from @neo4j/graphql 6.0.0: same OGM / Model API, plus Prisma-style queries, a typed select API, node-level security policies, and neo4j-driver 5 and 6 support. Not GrafeoDB and not the Java Neo4j OGM.",
+  "folders": [],
+  "excludeFolders": [
+    "src",
+    "tests",
+    "bench",
+    "scripts",
+    "openspec",
+    "assets",
+    "dist",
+    ".github",
+    ".trail",
+    ".claude",
+    "CLAUDE-SECURITY-*"
+  ],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
+  ],
+  "includeExtensions": [
+    ".txt"
+  ],
+  "rules": [
+    "Install with `npm install grafeo-ogm neo4j-driver graphql`; neo4j-driver 5 and 6 are both supported.",
+    "Run `npx grafeo generate` and construct `new OGM<ModelMap, InterfaceModelMap>({ typeDefs, driver })` so models, where, select and inputs are typed.",
+    "Use the generated enums (`SortDirection.Asc`, `MyEnum.Value`), not string literals, in where, sort and inputs.",
+    "Pass either `select` (typed object) or `selectionSet` (GraphQL string) to a query method, never both.",
+    "With `policies`, run every request through `ogm.withContext(ctx).model(...)`; a bare `ogm.model(...)` applies no policy. Type the context with a third generic: `new OGM<ModelMap, InterfaceModelMap, RequestCtx>(...)`.",
+    "For new code pass `strict: true`: it turns on the corrected behaviour for a handful of surprising input shapes (warnings become `OGMError`s) and becomes the default in 3.0."
+  ]
+}
